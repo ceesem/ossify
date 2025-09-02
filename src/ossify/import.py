@@ -1,0 +1,152 @@
+from typing import TYPE_CHECKING, Literal, Optional
+
+import fastremap
+import numpy as np
+import pandas as pd
+
+from .base import Link, MeshWorkSync
+from .utils import get_supervoxel_column
+
+if TYPE_CHECKING:
+    import datetime
+
+    from caveclient import CAVEclientFull as CAVEclient
+
+
+def _process_synapse_table(
+    root_id: int,
+    table_name: str,
+    client: "CAVEclient",
+    side: Literal["pre", "post"],
+    columns: dict,
+    timestamp: datetime.datetime,
+    reference_tables: Optional[list[str]] = None,
+    drop_other_side: bool = True,
+    omit_autapses: bool = True,
+) -> pd.DataFrame:
+    "Perform a synapse query and get the l2 ids for the given root_id."
+    if side == "pre":
+        other_side = "post"
+    else:
+        other_side = "pre"
+    side_column = columns[side]
+    other_column = columns[other_side]
+
+    syn_df = client.materialize.tables[table_name](side_column=root_id).query(
+        desired_resolution=[1, 1, 1], split_positions=True
+    )
+    if omit_autapses:
+        syn_df = syn_df.query(f"{side_column} != {other_column}")
+
+    svid_column = get_supervoxel_column(side_column)
+    l2_ids = client.chunkedgraph.get_roots(
+        syn_df[svid_column], stop_layer=2, timestamp=timestamp
+    )
+    syn_df[side_column.replace("_position", "_l2_id")] = l2_ids
+    if drop_other_side:
+        syn_df = syn_df.drop(columns=other_column)
+
+    return syn_df
+
+
+def from_client(
+    root_id: int,
+    client: "CAVEclient",
+    synapses: bool = False,
+    restore_graph: bool = False,
+    restore_properties: bool = False,
+    synapse_spatial_point: str = "ctr_pt_position",
+    skeleton_version: int = 4,
+    drop_partner_root_id: bool = True,
+    omit_autapses: bool = True,
+):
+    sk = client.skeleton.get_skeleton(
+        root_id, skeleton_version=skeleton_version, output_format="dict"
+    )
+    ts = client.chunkedgraph.get_root_timestamps(root_id, latest=True)[0]
+
+    if synapses:
+        synapse_columns = {
+            "pre": "pre_pt_root_id",
+            "post": "post_pt_root_id",
+        }
+        synapse_table = client.materialize.synapse_table
+        pre_syn_df = _process_synapse_table(
+            root_id,
+            synapse_table,
+            client,
+            "pre",
+            synapse_columns,
+            ts,
+            drop_other_side=drop_partner_root_id,
+            omit_autapses=omit_autapses,
+        )
+        post_syn_df = _process_synapse_table(
+            root_id,
+            synapse_table,
+            client,
+            "post",
+            synapse_columns,
+            ts,
+            drop_other_side=drop_partner_root_id,
+            omit_autapses=omit_autapses,
+        )
+
+    l2ids = sk["lvl2_ids"]
+    l2_spatial_columns = [
+        "rep_coord_nm_x",
+        "rep_coord_nm_y",
+        "rep_coord_nm_z",
+    ]
+    if restore_properties:
+        l2_df = client.l2cache.get_l2data_table(l2ids)
+    else:
+        l2_df = client.l2cache.get_l2data(l2ids, attributes=["rep_coord_nm"])
+    l2_df.reset_index(inplace=True)
+
+    if restore_graph:
+        l2_graph = client.chunkedgraph.level2_chunk_graph(root_id)
+        l2_map = {v: k for k, v in l2_df["l2_id"].to_dict().items()}
+
+        edges = fastremap.remap(
+            l2_graph,
+            l2_map,
+        )
+    else:
+        edges = []
+
+    nrn = (
+        MeshWorkSync(
+            name=root_id,
+        )
+        .add_graph(
+            vertices=l2_df,
+            spatial_columns=l2_spatial_columns,
+            edges=edges,
+            vertex_index="l2_id",
+        )
+        .add_skeleton(
+            vertices=np.array(sk["vertices"]),
+            edges=np.array(sk["edges"]),
+            labels={"radius": sk["radius"], "compartment": sk["compartment"]},
+            linkage=Link(
+                mapping=sk["mesh_to_skel_map"], source="graph", map_value_is_index=False
+            ),
+        )
+    )
+    if synapses:
+        nrn = nrn.add_point_annotations(
+            "pre_syn",
+            vertices=pre_syn_df,
+            spatial_columns=synapse_spatial_point,
+            vertex_index="id",
+            linkage=Link(mapping="pre_pt_l2_id", target="graph"),
+        ).add_point_annotations(
+            "post_syn",
+            vertices=post_syn_df,
+            spatial_columns=synapse_spatial_point,
+            vertex_index="id",
+            linkage=Link(mapping="post_pt_l2_id", target="graph"),
+        )
+
+    return nrn
