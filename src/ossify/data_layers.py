@@ -2,7 +2,7 @@
 import copy
 import uuid
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, List, Literal, Optional, Self, Tuple, Union
+from typing import TYPE_CHECKING, Literal, Optional, Self, Tuple, Union
 
 import fastremap
 import numpy as np
@@ -12,13 +12,7 @@ from scipy import sparse, spatial
 
 from . import graph_functions as gf
 from . import utils
-from .sync_classes import (
-    Facet,
-    GraphSyncWork,
-    Link,
-    MorphSync,
-    PointSyncWork,
-)
+from .sync_classes import *
 
 if TYPE_CHECKING:
     from .base import CellSync
@@ -262,7 +256,7 @@ class PointMixin(ABC):
     def _setup_properties(
         self,
         name: str,
-        morphsync: Optional[PointSyncWork] = None,
+        morphsync: Optional[PointSync] = None,
         vertices: Union[np.ndarray, pd.DataFrame] = None,
         spatial_columns: Optional[list] = None,
         labels: Optional[Union[dict, pd.DataFrame]] = None,
@@ -334,7 +328,7 @@ class PointMixin(ABC):
         return self._name
 
     @property
-    def layer(self) -> PointSyncWork:
+    def layer(self) -> PointSync:
         return self._get_layer(self.layer_name)
 
     def _get_layer(self, layer_name: str) -> Facet:  # type: ignore

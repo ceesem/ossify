@@ -7,11 +7,11 @@ import pandas as pd
 
 __all__ = [
     "MorphSync",
-    "GraphSyncWork",
-    "MeshSyncWork",
-    "PointSyncWork",
+    "GraphSync",
+    "MeshSync",
+    "PointSync",
     "Facet",
-    "is_syncwork_object",
+    "is_ossify_layer",
     "Link",
 ]
 
@@ -19,27 +19,27 @@ Facet = sync.base.FacetFrame  # Alias for FacetFrame
 MorphSync = sync.MorphSync
 
 
-def is_syncwork_object(obj):
+def is_ossify_layer(obj):
     """
     Check if the object is an instance of a sync work class.
     """
     return isinstance(
         obj,
-        (GraphSyncWork, MeshSyncWork, PointSyncWork),
+        (GraphSync, MeshSync, PointSync),
     )
 
 
-class GraphSyncWork(sync.Graph):
+class GraphSync(sync.Graph):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
 
-class MeshSyncWork(sync.Mesh):
+class MeshSync(sync.Mesh):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
 
-class PointSyncWork(sync.Points):
+class PointSync(sync.Points):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
