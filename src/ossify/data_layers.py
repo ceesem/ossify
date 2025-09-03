@@ -2,7 +2,7 @@
 import copy
 import uuid
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Literal, Optional, Self, Tuple, Union
+from typing import TYPE_CHECKING, List, Literal, Optional, Self, Tuple, Union
 
 import fastremap
 import numpy as np
@@ -15,7 +15,7 @@ from . import utils
 from .sync_classes import *
 
 if TYPE_CHECKING:
-    from .base import CellSync
+    from .base import Cell
 
 SKEL_LAYER_NAME = "skeleton"
 GRAPH_LAYER_NAME = "graph"
@@ -28,22 +28,50 @@ class EdgeMixin(ABC):
 
     @property
     def edges(self) -> np.ndarray:
+        """
+        Get the edges of the layer in dataframe indices.
+        """
         return self.layer.edges
 
     @property
     def edge_df(self) -> pd.DataFrame:
+        """
+        Get the edges of the layer as a DataFrame.
+        """
         return self.layer.edges_df
 
     @property
     def edges_positional(self) -> np.ndarray:
+        """
+        Get the edges of the layer in positional indices.
+        """
         return self.layer.edges_positional
 
-    def _map_edges_to_index(self, edges, vertex_indices):
+    def _map_edges_to_index(
+        self, edges: np.ndarray, vertex_indices: np.ndarray
+    ) -> np.ndarray:
+        """Remap positional edges to vertex indices.
+
+        Parameters
+        ----------
+        edges : np.ndarray
+            Edge array with positional indices.
+        vertex_indices : np.ndarray
+            Array of vertex indices to map to.
+
+        Returns
+        -------
+        np.ndarray
+            Edge array with vertex indices instead of positional indices.
+        """
         index_map = {ii: v for ii, v in enumerate(vertex_indices)}
         return fastremap.remap(edges, index_map)
 
     @property
-    def csgraph(self):
+    def csgraph(self) -> sparse.csr_matrix:
+        """
+        Get the compressed sparse graph representation of the layer with Euclidean edge weights.
+        """
         if self._csgraph is None:
             self._csgraph = utils.build_csgraph(
                 self.vertices,
@@ -54,7 +82,10 @@ class EdgeMixin(ABC):
         return self._csgraph
 
     @property
-    def csgraph_binary(self):
+    def csgraph_binary(self) -> sparse.csr_matrix:
+        """
+        Get the unweighted compressed sparse graph representation of the layer.
+        """
         if self._csgraph_binary is None:
             self._csgraph_binary = utils.build_csgraph(
                 self.vertices,
@@ -65,14 +96,25 @@ class EdgeMixin(ABC):
         return self._csgraph_binary
 
     @property
-    def csgraph_undirected(self):
+    def csgraph_undirected(self) -> sparse.csr_matrix:
+        """
+        Get the undirected compressed sparse graph representation of the layer with Euclidean edge weights.
+        """
         return self.csgraph + self.csgraph.T
 
     @property
-    def csgraph_binary_undirected(self):
+    def csgraph_binary_undirected(self) -> sparse.csr_matrix:
+        """
+        Get the unweighted and undirected compressed sparse graph representation of the layer.
+        """
         return self.csgraph_binary + self.csgraph_binary.T
 
-    def _reset_derived_properties(self):
+    def _reset_derived_properties(self) -> None:
+        """Reset cached derived properties to force recomputation.
+
+        This method clears cached sparse graph representations to ensure
+        they are recomputed when next accessed.
+        """
         self._csgraph = None
         self._csgraph_binary = None
 
@@ -215,7 +257,23 @@ class FaceMixin(ABC):
             )
         return self._csgraph
 
-    def _map_faces_to_index(self, faces, vertex_indices) -> np.ndarray:
+    def _map_faces_to_index(
+        self, faces: np.ndarray, vertex_indices: np.ndarray
+    ) -> np.ndarray:
+        """Remap positional faces to vertex indices.
+
+        Parameters
+        ----------
+        faces : np.ndarray
+            Face array with positional indices.
+        vertex_indices : np.ndarray
+            Array of vertex indices to map to.
+
+        Returns
+        -------
+        np.ndarray
+            Face array with vertex indices instead of positional indices.
+        """
         index_map = {ii: v for ii, v in enumerate(vertex_indices)}
         return fastremap.remap(faces, index_map)
 
@@ -227,16 +285,14 @@ class FaceMixin(ABC):
     ) -> float:
         """Calculate the surface area of the mesh, or a subset of vertices.
 
-        Properties
+        Parameters
         ----------
-        vertices : np.ndarray
-            The vertex positions of the mesh.
-        faces : np.ndarray
-            The face indices of the mesh.
-        positional : bool
-            Whether the input vertices are positional (i.e., masks or indices) or raw indices.
-        inclusive : bool
-            Whether to include faces that are covered by any vertex (True) or only those fully covered (False).
+        vertices : Optional[np.ndarray], optional
+            Vertex indices to calculate surface area for. If None, uses entire mesh.
+        positional : bool, optional
+            Whether the input vertices are positional indices or vertex indices. Default True.
+        inclusive : bool, optional
+            Whether to include faces that are covered by any vertex (True) or only those fully covered (False). Default False.
 
         Returns
         -------
@@ -266,7 +322,29 @@ class PointMixin(ABC):
         spatial_columns: Optional[list] = None,
         labels: Optional[Union[dict, pd.DataFrame]] = None,
         vertex_index: Optional[Union[str, np.ndarray]] = None,
-    ):
+    ) -> Tuple[pd.DataFrame, List[str], List[str]]:
+        """Process basic label data when building the layer.
+
+        Parameters
+        ----------
+        name : str
+            Name of the layer.
+        morphsync : Optional[PointSync], optional
+            MorphSync object to use. If None, creates a new one.
+        vertices : Union[np.ndarray, pd.DataFrame], optional
+            Vertex data as array or DataFrame.
+        spatial_columns : Optional[list], optional
+            List of column names for spatial coordinates.
+        labels : Optional[Union[dict, pd.DataFrame]], optional
+            Additional label data to attach to vertices.
+        vertex_index : Optional[Union[str, np.ndarray]], optional
+            Vertex index column name or array.
+
+        Returns
+        -------
+        Tuple[pd.DataFrame, List[str], List[str]]
+            Processed vertices DataFrame, spatial column names, and label column names.
+        """
         self._name = name
         self._kdtree = None
         if morphsync is None:
@@ -286,7 +364,14 @@ class PointMixin(ABC):
     def _setup_linkage(
         self,
         linkage: Optional[Link] = None,
-    ):
+    ) -> None:
+        """Add linkage information to the layer.
+
+        Parameters
+        ----------
+        linkage : Optional[Link], optional
+            Link object containing mapping information between layers.
+        """
         if linkage is not None:
             if linkage.source is None:
                 linkage.source = self.layer_name
@@ -306,7 +391,22 @@ class PointMixin(ABC):
         positional: bool,
         vertex_index: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, bool]:
-        """Map vertex index to positional indices whether inputs are positional, masks, indices."""
+        """Map vertex index to positional indices whether inputs are positional, masks, indices.
+
+        Parameters
+        ----------
+        vertices : Optional[np.ndarray]
+            Array of vertex indices, positional indices, or boolean mask. If None, all vertices used.
+        positional : bool
+            Whether input vertices are positional indices (True) or vertex indices (False).
+        vertex_index : Optional[np.ndarray], optional
+            Custom vertex index array to use for mapping. If None, uses self.vertex_index.
+
+        Returns
+        -------
+        Tuple[np.ndarray, bool]
+            Tuple of (positional_indices, is_positional_flag).
+        """
         if vertices is None:
             vertices = np.arange(self.n_vertices)
             positional = True
@@ -395,19 +495,45 @@ class PointMixin(ABC):
             self._kdtree = spatial.KDTree(self.vertices)
         return self._kdtree
 
-    def get_label(self, key) -> np.ndarray:
+    def get_label(self, key: str) -> np.ndarray:
+        """Get a label array from the labels DataFrame.
+
+        Parameters
+        ----------
+        key : str
+            Column name of the label to retrieve.
+
+        Returns
+        -------
+        np.ndarray
+            Array of label values for all vertices.
+        """
         return self.labels[key].values
 
     def add_label(
         self,
         label: Union[list, np.ndarray, dict, pd.DataFrame],
         name: Optional[str] = None,
-    ):
+    ) -> Self:
+        """Add a new layer to the DataFrame.
+
+        Parameters
+        ----------
+        label: Union[list, np.ndarray, dict, pd.Series, pd.DataFrame]
+            The label data to add. If an array or list, it should follow the vertex order.
+        name: Optional[str]
+            The name of the label column (required if label is a list or np.ndarray).
+
+        Returns
+        -------
+        Self
+            The updated DataLayer instance.
+        """
         if isinstance(label, list) or isinstance(label, np.ndarray):
             label = pd.DataFrame(label, index=self.vertex_index, columns=[name])
         elif isinstance(label, dict):
             label = pd.DataFrame(label, index=self.vertex_index)
-        elif isinstance(label, pd.DataFrame):
+        elif isinstance(label, pd.DataFrame) or isinstance(label, pd.Series):
             label = label.loc[self.vertex_index]
         else:
             raise ValueError("Label must be a list, np.ndarray, dict or pd.DataFrame.")
@@ -425,9 +551,26 @@ class PointMixin(ABC):
             validate="1:1",
         )
         self._label_columns += list(label.columns)
+        return self
 
     def _map_range_to_range(self, layer: str, source_index: np.ndarray) -> np.ndarray:
-        """This takes the dataframe in `get_mapping` and returns all values in the target layer, without respecting a 1:1 mapping between indices"""
+        """Map source indices to all corresponding target indices without 1:1 constraint.
+
+        Takes the dataframe from get_mapping and returns all values in the target layer,
+        without respecting a 1:1 mapping between indices.
+
+        Parameters
+        ----------
+        layer : str
+            Target layer name to map to.
+        source_index : np.ndarray
+            Source indices to map from.
+
+        Returns
+        -------
+        np.ndarray
+            All corresponding target indices for the source indices.
+        """
         mapping = self._morphsync.get_mapping(
             source=self.layer_name, target=layer, source_index=source_index
         )
@@ -436,7 +579,25 @@ class PointMixin(ABC):
     def _map_index_one_to_one(
         self, layer: str, source_index: np.ndarray, validate: bool = False
     ) -> np.ndarray:
-        """Takes the list of source indices and returns one target index for each source. It promises to maintain the order of the source indices."""
+        """Map source indices to single target indices in a one-to-one manner.
+
+        Takes the list of source indices and returns one target index for each source.
+        Maintains the order of the source indices.
+
+        Parameters
+        ----------
+        layer : str
+            Target layer name to map to.
+        source_index : np.ndarray
+            Source indices to map from.
+        validate : bool, optional
+            Whether to validate for ambiguous mappings. Default False.
+
+        Returns
+        -------
+        np.ndarray
+            One target index for each source index, maintaining order.
+        """
         mapping = self._morphsync.get_mapping(
             source=self.layer_name, target=layer, source_index=source_index
         )
@@ -448,7 +609,22 @@ class PointMixin(ABC):
         return mapping[~mapping.index.duplicated(keep="first")].loc[source_index].values
 
     def _map_index_to_list_of_lists(self, layer: str, source_index: np.ndarray) -> dict:
-        """Takes the list of source indices and returns a list of all target indices for each source."""
+        """Map source indices to lists of all corresponding target indices.
+
+        Takes the list of source indices and returns a list of all target indices for each source.
+
+        Parameters
+        ----------
+        layer : str
+            Target layer name to map to.
+        source_index : np.ndarray
+            Source indices to map from.
+
+        Returns
+        -------
+        dict
+            Dictionary mapping each source index to a list of all corresponding target indices.
+        """
         mapping = self._morphsync.get_mapping(
             source=self.layer_name, target=layer, source_index=source_index
         )
@@ -480,7 +656,7 @@ class PointMixin(ABC):
         if layer == self.layer_name:
             return self.nodes[labels]
         if isinstance(labels, str):
-            source_labels = [labels]
+            labels = [labels]
         mapping = self._morphsync.get_mapping(
             source=self.layer_name, target=layer, source_index=self.vertex_index
         )
@@ -505,7 +681,27 @@ class PointMixin(ABC):
         positional: bool,
         how: str,
         validate: bool = False,
-    ):
+    ) -> Union[np.ndarray, dict]:
+        """Master function for mapping indices from source to target layer with various strategies.
+
+        Parameters
+        ----------
+        layer : str
+            Target layer name to map to.
+        source_index : np.ndarray
+            Source indices to map from.
+        positional : bool
+            Whether indices are positional (True) or vertex indices (False).
+        how : str
+            Mapping strategy: 'one_to_one', 'range_to_range', or 'one_to_list'.
+        validate : bool, optional
+            Whether to validate mapping consistency. Default False.
+
+        Returns
+        -------
+        Union[np.ndarray, dict]
+            Mapped indices. Array for 'one_to_one' and 'range_to_range', dict for 'one_to_list'.
+        """
         if layer == self.layer_name:
             return source_index
         if source_index is None:
@@ -564,10 +760,10 @@ class PointMixin(ABC):
     def map_index_to_layer(
         self,
         layer: str,
-        source_index=None,
+        source_index: Optional[np.ndarray] = None,
         positional: bool = False,
         validate: bool = False,
-    ) -> Optional[int]:
+    ) -> np.ndarray:
         """Map each vertex index from the current layer to a single index in the specified layer.
 
         Parameters
@@ -583,8 +779,8 @@ class PointMixin(ABC):
 
         Returns
         -------
-        Optional[int]
-            The mapped index in the target layer, or None if not found.
+        np.ndarray
+            The mapped indices in the target layer.
             There will be exactly one target index for each source index, no matter how many viable target indices there are.
             If `positional` is True, the mapping is based on the position of the vertices not the dataframe index.
         """
@@ -597,8 +793,11 @@ class PointMixin(ABC):
         )
 
     def map_region_to_layer(
-        self, layer: str, source_index=None, positional: bool = False
-    ) -> Optional[int]:
+        self,
+        layer: str,
+        source_index: Optional[np.ndarray] = None,
+        positional: bool = False,
+    ) -> np.ndarray:
         """Map each vertex index from the current layer to the specified layer.
 
         Parameters
@@ -612,8 +811,8 @@ class PointMixin(ABC):
 
         Returns
         -------
-        Optional[int]
-            All mapped indices in the target layer, or None if not found.
+        np.ndarray
+            All mapped indices in the target layer.
             Not necessarily the same length as the source indices, because it maps a region to another region.
             If `positional` is True, the mapping is based on the position of the vertices not the dataframe index.
         """
@@ -625,7 +824,10 @@ class PointMixin(ABC):
         )
 
     def map_index_to_layer_region(
-        self, layer: str, source_index=None, positional: bool = False
+        self,
+        layer: str,
+        source_index: Optional[np.ndarray] = None,
+        positional: bool = False,
     ) -> dict:
         """Map each vertex index from the current layer to a list of all appropriate vertices in the target layer.
 
@@ -650,7 +852,9 @@ class PointMixin(ABC):
             how="one_to_list",
         )
 
-    def map_mask_to_layer(self, layer: str, mask=None) -> Optional[np.ndarray]:
+    def map_mask_to_layer(
+        self, layer: str, mask: Optional[np.ndarray] = None
+    ) -> np.ndarray:
         """Map a boolean mask from the current layer to the specified layer.
 
         Parameters
@@ -662,8 +866,8 @@ class PointMixin(ABC):
 
         Returns
         -------
-        Optional[np.ndarray]
-            The mapped indices in the target layer, or None if not found.
+        np.ndarray
+            The mapped boolean mask in the target layer.
             There may be multiple target indices for each source index, depending on the region mapping.
             If `positional` is True, the mapping is based on the position of the vertices not the dataframe index.
         """
@@ -682,7 +886,23 @@ class PointMixin(ABC):
         mask_out[mapping] = True
         return mask_out
 
-    def _mask_morphsync(self, mask: np.ndarray, positional: bool = False):
+    def _mask_morphsync(
+        self, mask: np.ndarray, positional: bool = False
+    ) -> "MorphSync":
+        """Apply a mask to the underlying morphsync indexing infrastructure.
+
+        Parameters
+        ----------
+        mask : np.ndarray
+            Boolean mask or indices to apply.
+        positional : bool, optional
+            Whether mask contains positional indices. Default False.
+
+        Returns
+        -------
+        MorphSync
+            New MorphSync object with mask applied.
+        """
         if positional:
             bool_mask = np.full(self.n_vertices, False)
             bool_mask[mask] = True
@@ -701,7 +921,14 @@ class PointMixin(ABC):
     def _process_linkage(
         self,
         full_link: Link,
-    ):
+    ) -> None:
+        """Process a Link object and add it to the morphsync.
+
+        Parameters
+        ----------
+        full_link : Link
+            Link object containing source, target, and mapping information.
+        """
         source_layer = self._get_layer(full_link.source)
         target_layer = self._get_layer(full_link.target)
 
@@ -724,7 +951,7 @@ class PointMixin(ABC):
         mask: np.ndarray,
         positional: bool = False,
         self_only: bool = False,
-    ) -> Union[Self, "CellSync"]:
+    ) -> Union[Self, "Cell"]:
         """Apply a mask on the current layer. Returns a new object with the masked morphsync.
         If the object is associated with a CellSync, a new CellSync will be created, otherwise
         a new object of the same class will be returned.
@@ -753,7 +980,14 @@ class PointMixin(ABC):
                 new_morphsync=new_morphsync, old_obj=self._cell
             )
 
-    def _register_cell(self, mws):
+    def _register_cell(self, mws: "Cell") -> None:
+        """Register a Cell object with this layer.
+
+        Parameters
+        ----------
+        mws : Cell
+            Cell object to register with this layer.
+        """
         self._cell = mws
 
 
@@ -816,11 +1050,30 @@ class GraphLayer(PointMixin, EdgeMixin):
         self,
         annotation: str,
         distance_threshold: float,
-        agg="count",
+        agg: Union[str, dict] = "count",
         chunk_size: int = 1000,
         validate: bool = False,
-    ):
-        """Aggregates a point annotation to a label on the layer"""
+    ) -> Union[pd.Series, pd.DataFrame]:
+        """Aggregate a point annotation to a label on the layer.
+
+        Parameters
+        ----------
+        annotation : str
+            The name of the annotation layer to aggregate.
+        distance_threshold : float
+            Maximum distance to consider for aggregation.
+        agg : Union[str, dict], optional
+            Aggregation method. Can be 'count' or dict of aggregation functions. Default 'count'.
+        chunk_size : int, optional
+            Size of processing chunks for memory efficiency. Default 1000.
+        validate : bool, optional
+            Whether to validate mapping consistency. Default False.
+
+        Returns
+        -------
+        Union[pd.Series, pd.DataFrame]
+            Aggregated annotation values. Series for 'count', DataFrame for dict aggregations.
+        """
         idx_list, prox_list = gf.build_proximity_lists_chunked(
             self.vertices,
             self.csgraph,
@@ -954,16 +1207,37 @@ class SkeletonLayer(GraphLayer):
 
     @property
     def root(self) -> Optional[int]:
+        """Get the root node index.
+
+        Returns
+        -------
+        Optional[int]
+            Root node index, or None if no root is set.
+        """
         return self._root
 
     @property
     def root_positional(self) -> Optional[int]:
+        """Get the root node positional index.
+
+        Returns
+        -------
+        Optional[int]
+            Root node positional index, or None if no root is set.
+        """
         if self._root is None:
             return None
         return np.flatnonzero(self.vertex_index == self.root)[0]
 
     @property
     def root_location(self) -> Optional[np.ndarray]:
+        """Get the spatial coordinates of the root node.
+
+        Returns
+        -------
+        Optional[np.ndarray]
+            3D coordinates of the root node, or None if no root is set.
+        """
         if self.root == -1:
             return None
         return self.vertex_df.loc[self.root, self.spatial_columns].values
@@ -1015,12 +1289,12 @@ class SkeletonLayer(GraphLayer):
 
     @property
     def branch_points_undirected(self) -> np.ndarray:
-        "List of end points of the skeleton based on vertex index potentially including root if a leaf node"
+        "List of branch points of the skeleton based on vertex index potentially including root if a leaf node"
         return self.vertex_index[self.branch_points_undirected_positional]
 
     @property
     def branch_points_undirected_positional(self) -> np.ndarray:
-        "List of end points of the skeleton based on positional index potentially including root if a leaf node"
+        "List of branch points of the skeleton based on positional index potentially including root if a leaf node"
         return np.flatnonzero(
             self.csgraph_binary_undirected.sum(axis=1) > 2
         )  # More than 2 neighbors
@@ -1067,13 +1341,20 @@ class SkeletonLayer(GraphLayer):
         return np.flatnonzero(self.parent_node_array == -1)
 
     @property
-    def verts_edges(self):
+    def as_tuple(self) -> Tuple[np.ndarray, np.ndarray]:
         """
         Get the vertices and (positional) edges of the graph as a tuple, which is a common input to many functions.
         """
         return self.vertices, self.edges_positional
 
-    def _set_base_properties(self, base_properties=None):
+    def _set_base_properties(self, base_properties: Optional[dict] = None) -> None:
+        """Set or update base properties for the skeleton.
+
+        Parameters
+        ----------
+        base_properties : Optional[dict], optional
+            Dictionary of base properties. If None, uses current skeleton properties.
+        """
         if not base_properties:
             self._base_properties["base_root"] = self.root
             self._base_properties["base_vertex_index"] = self.vertex_index
@@ -1085,29 +1366,81 @@ class SkeletonLayer(GraphLayer):
 
     @property
     def base_root(self) -> int:
+        """Get the base root from original unmasked skeleton.
+
+        Returns
+        -------
+        int
+            Base root index from original skeleton.
+        """
         return self._base_properties["base_root"]
 
     @property
     def base_csgraph(self) -> sparse.csr_matrix:
+        """Get the base sparse graph from original unmasked skeleton.
+
+        Returns
+        -------
+        sparse.csr_matrix
+            Base compressed sparse graph with Euclidean edge weights.
+        """
         return self._base_properties["base_csgraph"]
 
     @property
     def base_csgraph_binary(self) -> sparse.csr_matrix:
+        """Get the base binary sparse graph from original unmasked skeleton.
+
+        Returns
+        -------
+        sparse.csr_matrix
+            Base compressed sparse graph with binary edge weights.
+        """
         return self._base_properties["base_csgraph_binary"]
 
     @property
     def base_vertex_index(self) -> Union[str, np.ndarray]:
+        """Get the base vertex index from original unmasked skeleton.
+
+        Returns
+        -------
+        Union[str, np.ndarray]
+            Base vertex indices from original skeleton.
+        """
         return self._base_properties["base_vertex_index"]
 
     @property
     def base_parent_array(self) -> np.ndarray:
+        """Get the base parent array from original unmasked skeleton.
+
+        Returns
+        -------
+        np.ndarray
+            Base parent node array from original skeleton.
+        """
         return self._base_properties["base_parent_array"]
 
-    def _reset_derived_properties(self):
+    def _reset_derived_properties(self) -> None:
         super()._reset_derived_properties()
         self._dag_cache = gf.DAGCache()
 
-    def _infer_root(self, root: int):
+    def _infer_root(self, root: Optional[int]) -> int:
+        """Infer the root node from the graph structure or validate provided root.
+
+        Parameters
+        ----------
+        root : Optional[int]
+            Proposed root node index. If None, attempts to infer from graph structure.
+
+        Returns
+        -------
+        int
+            The root node index.
+
+        Raises
+        ------
+        ValueError
+            If no root specified and multiple potential roots found.
+        """
         if root is not None:
             return int(root)
         else:
@@ -1119,8 +1452,23 @@ class SkeletonLayer(GraphLayer):
                     "No root specified and edges are not consistent with a single root. Please set a valid root."
                 )
 
-    def _apply_root_to_edges(self, root: int, apply_to_all_components: bool = False):
-        """Reorient edges so that children are always first in the edge list."""
+    def _apply_root_to_edges(
+        self, root: Optional[int], apply_to_all_components: bool = False
+    ) -> np.ndarray:
+        """Reorient edges so that children are always first in the edge list.
+
+        Parameters
+        ----------
+        root : Optional[int]
+            Root node to orient edges from. If None, uses self._root.
+        apply_to_all_components : bool, optional
+            Whether to reorient all connected components. Default False.
+
+        Returns
+        -------
+        np.ndarray
+            Parent node array after edge reorientation.
+        """
         if root is None:
             root = self._root
 
@@ -1369,11 +1717,19 @@ class SkeletonLayer(GraphLayer):
         )
 
     @property
-    def cover_paths(self):
+    def cover_paths(self) -> List[np.ndarray]:
+        """A collection of unbranched paths from each end point toward the root.
+        Each path ends when it hits a vertex that's already been visited in a previous path.
+        Paths are represented in dataframe indices.
+        """
         return [self.vertex_index[path] for path in self.cover_paths_positional]
 
     @property
-    def cover_paths_positional(self):
+    def cover_paths_positional(self) -> List[np.ndarray]:
+        """A collection of unbranched paths from each end point toward the root.
+        Each path ends when it hits a vertex that's already been visited in a previous path.
+        Paths are represented in positional indices.
+        """
         if self._dag_cache.cover_paths is None:
             self._dag_cache.cover_paths = gf.build_cover_paths(
                 self.end_points_positional,
@@ -1383,7 +1739,9 @@ class SkeletonLayer(GraphLayer):
             )
         return self._dag_cache.cover_paths
 
-    def cover_paths_specific(self, sources: Union[np.ndarray, list], positional=False):
+    def cover_paths_specific(
+        self, sources: Union[np.ndarray, list], positional: bool = False
+    ) -> List[np.ndarray]:
         """Get cover paths starting from specific source vertices.
 
         Parameters
@@ -1404,12 +1762,21 @@ class SkeletonLayer(GraphLayer):
             self.parent_node_array,
             self.distance_to_root(positional=True),
         )
-        if positional:
+        if not positional:
             return [self.vertex_index[path] for path in cps]
         return cps
 
     @property
-    def segments_positional(self):
+    def segments_positional(self) -> List[np.ndarray]:
+        """
+        Get the segments of the layer, a list of arrays where each array represents an unbranched span from end point or branch point to the upstring branch point or root (non-inclusive).
+        Segments are presented in positional indices.
+
+        Returns
+        -------
+        List[np.ndarray]
+            List of segment arrays in positional indices.
+        """
         if self._dag_cache.segments is None:
             self._dag_cache.segments, self._dag_cache.segment_map = gf.build_segments(
                 self.vertices,
@@ -1421,7 +1788,11 @@ class SkeletonLayer(GraphLayer):
         return self._dag_cache.segments
 
     @property
-    def segments(self):
+    def segments(self) -> List[np.ndarray]:
+        """
+        Get the segments of the layer, a list of arrays where each array represents an unbranched span from end point or branch point to the upstring branch point or root (non-inclusive).
+        Segments are presented in dataframe indices.
+        """
         if self._dag_cache.segments is None:
             self._dag_cache.segments, self._dag_cache.segment_map = gf.build_segments(
                 self.vertices,
@@ -1433,16 +1804,28 @@ class SkeletonLayer(GraphLayer):
         return [self.vertices[seg] for seg in self._dag_cache.segments]
 
     @property
-    def segments_plus_positional(self):
-        """Segments plus their parent node"""
+    def segments_plus_positional(self) -> List[np.ndarray]:
+        """Segments plus their parent node in positional indices.
+
+        Returns
+        -------
+        List[np.ndarray]
+            List of segment arrays including parent nodes in positional indices.
+        """
         segs = self.segments_positional
         return [
             np.concatenate((seg, [self.parent_node_array[seg[-1]]])) for seg in segs
         ]
 
     @property
-    def segments_plus(self):
-        """Segments plus their parent node"""
+    def segments_plus(self) -> List[np.ndarray]:
+        """Segments plus their parent node in dataframe indices.
+
+        Returns
+        -------
+        List[np.ndarray]
+            List of segment arrays including parent nodes in dataframe indices.
+        """
         return [self.vertices[seg] for seg in self.segments_plus_positional]
 
     @property
@@ -1458,8 +1841,23 @@ class SkeletonLayer(GraphLayer):
             )
         return self._dag_cache.segment_map
 
-    def expand_to_segment(self, vertices, positional=False):
-        """For each vertex in vertices, get the corresponding segment."""
+    def expand_to_segment(
+        self, vertices: Union[np.ndarray, List[int]], positional: bool = False
+    ) -> List[np.ndarray]:
+        """For each vertex in vertices, get the corresponding segment.
+
+        Parameters
+        ----------
+        vertices : Union[np.ndarray, List[int]]
+            Vertices to expand to their segments.
+        positional : bool, optional
+            Whether vertices are positional indices. Default False.
+
+        Returns
+        -------
+        List[np.ndarray]
+            List of segments corresponding to input vertices.
+        """
         vertices, positional = self._vertices_to_positional(vertices, positional)
         segment_ids = self.segment_map[vertices]
 
@@ -1469,9 +1867,13 @@ class SkeletonLayer(GraphLayer):
             return [self.segments[ii] for ii in segment_ids]
 
     @property
-    def half_edge_length(self):
-        """
-        Get the sum length of half-edges from a vertices to all parents and children.
+    def half_edge_length(self) -> np.ndarray:
+        """Get the sum length of half-edges from a vertices to all parents and children.
+
+        Returns
+        -------
+        np.ndarray
+            Array of half-edge lengths for each vertex.
         """
         return np.array(self.csgraph_undirected.sum(axis=0)).flatten() / 2
 
@@ -1585,6 +1987,9 @@ class PointCloudLayer(PointMixin):
 
     @property
     def layer_name(self) -> str:
+        """
+        Get the name of the layer.
+        """
         return self._name
 
     def __repr__(self) -> str:
