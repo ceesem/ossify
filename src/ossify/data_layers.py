@@ -167,6 +167,7 @@ class EdgeMixin(ABC):
 
 class FaceMixin(ABC):
     _csgraph = None
+    _trimesh = None
 
     @property
     def faces_positional(self) -> np.ndarray:
@@ -176,7 +177,7 @@ class FaceMixin(ABC):
     @property
     def faces(self) -> np.ndarray:
         """Return the face indices of the mesh."""
-        return self.vertex_index.values[self.layer.faces_positional]
+        return self.vertex_index[self.faces_positional]
 
     @property
     def as_trimesh(self) -> trimesh.Trimesh:
@@ -193,7 +194,7 @@ class FaceMixin(ABC):
 
     @property
     def edges(self) -> np.ndarray:
-        return self.vertex_index.values[self.as_trimesh.edges]
+        return self.vertex_index[self.as_trimesh.edges]
 
     @property
     def edges_positional(self) -> np.ndarray:
@@ -1712,7 +1713,7 @@ class MeshLayer(FaceMixin, PointMixin):
             if vertex_index:
                 faces = self._map_faces_to_index(faces, vertices.index)
             self._morphsync.add_mesh(
-                graph=(vertices, faces),
+                mesh=(vertices, faces),
                 name=self.layer_name,
                 spatial_columns=spatial_columns,
             )

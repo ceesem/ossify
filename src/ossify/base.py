@@ -429,7 +429,7 @@ class Cell:
     def __repr__(self) -> str:
         layers = self.layers
         annos = self.annotations.names
-        return f"MeshWork(name={self.name}, layers={layers}, annotations={annos})"
+        return f"Cell(name={self.name}, layers={sorted(layers)}, annotations={annos})"
 
     @classmethod
     def _from_existing(cls, new_morphsync, old_obj) -> Self:
