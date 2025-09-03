@@ -171,37 +171,41 @@ class FaceMixin(ABC):
 
     @property
     def faces_positional(self) -> np.ndarray:
-        """Return the face indices of the mesh."""
+        """Return the triangle face indices of the mesh in positional indices."""
         return self.layer.faces
 
     @property
     def faces(self) -> np.ndarray:
-        """Return the face indices of the mesh."""
+        """Return the triangle face indices of the mesh in raw indices."""
         return self.vertex_index[self.faces_positional]
 
     @property
     def as_trimesh(self) -> trimesh.Trimesh:
+        """Return the mesh as a trimesh.Trimesh object. Note that Trimesh works entirely in positional vertices."""
         if self._trimesh is None:
             self._trimesh = trimesh.Trimesh(
-                vertices=self.vertices, faces=self.faces, process=False
+                vertices=self.vertices, faces=self.faces_positional, process=False
             )
         return self._trimesh
 
     @property
-    def as_tuple(self) -> tuple:
-        """vertices, faces"""
+    def as_tuple(self) -> Tuple[np.ndarray, np.ndarray]:
+        """Tuple of (vertices, faces_positional) expected by many mesh-processing algorithms."""
         return self.vertices, self.faces_positional
 
     @property
     def edges(self) -> np.ndarray:
+        """Return the edge indices of the mesh in raw indices. Note that for each connected vertex pair u,v, there are both edges (u,v) and (v,u)."""
         return self.vertex_index[self.as_trimesh.edges]
 
     @property
     def edges_positional(self) -> np.ndarray:
+        """Return the edge indices of the mesh in positional indices. Note that for each connected vertex pair u,v, there are both edges (u,v) and (v,u)."""
         return self.as_trimesh.edges
 
     @property
     def csgraph(self) -> sparse.csr_matrix:
+        """Generate a compressed sparse graph representation of the mesh as a network."""
         if self._csgraph is None:
             self._csgraph = utils.build_csgraph(
                 self.vertices,
@@ -211,7 +215,7 @@ class FaceMixin(ABC):
             )
         return self._csgraph
 
-    def _map_faces_to_index(self, faces, vertex_indices):
+    def _map_faces_to_index(self, faces, vertex_indices) -> np.ndarray:
         index_map = {ii: v for ii, v in enumerate(vertex_indices)}
         return fastremap.remap(faces, index_map)
 
@@ -326,10 +330,12 @@ class PointMixin(ABC):
 
     @property
     def name(self) -> str:
+        """Layer name."""
         return self._name
 
     @property
-    def layer(self) -> PointSync:
+    def layer(self) -> Facet:
+        """Get the morphsync layer associated with the data layer."""
         return self._get_layer(self.layer_name)
 
     def _get_layer(self, layer_name: str) -> Facet:  # type: ignore
@@ -337,44 +343,54 @@ class PointMixin(ABC):
 
     @property
     def vertices(self) -> np.ndarray:
+        """Get the Nx3 vertex positions of the data layer."""
         return self.layer.vertices
 
     @property
     def vertex_df(self) -> pd.DataFrame:
+        """Get the Nx3 vertex positions of the data layer as an indexed DataFrame."""
         return self.layer.vertices_df
 
     @property
-    def vertex_index(self) -> pd.Index:
+    def vertex_index(self) -> np.ndarray:
+        """Get vertex indices as a numpy array."""
         return np.array(self.layer.vertices_index)
 
     @property
     def vertex_index_map(self) -> dict:
+        """Get a dictionary mapping vertex indices to their positional indices."""
         map = {int(v): ii for ii, v in enumerate(self.vertex_index)}
         map[-1] = -1
         return map
 
     @property
     def nodes(self) -> pd.DataFrame:
+        """Get the complete DataFrame of vertices and all associated data, including both spatial columns and labels."""
         return self.layer.nodes
 
     @property
     def spatial_columns(self) -> list:
+        """Get the list of column names associated with the x, y, and z positions."""
         return self._spatial_columns
 
     @property
     def label_names(self) -> list:
+        """Get the list of column names associated with labels (non-spatial columns)."""
         return self._label_columns
 
     @property
     def labels(self) -> pd.DataFrame:
+        """Get the labels DataFrame."""
         return self.nodes[self.label_names]
 
     @property
     def n_vertices(self) -> int:
+        """Get the number of vertices in the data layer."""
         return self.layer.n_vertices
 
     @property
     def kdtree(self) -> spatial.KDTree:
+        """Get the KDTree for the data layer's vertices for efficient spatial queries. See scipy.spatial.KDTree for documentation."""
         if self._kdtree is None:
             self._kdtree = spatial.KDTree(self.vertices)
         return self._kdtree
@@ -843,7 +859,7 @@ class GraphLayer(PointMixin, EdgeMixin):
             )
 
     def __repr__(self) -> str:
-        return f"GraphSync(name={self.name}, vertices={self.vertices.shape[0]}, edges={self.edges.shape[0]})"
+        return f"GraphLayer(name={self.name}, vertices={self.vertices.shape[0]}, edges={self.edges.shape[0]})"
 
 
 class SkeletonLayer(GraphLayer):
@@ -1180,13 +1196,6 @@ class SkeletonLayer(GraphLayer):
             }
         )
         return self
-
-    def apply_mask(
-        self,
-        mask: Optional[np.ndarray] = None,
-        new_morphsync: Optional[MorphSync] = None,
-    ):
-        self._cell.apply_mask(mask=mask, new_morphsync=new_morphsync)
 
     def distance_to_root(
         self, vertices: Optional[np.ndarray] = None, positional=False
@@ -1529,7 +1538,7 @@ class SkeletonLayer(GraphLayer):
             return result
 
     def __repr__(self) -> str:
-        return f"SkeletonSync(name={self.name}, vertices={self.vertices.shape[0]}, edges={self.edges.shape[0]})"
+        return f"SkeletonLayer(name={self.name}, vertices={self.vertices.shape[0]}, edges={self.edges.shape[0]})"
 
 
 class PointCloudLayer(PointMixin):
@@ -1579,7 +1588,7 @@ class PointCloudLayer(PointMixin):
         return self._name
 
     def __repr__(self) -> str:
-        return f"PointCloudSync(name={self.name}, vertices={self.vertices.shape[0]})"
+        return f"PointCloudLayer(name={self.name}, vertices={self.vertices.shape[0]})"
 
     def distance_to_root(
         self, vertices: Optional[np.ndarray] = None, positional: bool = False
@@ -1732,5 +1741,9 @@ class MeshLayer(FaceMixin, PointMixin):
             faces=old_obj.faces,
             spatial_columns=old_obj.spatial_columns,
             morphsync=new_morphsync,
+            existing=True,
         )
         return new_obj
+
+    def __repr__(self) -> str:
+        return f"MeshLayer(name={self.name}, vertices={self.vertices.shape[0]}, faces={self.edges.shape[0]})"

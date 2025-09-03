@@ -17,6 +17,15 @@ from .data_layers import (
 )
 from .sync_classes import *
 
+__all__ = [
+    "Cell",
+    "GraphLayer",
+    "MeshLayer",
+    "SkeletonLayer",
+    "PointCloudLayer",
+    "Link",
+]
+
 
 class LayerManager:
     def __init__(
@@ -69,7 +78,7 @@ class AnnotationManager:
         self._managed_layers = managed_layers
         if annotation_layers is not None:
             for layer in annotation_layers:
-                if issubclass(type(layer), PointSyncWork):
+                if issubclass(type(layer), PointCloudLayer):
                     self.add(layer)
                 else:
                     raise ValueError("Annotation layers must be point clouds.")
@@ -175,6 +184,12 @@ class Cell:
         if self.GRAPH_LN not in self._managed_layers:
             return None
         return self._managed_layers[self.GRAPH_LN]
+
+    @property
+    def mesh(self) -> MeshLayer:
+        if self.MESH_LN not in self._managed_layers:
+            return None
+        return self._managed_layers[self.MESH_LN]
 
     @property
     def annotations(self) -> AnnotationManager:
@@ -427,7 +442,7 @@ class Cell:
         return self.__class__._from_existing(new_morphsync, self)
 
     def __repr__(self) -> str:
-        layers = self.layers
+        layers = self.layers.names
         annos = self.annotations.names
         return f"Cell(name={self.name}, layers={sorted(layers)}, annotations={annos})"
 

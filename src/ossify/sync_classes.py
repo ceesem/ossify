@@ -13,6 +13,7 @@ __all__ = [
     "Facet",
     "is_ossify_layer",
     "Link",
+    "Facet",
 ]
 
 Facet = sync.base.FacetFrame  # Alias for FacetFrame

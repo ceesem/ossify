@@ -4,7 +4,7 @@ import fastremap
 import numpy as np
 import pandas as pd
 
-from .base import Link, MeshWorkSync
+from .base import Cell, Link
 from .utils import get_supervoxel_column
 
 if TYPE_CHECKING:
@@ -19,7 +19,7 @@ def _process_synapse_table(
     client: "CAVEclient",
     side: Literal["pre", "post"],
     columns: dict,
-    timestamp: datetime.datetime,
+    timestamp: "datetime.datetime",
     reference_tables: Optional[list[str]] = None,
     drop_other_side: bool = True,
     omit_autapses: bool = True,
@@ -32,34 +32,34 @@ def _process_synapse_table(
     side_column = columns[side]
     other_column = columns[other_side]
 
-    syn_df = client.materialize.tables[table_name](side_column=root_id).query(
+    syn_df = client.materialize.tables[table_name](**{side_column: root_id}).query(
         desired_resolution=[1, 1, 1], split_positions=True
     )
     if omit_autapses:
-        syn_df = syn_df.query(f"{side_column} != {other_column}")
+        syn_df.query(f"{side_column} != {other_column}", inplace=True)
 
     svid_column = get_supervoxel_column(side_column)
     l2_ids = client.chunkedgraph.get_roots(
         syn_df[svid_column], stop_layer=2, timestamp=timestamp
     )
-    syn_df[side_column.replace("_position", "_l2_id")] = l2_ids
+    syn_df[side_column.replace("_root_id", "_l2_id")] = l2_ids
     if drop_other_side:
-        syn_df = syn_df.drop(columns=other_column)
+        syn_df.drop(columns=other_column, inplace=True)
 
     return syn_df
 
 
-def from_client(
+def cell_from_client(
     root_id: int,
     client: "CAVEclient",
     synapses: bool = False,
     restore_graph: bool = False,
     restore_properties: bool = False,
-    synapse_spatial_point: str = "ctr_pt_position",
+    synapse_spatial_point: str = "ctr_pt",
     skeleton_version: int = 4,
     drop_partner_root_id: bool = True,
     omit_autapses: bool = True,
-):
+) -> Cell:
     sk = client.skeleton.get_skeleton(
         root_id, skeleton_version=skeleton_version, output_format="dict"
     )
@@ -101,7 +101,7 @@ def from_client(
     if restore_properties:
         l2_df = client.l2cache.get_l2data_table(l2ids)
     else:
-        l2_df = client.l2cache.get_l2data(l2ids, attributes=["rep_coord_nm"])
+        l2_df = client.l2cache.get_l2data_table(l2ids, attributes=["rep_coord_nm"])
     l2_df.reset_index(inplace=True)
 
     if restore_graph:
@@ -116,7 +116,7 @@ def from_client(
         edges = []
 
     nrn = (
-        MeshWorkSync(
+        Cell(
             name=root_id,
         )
         .add_graph(

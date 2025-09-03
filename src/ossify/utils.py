@@ -35,15 +35,15 @@ def remap_vertices_and_edges(
     return id_map, edgelist_new
 
 
-def process_spatial_columns(col_names="pt", suffix="position") -> list[str]:
+def process_spatial_columns(col_names="pt_position") -> list[str]:
     """
     Process spatial column names into a standard format.
     """
     if isinstance(col_names, str):
         col_names = [
-            f"{col_names}_{suffix}_x",
-            f"{col_names}_{suffix}_y",
-            f"{col_names}_{suffix}_z",
+            f"{col_names}_x",
+            f"{col_names}_y",
+            f"{col_names}_z",
         ]
     return col_names
 
