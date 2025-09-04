@@ -1,6 +1,6 @@
 import contextlib
 import copy
-from typing import Any, Dict, Iterator, List, Optional, Self, Union
+from typing import Any, Optional, Self, Union
 
 import numpy as np
 import pandas as pd
@@ -470,7 +470,7 @@ class Cell:
         return self
 
     def apply_mask(
-        self, layer: str, mask: np.ndarray, positional: bool = False
+        self, layer: str, mask: np.ndarray, as_positional: bool = False
     ) -> Self:
         """Create a new Cell with vertices masked out.
 
@@ -481,14 +481,16 @@ class Cell:
         mask : np.ndarray
             The mask to apply. Values that are True are preserved, while values that are False are discarded.
             Can be a boolean array or an array of vertices.
-        positional : bool
-            If mask is an array of vertices, this sets whether indices are in dataframe indices or positional indices.
+        as_positional : bool
+            If mask is an array of vertices, this sets whether indices are in dataframe indices or as_positional indices.
 
         Returns
         -------
         Self
         """
-        new_morphsync = self.layers[layer]._mask_morphsync(mask, positional=positional)
+        new_morphsync = self.layers[layer]._mask_morphsync(
+            mask, as_positional=as_positional
+        )
         return self.__class__._from_existing(new_morphsync, self)
 
     def __repr__(self) -> str:

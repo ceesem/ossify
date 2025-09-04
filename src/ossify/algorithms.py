@@ -1,7 +1,8 @@
-from typing import Literal, Optional, Union
+from typing import TYPE_CHECKING, Literal, Optional, Union
 
 import numpy as np
 import pandas as pd
+from scipy import sparse
 
 from .base import Cell, SkeletonLayer
 
@@ -16,6 +17,61 @@ def _strahler_path(baseline):
             last_val += 1
         out[ii] = last_val
     return out
+
+
+def _laplacian_offset(
+    skeleton: Cell,
+) -> sparse.csr_matrix:
+    """Compute the degree-normalized adjacency matrix part of the Laplacian matrix.
+
+    Parameters
+    ----------
+    nrn : meshwork.Meshwork
+        Neuron object
+
+    Returns
+    -------
+    sparse.spmatrix
+        Degree-normalized adjacency matrix in sparse format.
+    """
+    Amat = skeleton.csgraph_binary_undirected
+    deg = np.array(Amat.sum(axis=0)).squeeze()
+    Dmat = sparse.diags_array(1 / np.sqrt(deg))
+    Lmat = Dmat @ Amat @ Dmat
+    return Lmat
+
+
+def smooth_labels(
+    cell: Union[Cell, SkeletonLayer],
+    label: np.ndarray,
+    alpha: float = 0.90,
+) -> np.ndarray:
+    """Computes a smoothed label spreading that is akin to steady-state solutions to the heat equation on the skeleton graph.
+
+    Parameters
+    ----------
+    cell : Cell
+        Neuron object
+    label : np.ndarray
+        The initial label array. Must be Nxm, where N is the number of skeleton vertices
+    alpha : float, optional
+        A neighborhood influence parameter between 0 and 1. Higher values give more influence to neighbors, by default 0.90.
+
+    Returns
+    -------
+    np.ndarray
+        The smoothed label array
+    """
+    if isinstance(cell, SkeletonLayer):
+        skel = cell
+    else:
+        skel = cell.skeleton
+    Smat = _laplacian_offset(skel)
+    Imat = sparse.eye(Smat.shape[0])
+    invertLap = Imat - alpha * Smat
+    label = np.atleast_2d(label).reshape(Smat.shape[0], -1)
+    F = sparse.linalg.spsolve(invertLap, label)
+    return np.squeeze((1 - alpha) * F)
 
 
 def strahler_number(cell: Union[Cell, SkeletonLayer]) -> np.ndarray:
@@ -163,6 +219,7 @@ def label_axon_from_synapses(
                 skel, pre_syn_inds, post_syn_inds, n_splits, label_to_segment
             )
         case "spectral":
+            raise NotImplementedError("Spectral method not yet implemented.")
             return _label_axon_spectral(
                 skel, pre_syn_inds, post_syn_inds, label_to_segment
             )
@@ -172,10 +229,34 @@ def _label_axon_synapse_flow(
     skeleton: SkeletonLayer,
     pre_syn_inds: np.ndarray,
     post_syn_inds: np.ndarray,
-    n_splits: int,
-    label_to_segment: bool,
-):
-    pass
+    extend_label_to_segment: bool,
+) -> np.ndarray:
+    """Label an axon compartment by synapse betweenness. All parameters are as positional indices."""
+    syn_btw = synapse_betweenness(skeleton, pre_syn_inds, post_syn_inds)
+    high_vinds = np.flatnonzero(syn_btw == max(syn_btw))
+    close_vind = high_vinds[np.argmin(skeleton.distance_to_root(high_vinds))]
+    if extend_label_to_segment:
+        relseg = skeleton.segment_map[close_vind]
+        min_ind = np.argmin(skeleton.distance_to_root(skeleton.segments[relseg]))
+        axon_split_ind = skeleton.segments[relseg][min_ind]
+    else:
+        axon_split_ind = close_vind
+    downstream_inds = skeleton.downstream_vertices(
+        axon_split_ind, inclusive=True, as_positional=True
+    )
+    n_pre_ds = np.sum(np.isin(pre_syn_inds, downstream_inds))
+    n_post_ds = np.sum(np.isin(post_syn_inds, downstream_inds))
+    n_pre_us = len(pre_syn_inds) - n_pre_ds
+    n_post_us = len(post_syn_inds) - n_post_ds
+    if (n_pre_ds / (n_post_ds + n_pre_ds + 1)) >= (
+        n_pre_us / (n_post_us + n_pre_us + 1)
+    ):
+        is_axon = np.full(skeleton.n_vertices, False)
+        is_axon[downstream_inds] = True
+    else:
+        is_axon = np.full(skeleton.n_vertices, True)
+        is_axon[downstream_inds] = False
+    return is_axon
 
 
 def _label_axon_spectral(

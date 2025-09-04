@@ -206,6 +206,8 @@ def find_far_points_graph(
 
 
 def get_supervoxel_column(pt_column: str) -> str:
-    if not pt_column.endswith("_position"):
-        return pt_column.replace("_position_x", "_supervoxel_id")
-    return pt_column.replace("_position", "_supervoxel_id")
+    return pt_column.replace("_root_id", "_supervoxel_id")
+
+
+def get_l2id_column(pt_column: str) -> str:
+    return pt_column.replace("_root_id", "_l2_id")

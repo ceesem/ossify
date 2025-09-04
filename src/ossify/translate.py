@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 
 from .base import Cell, Link
-from .utils import get_supervoxel_column
+from .utils import get_l2id_column, get_supervoxel_column
 
 if TYPE_CHECKING:
     import datetime
@@ -32,8 +32,10 @@ def _process_synapse_table(
     side_column = columns[side]
     other_column = columns[other_side]
 
-    syn_df = client.materialize.tables[table_name](**{side_column: root_id}).query(
-        desired_resolution=[1, 1, 1], split_positions=True
+    syn_df = client.materialize.tables[table_name](**{side_column: root_id}).live_query(
+        desired_resolution=[1, 1, 1],
+        split_positions=True,
+        timestamp=timestamp,
     )
     if omit_autapses:
         syn_df.query(f"{side_column} != {other_column}", inplace=True)
@@ -42,7 +44,8 @@ def _process_synapse_table(
     l2_ids = client.chunkedgraph.get_roots(
         syn_df[svid_column], stop_layer=2, timestamp=timestamp
     )
-    syn_df[side_column.replace("_root_id", "_l2_id")] = l2_ids
+    l2_column = get_l2id_column(side_column)
+    syn_df[l2_column] = l2_ids
     if drop_other_side:
         syn_df.drop(columns=other_column, inplace=True)
 

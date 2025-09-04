@@ -1,4 +1,3 @@
-# Additional properties for layers with edges
 import copy
 import uuid
 from abc import ABC, abstractmethod
@@ -122,7 +121,7 @@ class EdgeMixin(ABC):
         self,
         sources: Optional[np.ndarray] = None,
         targets: Optional[np.ndarray] = None,
-        positional=False,
+        as_positional=False,
         limit: Optional[float] = None,
     ) -> np.ndarray:
         """
@@ -134,7 +133,7 @@ class EdgeMixin(ABC):
             The source vertices. If None, all vertices are used.
         targets : Optional[np.ndarray]
             The target vertices. If None, all vertices are used.
-        positional: bool
+        as_positional: bool
             Whether the input vertices are positional (i.e., masks or indices).
             Must be the same for sources and targets.
         limit: Optional[float]
@@ -147,9 +146,13 @@ class EdgeMixin(ABC):
             The distance between each source and target vertex, of dimensions len(sources) x len(targets).
         """
         # Sources must be positional for the dijkstra
-        sources, positional_sources = self._vertices_to_positional(sources, positional)
-        targets, positional_targets = self._vertices_to_positional(targets, positional)
-        if positional_sources != positional_targets:
+        sources, as_positional_sources = self._vertices_to_positional(
+            sources, as_positional
+        )
+        targets, as_positional_targets = self._vertices_to_positional(
+            targets, as_positional
+        )
+        if as_positional_sources != as_positional_targets:
             raise ValueError(
                 "sources and targets must both be positional or both be indices. Masks are implicitly positional."
             )
@@ -166,7 +169,7 @@ class EdgeMixin(ABC):
         self,
         source: int,
         target: int,
-        positional=False,
+        as_positional=False,
         as_vertices=False,
     ) -> np.ndarray:
         """
@@ -178,7 +181,7 @@ class EdgeMixin(ABC):
             The source vertex.
         target : int
             The target vertex.
-        positional: bool
+        as_positional: bool
             Whether the input vertices are positional (i.e., masks or indices).
             Must be the same for sources and targets.
         as_vertices: bool
@@ -187,10 +190,10 @@ class EdgeMixin(ABC):
         Returns
         -------
         np.ndarray
-            The shortest path between each source and target vertex, indices if positional is False, or nx3 array if `as_vertices` is True.
+            The shortest path between each source and target vertex, indices if as_positional is False, or nx3 array if `as_vertices` is True.
         """
         # Sources must be positional for the dijkstra
-        st, _ = self._vertices_to_positional([source, target], positional)
+        st, _ = self._vertices_to_positional([source, target], as_positional)
         source = st[0]
         target = st[1]
         path_positional = gf.shortest_path(
@@ -198,7 +201,7 @@ class EdgeMixin(ABC):
             target=target,
             csgraph=self.csgraph_binary_undirected,
         )
-        if positional and not as_vertices:
+        if as_positional and not as_vertices:
             return self.vertex_index[path_positional]
         else:
             if as_vertices:
@@ -280,7 +283,7 @@ class FaceMixin(ABC):
     def surface_area(
         self,
         vertices: Optional[np.ndarray] = None,
-        positional: bool = True,
+        as_positional: bool = True,
         inclusive: bool = False,
     ) -> float:
         """Calculate the surface area of the mesh, or a subset of vertices.
@@ -289,7 +292,7 @@ class FaceMixin(ABC):
         ----------
         vertices : Optional[np.ndarray], optional
             Vertex indices to calculate surface area for. If None, uses entire mesh.
-        positional : bool, optional
+        as_positional : bool, optional
             Whether the input vertices are positional indices or vertex indices. Default True.
         inclusive : bool, optional
             Whether to include faces that are covered by any vertex (True) or only those fully covered (False). Default False.
@@ -302,13 +305,13 @@ class FaceMixin(ABC):
         if vertices is None:
             return self.as_trimesh.area
         else:
-            vertices, positional = self._vertices_to_positional(vertices, positional)
+            vertices, _ = self._vertices_to_positional(vertices, as_positional)
             mask = np.full(self.n_vertices, False)
             mask[vertices] = True
             if inclusive:
-                face_mask = np.any(self.as_trimesh.faces(mask), axis=1)
+                face_mask = np.any(mask[self.as_trimesh.faces], axis=1)
             else:
-                face_mask = np.all(self.as_trimesh.faces(mask), axis=1)
+                face_mask = np.all(mask[self.as_trimesh.faces], axis=1)
             return self.as_trimesh.area_faces[face_mask].sum()
 
 
@@ -388,7 +391,7 @@ class PointMixin(ABC):
     def _vertices_to_positional(
         self,
         vertices: Optional[np.ndarray],
-        positional: bool,
+        as_positional: bool,
         vertex_index: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, bool]:
         """Map vertex index to positional indices whether inputs are positional, masks, indices.
@@ -397,7 +400,7 @@ class PointMixin(ABC):
         ----------
         vertices : Optional[np.ndarray]
             Array of vertex indices, positional indices, or boolean mask. If None, all vertices used.
-        positional : bool
+        as_positional : bool
             Whether input vertices are positional indices (True) or vertex indices (False).
         vertex_index : Optional[np.ndarray], optional
             Custom vertex index array to use for mapping. If None, uses self.vertex_index.
@@ -409,7 +412,7 @@ class PointMixin(ABC):
         """
         if vertices is None:
             vertices = np.arange(self.n_vertices)
-            positional = True
+            as_positional = True
         else:
             vertices = np.array(vertices)
             if np.issubdtype(vertices.dtype, np.bool_):
@@ -418,15 +421,15 @@ class PointMixin(ABC):
                         "If vertices is a boolean array, it must have the same length as the number of vertices."
                     )
                 vertices = np.flatnonzero(vertices)
-                positional = True
-            if not positional:
+                as_positional = True
+            if not as_positional:
                 if vertex_index is None:
                     vertex_index_map = self.vertex_index_map
                 else:
                     vertex_index_map = {v: i for i, v in enumerate(vertex_index)}
                 vertices = fastremap.remap(vertices, vertex_index_map)
             vertices = np.array(vertices)
-        return vertices, positional
+        return vertices, as_positional
 
     @property
     def name(self) -> str:
@@ -596,7 +599,7 @@ class PointMixin(ABC):
         source_index : np.ndarray
             Source indices to map from.
         validate : bool, optional
-            Whether to validate for ambiguous mappings. Default False.
+            Whether to validate for ambiguous mappings, i.e. multiple targets are possible. Default False.
 
         Returns
         -------
@@ -683,7 +686,7 @@ class PointMixin(ABC):
         self,
         layer: str,
         source_index: np.ndarray,
-        positional: bool,
+        as_positional: bool,
         how: str,
         validate: bool = False,
     ) -> Union[np.ndarray, dict]:
@@ -695,7 +698,7 @@ class PointMixin(ABC):
             Target layer name to map to.
         source_index : np.ndarray
             Source indices to map from.
-        positional : bool
+        as_positional : bool
             Whether indices are positional (True) or vertex indices (False).
         how : str
             Mapping strategy: 'one_to_one', 'range_to_range', or 'one_to_list'.
@@ -710,9 +713,12 @@ class PointMixin(ABC):
         if layer == self.layer_name:
             return source_index
         if source_index is None:
-            source_index = self.vertex_index
-        source_index = np.array(source_index)
-        if positional or np.issubdtype(source_index.dtype, np.bool):
+            if as_positional:
+                source_index = np.arange(len(self.vertex_index))
+            else:
+                source_index = self.vertex_index
+        source_index = np.asarray(source_index)
+        if as_positional or np.issubdtype(source_index.dtype, np.bool):
             source_index = self.vertex_index[source_index]
         if layer in self._morphsync._layers:
             match how:
@@ -728,7 +734,7 @@ class PointMixin(ABC):
                     mapping = self._map_index_to_list_of_lists(
                         layer=layer, source_index=source_index
                     )
-            if positional:
+            if as_positional:
                 if isinstance(mapping, np.ndarray):
                     mapping = fastremap.remap(
                         mapping,
@@ -766,7 +772,7 @@ class PointMixin(ABC):
         self,
         layer: str,
         source_index: Optional[np.ndarray] = None,
-        positional: bool = False,
+        as_positional: bool = False,
         validate: bool = False,
     ) -> np.ndarray:
         """Map each vertex index from the current layer to a single index in the specified layer.
@@ -777,7 +783,7 @@ class PointMixin(ABC):
             The target layer to map the index to.
         source_index : Optional[np.ndarray]
             The source index to map from. If None, all vertices are used. Can also be a boolean array.
-        positional : bool
+        as_positional : bool
             Whether to treat source_index and mapped index as positional (i_th element of the array) or as a dataframe index.
         validate : bool
             Whether to raise an error is the mapping is ambiguous, i.e. it is not clear which target index to use.
@@ -787,12 +793,12 @@ class PointMixin(ABC):
         np.ndarray
             The mapped indices in the target layer.
             There will be exactly one target index for each source index, no matter how many viable target indices there are.
-            If `positional` is True, the mapping is based on the position of the vertices not the dataframe index.
+            If `as_positional` is True, the mapping is based on the position of the vertices not the dataframe index.
         """
         return self._map_index_to_layer(
             layer=layer,
             source_index=source_index,
-            positional=positional,
+            as_positional=as_positional,
             how="one_to_one",
             validate=validate,
         )
@@ -801,7 +807,7 @@ class PointMixin(ABC):
         self,
         layer: str,
         source_index: Optional[np.ndarray] = None,
-        positional: bool = False,
+        as_positional: bool = False,
     ) -> np.ndarray:
         """Map each vertex index from the current layer to the specified layer.
 
@@ -811,7 +817,7 @@ class PointMixin(ABC):
             The target layer to map the index to.
         source_index : Optional[np.ndarray]
             The source indices to map from. If None, all vertices are used. Can also be a boolean array.
-        positional : bool
+        as_positional : bool
             Whether to treat source_index and mapped index as positional (i_th element of the array) or as a dataframe index.
 
         Returns
@@ -819,12 +825,12 @@ class PointMixin(ABC):
         np.ndarray
             All mapped indices in the target layer.
             Not necessarily the same length as the source indices, because it maps a region to another region.
-            If `positional` is True, the mapping is based on the position of the vertices not the dataframe index.
+            If `as_positional` is True, the mapping is based on the position of the vertices not the dataframe index.
         """
         return self._map_index_to_layer(
             layer=layer,
             source_index=source_index,
-            positional=positional,
+            as_positional=as_positional,
             how="range_to_range",
         )
 
@@ -832,7 +838,7 @@ class PointMixin(ABC):
         self,
         layer: str,
         source_index: Optional[np.ndarray] = None,
-        positional: bool = False,
+        as_positional: bool = False,
     ) -> dict:
         """Map each vertex index from the current layer to a list of all appropriate vertices in the target layer.
 
@@ -842,7 +848,7 @@ class PointMixin(ABC):
             The target layer to map the index to.
         source_index : Optional[np.ndarray]
             The source indices to map from. If None, all vertices are used. Can also be a boolean array.
-        positional : bool
+        as_positional : bool
             Whether to treat source_index and mapped index as positional (i_th element of the array) or as a dataframe index.
 
         Returns
@@ -853,7 +859,7 @@ class PointMixin(ABC):
         return self._map_index_to_layer(
             layer=layer,
             source_index=source_index,
-            positional=positional,
+            as_positional=as_positional,
             how="one_to_list",
         )
 
@@ -874,7 +880,7 @@ class PointMixin(ABC):
         np.ndarray
             The mapped boolean mask in the target layer.
             There may be multiple target indices for each source index, depending on the region mapping.
-            If `positional` is True, the mapping is based on the position of the vertices not the dataframe index.
+            If `as_positional` is True, the mapping is based on the position of the vertices not the dataframe index.
         """
         mask = np.array(mask)
         if len(mask) != self.n_vertices and np.issubdtype(mask.dtype, np.bool_):
@@ -884,7 +890,7 @@ class PointMixin(ABC):
         mapping = self._map_index_to_layer(
             layer=layer,
             source_index=mask,
-            positional=True,
+            as_positional=True,
             how="range_to_range",
         )
         mask_out = np.full(self._cell._all_objects[layer].n_vertices, False)
@@ -892,7 +898,7 @@ class PointMixin(ABC):
         return mask_out
 
     def _mask_morphsync(
-        self, mask: np.ndarray, positional: bool = False
+        self, mask: np.ndarray, as_positional: bool = False
     ) -> "MorphSync":
         """Apply a mask to the underlying morphsync indexing infrastructure.
 
@@ -900,7 +906,7 @@ class PointMixin(ABC):
         ----------
         mask : np.ndarray
             Boolean mask or indices to apply.
-        positional : bool, optional
+        as_positional : bool, optional
             Whether mask contains positional indices. Default False.
 
         Returns
@@ -908,7 +914,7 @@ class PointMixin(ABC):
         MorphSync
             New MorphSync object with mask applied.
         """
-        if positional:
+        if as_positional:
             bool_mask = np.full(self.n_vertices, False)
             bool_mask[mask] = True
             mask = bool_mask
@@ -954,7 +960,7 @@ class PointMixin(ABC):
     def apply_mask(
         self,
         mask: np.ndarray,
-        positional: bool = False,
+        as_positional: bool = False,
         self_only: bool = False,
     ) -> Union[Self, "Cell"]:
         """Apply a mask on the current layer. Returns a new object with the masked morphsync.
@@ -965,7 +971,7 @@ class PointMixin(ABC):
         ----------
         mask: np.ndarray
             The mask to apply, either in boolean, vertex index, or positional index form.
-        positional: bool
+        as_positional: bool
             If providing indices, specify if they are positional indices (True) or vertex indices (False).
         self_only: bool
             If True, only apply the mask to the current object and not to any associated CellSync.
@@ -975,7 +981,7 @@ class PointMixin(ABC):
         masked_object Union[Self, "CellSync"]
             Either a new object of the same class or a new CellSync will be returned.
         """
-        new_morphsync = self._mask_morphsync(mask=mask, positional=positional)
+        new_morphsync = self._mask_morphsync(mask=mask, as_positional=as_positional)
         if self._cell is None or self_only:
             return self.__class__._from_existing(
                 new_morphsync=new_morphsync, old_obj=self
@@ -1336,12 +1342,12 @@ class SkeletonLayer(GraphLayer):
         return self.topo_points.shape[0]
 
     @property
-    def parent_free_nodes(self) -> np.ndarray:
+    def parentless_nodes(self) -> np.ndarray:
         "List of nodes by vertex index that do not have any parents, including any root node."
-        return self.vertex_index[self.parent_free_nodes_positional]
+        return self.vertex_index[self.parentless_nodes_positional]
 
     @property
-    def parent_free_nodes_positional(self) -> np.ndarray:
+    def parentless_nodes_positional(self) -> np.ndarray:
         "List of nodes by positional index that do not have any parents, including any root node."
         return np.flatnonzero(self.parent_node_array == -1)
 
@@ -1520,14 +1526,14 @@ class SkeletonLayer(GraphLayer):
                 edges_positional_new[:, ii]
             ]
 
-    def reroot(self, new_root: int, positional=False) -> Self:
+    def reroot(self, new_root: int, as_positional=False) -> Self:
         """Reroot to a new index. Important: that this will reset any inherited properties from an unmasked skeleton!
 
         Parameters
         ----------
         new_root : int
             The new root index to set.
-        positional: bool, optional
+        as_positional: bool, optional
             Whether the new root is a positional index. If False, the new root is treated as a vertex label.
 
         Returns
@@ -1535,7 +1541,7 @@ class SkeletonLayer(GraphLayer):
         Self
         """
         self._reset_derived_properties()
-        if not positional:
+        if not as_positional:
             new_root = np.flatnonzero(self.vertex_index == new_root)[0]
         self._root = new_root
         self._dag_cache.root = self._root
@@ -1551,7 +1557,7 @@ class SkeletonLayer(GraphLayer):
         return self
 
     def distance_to_root(
-        self, vertices: Optional[np.ndarray] = None, positional=False
+        self, vertices: Optional[np.ndarray] = None, as_positional=False
     ) -> np.ndarray:
         """
         Get the distance to the root for each vertex in the skeleton, or for a subset of vertices.
@@ -1563,7 +1569,7 @@ class SkeletonLayer(GraphLayer):
         ----------
         vertices : Optional[np.ndarray]
             The vertices to get the distance from the root for. If None, all vertices are used.
-        positional : bool
+        as_positional : bool
             If True, the vertices are treated as positional indices. If False, they are treated as vertex labels.
 
         Returns
@@ -1572,8 +1578,8 @@ class SkeletonLayer(GraphLayer):
             The distance from the root for each vertex.
         """
         # Vertices must be positional for the dijkstra
-        vertices, positional = self._vertices_to_positional(
-            vertices, positional, vertex_index=self.base_vertex_index
+        vertices, as_positional = self._vertices_to_positional(
+            vertices, as_positional, vertex_index=self.base_vertex_index
         )
         if self._dag_cache.distance_to_root is not None:
             dtr = self._dag_cache.distance_to_root
@@ -1589,7 +1595,7 @@ class SkeletonLayer(GraphLayer):
     def hops_to_root(
         self,
         vertices: Optional[np.ndarray] = None,
-        positional=False,
+        as_positional=False,
     ) -> np.ndarray:
         """Distance to root in number of hops between vertices. Always works on the base graph, whether the root is masked out or not.
 
@@ -1597,7 +1603,7 @@ class SkeletonLayer(GraphLayer):
         ----------
         vertices : Optional[np.ndarray]
             The vertices to get the distance from the root for. If None, all vertices are used.
-        positional : bool
+        as_positional : bool
             If True, the vertices are treated as positional indices. If False, they are treated as vertex labels.
 
         Returns
@@ -1605,7 +1611,7 @@ class SkeletonLayer(GraphLayer):
         np.ndarray
             The distance from the root for each vertex.
         """
-        vertices, _ = self._vertices_to_positional(vertices, positional)
+        vertices, _ = self._vertices_to_positional(vertices, as_positional)
         if self._dag_cache.hops_to_root is not None:
             htr = self._dag_cache.hops_to_root
         else:
@@ -1617,14 +1623,14 @@ class SkeletonLayer(GraphLayer):
             self._dag_cache.hops_to_root = htr
         return htr[vertices]
 
-    def child_nodes(self, vertices=None, positional=False) -> dict:
+    def child_nodes(self, vertices=None, as_positional=False) -> dict:
         """Get mapping from vertices to their child nodes.
 
         Parameters
         ----------
         vertices : Union[np.ndarray, List[int]]
             The vertices to get the child nodes for.
-        positional : bool, optional
+        as_positional : bool, optional
             Whether the vertices are positional indices. If False, they are treated as vertex labels.
 
         Returns
@@ -1632,9 +1638,9 @@ class SkeletonLayer(GraphLayer):
         dict
             A dictionary mapping each vertex to its child nodes.
         """
-        vertices, positional = self._vertices_to_positional(vertices, positional)
+        vertices, as_positional = self._vertices_to_positional(vertices, as_positional)
         cinds = gf.build_child_node_dictionary(vertices, self.csgraph_binary)
-        if positional:
+        if as_positional:
             return cinds
         else:
             new_cinds = {}
@@ -1643,7 +1649,7 @@ class SkeletonLayer(GraphLayer):
             return new_cinds
 
     def downstream_vertices(
-        self, vertex, inclusive=False, positional=False
+        self, vertex, inclusive=False, as_positional=False
     ) -> np.ndarray:
         """Get all vertices downstream of a specified vertex
 
@@ -1653,27 +1659,27 @@ class SkeletonLayer(GraphLayer):
             The vertex to get the downstream vertices for.
         inclusive: bool, optional
             Whether to include the specified vertex in the downstream vertices.
-        positional : bool, optional
+        as_positional : bool, optional
             Whether the vertex is a positional index. If False, it is treated as a vertex label.
 
         Returns
         -------
         np.ndarray
-            The downstream vertices, following the same mode as the positional parameter.
+            The downstream vertices, following the same mode as the as_positional parameter.
         """
-        vertex, positional = self._vertices_to_positional([vertex], positional)
+        vertex, as_positional = self._vertices_to_positional([vertex], as_positional)
         ds_inds = gf.get_subtree_nodes(
             subtree_root=vertex[0], edges=self.edges_positional
         )
         if inclusive:
             ds_inds = np.concatenate(([vertex[0]], ds_inds))
-        if positional:
+        if as_positional:
             return ds_inds
         else:
             return self.vertex_index[ds_inds]
 
     def cable_length(
-        self, vertices: Optional[Union[list, np.ndarray]] = None, positional=False
+        self, vertices: Optional[Union[list, np.ndarray]] = None, as_positional=False
     ) -> float:
         """The net cable length of the subgraph formed by given vertices. If no vertices are provided, the entire graph is used.
 
@@ -1681,7 +1687,7 @@ class SkeletonLayer(GraphLayer):
         ----------
         vertices : Optional[Union[list, np.ndarray]]
             The vertices to include in the subgraph. If None, the entire graph is used.
-        positional : bool, optional
+        as_positional : bool, optional
             Whether the vertices are positional indices. If False, they are treated as vertex labels.
 
         Returns
@@ -1690,10 +1696,12 @@ class SkeletonLayer(GraphLayer):
             The net cable length of the subgraph.
         """
 
-        vertices, _ = self._vertices_to_positional(vertices, positional)
-        return float(self.csgraph[:, vertices][vertices].sum())
+        vertices, _ = self._vertices_to_positional(vertices, as_positional)
+        return float(self.csgraph[np.ix_(vertices, vertices)].sum())
 
-    def lowest_common_ancestor(self, u: int, v: int, positional=False) -> Optional[int]:
+    def lowest_common_ancestor(
+        self, u: int, v: int, as_positional=False
+    ) -> Optional[int]:
         """Get the lowest common ancestor of two vertices in the skeleton.
 
         Parameters
@@ -1702,7 +1710,7 @@ class SkeletonLayer(GraphLayer):
             The first vertex.
         v : int
             The second vertex.
-        positional : bool, optional
+        as_positional : bool, optional
             Whether the vertices are positional indices. If False, they are treated as vertex labels.
 
         Returns
@@ -1710,7 +1718,7 @@ class SkeletonLayer(GraphLayer):
         Optional[int]
             The lowest common ancestor of the two vertices, or None if not found.
         """
-        uv, positional = self._vertices_to_positional([u, v], positional)
+        uv, as_positional = self._vertices_to_positional([u, v], as_positional)
         u = uv[0]
         v = uv[1]
         return gf.lca(
@@ -1739,13 +1747,13 @@ class SkeletonLayer(GraphLayer):
             self._dag_cache.cover_paths = gf.build_cover_paths(
                 self.end_points_positional,
                 self.parent_node_array,
-                self.distance_to_root(positional=True),
+                self.distance_to_root(as_positional=True),
                 self._dag_cache,
             )
         return self._dag_cache.cover_paths
 
     def cover_paths_specific(
-        self, sources: Union[np.ndarray, list], positional: bool = False
+        self, sources: Union[np.ndarray, list], as_positional: bool = False
     ) -> List[np.ndarray]:
         """Get cover paths starting from specific source vertices.
 
@@ -1753,7 +1761,7 @@ class SkeletonLayer(GraphLayer):
         ----------
         sources : Union[np.ndarray, list]
             The source vertices to start the cover paths from.
-        positional : bool, optional
+        as_positional : bool, optional
             Whether the sources are positional indices. If False, they are treated as vertex labels.
 
         Returns
@@ -1761,13 +1769,13 @@ class SkeletonLayer(GraphLayer):
         list
             A list of cover paths, each path is a list of vertex indices, ordered as the typical `cover_paths` method.
         """
-        sources, positional = self._vertices_to_positional(sources, positional)
+        sources, as_positional = self._vertices_to_positional(sources, as_positional)
         cps = gf.compute_cover_paths(
             sources,
             self.parent_node_array,
-            self.distance_to_root(positional=True),
+            self.distance_to_root(as_positional=True),
         )
-        if not positional:
+        if not as_positional:
             return [self.vertex_index[path] for path in cps]
         return cps
 
@@ -1787,8 +1795,8 @@ class SkeletonLayer(GraphLayer):
                 self.vertices,
                 self.edges_positional,
                 self.branch_points_positional,
-                self.child_nodes(positional=True),
-                self.hops_to_root(positional=True),
+                self.child_nodes(as_positional=True),
+                self.hops_to_root(as_positional=True),
             )
         return self._dag_cache.segments
 
@@ -1803,8 +1811,8 @@ class SkeletonLayer(GraphLayer):
                 self.vertices,
                 self.edges_positional,
                 self.branch_points_positional,
-                self.child_nodes(positional=True),
-                self.hops_to_root(positional=True),
+                self.child_nodes(as_positional=True),
+                self.hops_to_root(as_positional=True),
             )
         return [self.vertices[seg] for seg in self._dag_cache.segments]
 
@@ -1841,13 +1849,13 @@ class SkeletonLayer(GraphLayer):
                 self.vertices,
                 self.edges_positional,
                 self.branch_points_positional,
-                self.child_nodes(positional=True),
-                self.hops_to_root(positional=True),
+                self.child_nodes(as_positional=True),
+                self.hops_to_root(as_positional=True),
             )
         return self._dag_cache.segment_map
 
     def expand_to_segment(
-        self, vertices: Union[np.ndarray, List[int]], positional: bool = False
+        self, vertices: Union[np.ndarray, List[int]], as_positional: bool = False
     ) -> List[np.ndarray]:
         """For each vertex in vertices, get the corresponding segment.
 
@@ -1855,7 +1863,7 @@ class SkeletonLayer(GraphLayer):
         ----------
         vertices : Union[np.ndarray, List[int]]
             Vertices to expand to their segments.
-        positional : bool, optional
+        as_positional : bool, optional
             Whether vertices are positional indices. Default False.
 
         Returns
@@ -1863,10 +1871,10 @@ class SkeletonLayer(GraphLayer):
         List[np.ndarray]
             List of segments corresponding to input vertices.
         """
-        vertices, positional = self._vertices_to_positional(vertices, positional)
+        vertices, as_positional = self._vertices_to_positional(vertices, as_positional)
         segment_ids = self.segment_map[vertices]
 
-        if positional:
+        if as_positional:
             return [self.segments_positional[ii] for ii in segment_ids]
         else:
             return [self.segments[ii] for ii in segment_ids]
@@ -2001,7 +2009,7 @@ class PointCloudLayer(PointMixin):
         return f"PointCloudLayer(name={self.name}, vertices={self.vertices.shape[0]})"
 
     def distance_to_root(
-        self, vertices: Optional[np.ndarray] = None, positional: bool = False
+        self, vertices: Optional[np.ndarray] = None, as_positional: bool = False
     ) -> np.ndarray:
         """
         Get the distance to the root for each vertex in the point cloud along the skeleton, or for a subset of vertices.
@@ -2010,7 +2018,7 @@ class PointCloudLayer(PointMixin):
         ----------
         vertices : Optional[np.ndarray]
             The vertices to get the distance to the root for. If None, all vertices are used.
-        positional : bool, optional
+        as_positional : bool, optional
             If True, the vertices are treated as positional indices. If False, they are treated as vertex labels.
             By default False.
 
@@ -2027,16 +2035,16 @@ class PointCloudLayer(PointMixin):
         if vertices is None:
             vertices = self.vertex_index
         skel_idx = self.map_index_to_layer(
-            layer=SKEL_LAYER_NAME, source_index=vertices, positional=positional
+            layer=SKEL_LAYER_NAME, source_index=vertices, as_positional=as_positional
         )
         return self._cell.skeleton.distance_to_root(
-            vertices=skel_idx, positional=positional
+            vertices=skel_idx, as_positional=as_positional
         )
 
     def distance_between(
         self,
         vertices: Optional[np.ndarray] = None,
-        positional: bool = False,
+        as_positional: bool = False,
         via: Literal["skeleton", "graph", "mesh"] = "skeleton",
         limit: Optional[float] = None,
     ) -> np.ndarray:
@@ -2047,7 +2055,7 @@ class PointCloudLayer(PointMixin):
         ----------
         vertices : Optional[np.ndarray]
             The vertices to get the distance between. If None, all vertices are used.
-        positional : bool, optional
+        as_positional : bool, optional
             If True, the vertices are treated as positional indices. If False, they are treated as vertex labels.
             By default False.
         via: Literal["skeleton", "graph", "mesh"], optional
@@ -2065,13 +2073,16 @@ class PointCloudLayer(PointMixin):
         if via not in self._morphsync._layers:
             raise ValueError(f"Cell does not have a {via.capitalize()} object.")
 
-        vertices, positional = self._vertices_to_positional(vertices, positional)
+        vertices, as_positional = self._vertices_to_positional(vertices, as_positional)
 
         target_idx = self.map_index_to_layer(
-            layer=via, source_index=vertices, positional=positional
+            layer=via, source_index=vertices, as_positional=as_positional
         )
         return self._cell.layers[via].distance_between(
-            sources=target_idx, targets=target_idx, positional=positional, limit=limit
+            sources=target_idx,
+            targets=target_idx,
+            as_positional=as_positional,
+            limit=limit,
         )
 
     def filter(
@@ -2156,4 +2167,4 @@ class MeshLayer(FaceMixin, PointMixin):
         return new_obj
 
     def __repr__(self) -> str:
-        return f"MeshLayer(name={self.name}, vertices={self.vertices.shape[0]}, faces={self.edges.shape[0]})"
+        return f"MeshLayer(name={self.name}, vertices={self.vertices.shape[0]}, faces={self.faces.shape[0]})"
