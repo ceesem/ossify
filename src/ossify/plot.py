@@ -19,6 +19,7 @@ __all__ = [
     "plot_points",
     "single_panel_figure",
     "multi_panel_figure",
+    "add_scale_bar",
 ]
 
 
@@ -1037,4 +1038,107 @@ def multi_panel_figure(
     else:
         raise ValueError(
             f"Unknown layout '{layout}'. Choose from 'side_by_side', 'stacked', or 'three_panel'."
+        )
+
+
+def add_scale_bar(
+    ax: plt.Axes,
+    length: float,
+    position: Tuple[float, float] = (0.05, 0.05),
+    color: str = "black",
+    linewidth: float = 10.0,
+    orientation: Literal["h", "v", "horizontal", "vertical"] = "h",
+    label: Optional[str] = None,
+    label_offset: float = 0.01,
+    fontsize: float = 10,
+) -> None:
+    """Add a scale bar to an axis with precise positioning.
+
+    Parameters
+    ----------
+    ax : plt.Axes
+        Matplotlib axes to add scale bar to
+    length : float
+        Length of scale bar in data units
+    position : tuple of float, default (0.05, 0.05)
+        Starting position as fraction of axis dimensions (x_frac, y_frac).
+        (0, 0) is bottom-left, (1, 1) is top-right.
+    color : str, default "black"
+        Color of the scale bar line
+    linewidth : float, default 3.0
+        Width of the scale bar line in points
+    label : str, optional
+        Text label for the scale bar (e.g., "100 μm")
+    label_offset : float, default 0.01
+        Vertical offset for label as fraction of axis height
+    fontsize : float, default 10
+        Font size for scale bar label
+
+    Examples
+    --------
+    >>> fig, ax = plt.subplots()
+    >>> ax.plot([0, 100], [0, 50])
+    >>> add_scale_bar(ax, length=20, position=(0.1, 0.1), label="20 units")
+
+    >>> # Add scale bar to morphology plot
+    >>> fig, ax = single_panel_figure(bounds_min, bounds_max, 10)
+    >>> plot_skeleton(skeleton, ax=ax)
+    >>> add_scale_bar(ax, length=50, position=(0.8, 0.05), label="50 μm")
+    """
+    # Get axis data limits
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+
+    # Calculate axis data ranges
+    x_range = xlim[1] - xlim[0]
+    y_range = ylim[1] - ylim[0]
+
+    # Convert fractional position to data coordinates
+    x_start = xlim[0] + position[0] * x_range
+    y_start = ylim[0] + position[1] * y_range
+
+    # Calculate end position (scale bar extends to the right)
+    match orientation:
+        case "h" | "horizontal":
+            x_end = x_start + length
+            y_end = y_start
+        case "v" | "vertical":
+            x_end = x_start
+            if ax.yaxis_inverted():
+                y_end = y_start - length
+            else:
+                y_end = y_start + length
+
+    # Draw the scale bar line
+    ax.plot(
+        [x_start, x_end],
+        [y_start, y_end],
+        color=color,
+        linewidth=linewidth,
+        solid_capstyle="butt",
+    )
+
+    # Add label if provided
+    if label is not None:
+        # Position label above the center of the scale bar
+        match orientation:
+            case "h" | "horizontal":
+                label_x = x_start + length / 2
+                label_y = y_start + label_offset * y_range
+            case "v" | "vertical":
+                if ax.yaxis_inverted():
+                    label_x = x_start + label_offset * x_range
+                    label_y = y_start - length / 2
+                else:
+                    label_x = x_start + label_offset * x_range
+                    label_y = y_start + length / 2
+
+        ax.text(
+            label_x,
+            label_y,
+            label,
+            ha="center",
+            va="bottom",
+            color=color,
+            fontsize=fontsize,
         )
