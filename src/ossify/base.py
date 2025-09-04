@@ -1,6 +1,6 @@
 import contextlib
 import copy
-from typing import Any, Optional, Self, Union
+from typing import Any, Dict, Iterator, List, Optional, Self, Union
 
 import numpy as np
 import pandas as pd
@@ -39,11 +39,11 @@ class LayerManager:
         """Return a list of managed layer names."""
         return list(self._managed_layers.keys())
 
-    def add(self, layer: Union[SkeletonLayer, GraphLayer]) -> None:
+    def _add(
+        self, layer: Union[SkeletonLayer, GraphLayer, MeshLayer, PointCloudLayer]
+    ) -> None:
+        """Add a new layer to the manager. Should only be used by the Cell object."""
         self._managed_layers[layer.name] = layer
-
-    def get(self, name: str) -> Optional[Union[SkeletonLayer, GraphLayer]]:
-        return self._managed_layers.get(name)
 
     def __getitem__(self, name: str) -> Optional[Union[SkeletonLayer, GraphLayer]]:
         return self._managed_layers.get(name)
@@ -79,14 +79,16 @@ class AnnotationManager:
         if annotation_layers is not None:
             for layer in annotation_layers:
                 if issubclass(type(layer), PointCloudLayer):
-                    self.add(layer)
+                    self._add(layer)
                 else:
                     raise ValueError("Annotation layers must be point clouds.")
 
-    def add(self, layer: PointCloudLayer) -> None:
+    def _add(self, layer: PointCloudLayer) -> None:
+        "Add a layer to the annotations"
         self._annotations[layer.name] = layer
 
     def get(self, name: str, default: Any = None) -> PointCloudLayer:
+        "Get a point cloud layer by name."
         return self._annotations.get(name, default)
 
     def __getitem__(self, name: str) -> PointCloudLayer:
@@ -99,7 +101,7 @@ class AnnotationManager:
             raise AttributeError(f'Annotation "{name}" does not exist.')
 
     def __len__(self):
-        return len(self._managed_layers)
+        return len(self._annotations)
 
     def __dir__(self):
         return super().__dir__() + list(self._annotations.keys())
@@ -112,10 +114,6 @@ class AnnotationManager:
     def __contains__(self, name: str) -> bool:
         """Check if an annotation exists by name."""
         return name in self._annotations
-
-    def __len__(self) -> int:
-        """Return the number of annotations."""
-        return len(self._annotations)
 
     def __iter__(self):
         """Iterate over annotations in order."""
@@ -156,47 +154,57 @@ class Cell:
 
     @property
     def name(self) -> str:
+        "Get the name of the cell (typically a segment id)"
         return self._name
 
     @property
     def meta(self) -> dict:
+        "Get the metadata associated with the cell."
         return self._meta
 
     @property
-    def layers(self) -> dict:
+    def layers(self) -> LayerManager:
+        "Get the non-annotation layers of the cell."
         return self._layers
 
     @property
     def layer_df(self) -> pd.DataFrame:
+        """A descriptive DataFrame for all of the layers of the Cell"""
         return self._morphsync.layers
 
     def _get_layer(self, layer_name: str):
+        "Get a managed layer by name."
         return self._managed_layers.get(layer_name)
 
     @property
-    def skeleton(self) -> SkeletonLayer:
+    def skeleton(self) -> Optional[SkeletonLayer]:
+        "Skeleton layer for the cell, if present. Otherwise, None."
         if self.SKEL_LN not in self._managed_layers:
             return None
         return self._managed_layers[self.SKEL_LN]
 
     @property
-    def graph(self) -> GraphLayer:
+    def graph(self) -> Optional[GraphLayer]:
+        "Graph layer for the cell, if present. Otherwise, None."
         if self.GRAPH_LN not in self._managed_layers:
             return None
         return self._managed_layers[self.GRAPH_LN]
 
     @property
-    def mesh(self) -> MeshLayer:
+    def mesh(self) -> Optional[MeshLayer]:
+        "Mesh layer for the cell, if present. Otherwise, None."
         if self.MESH_LN not in self._managed_layers:
             return None
         return self._managed_layers[self.MESH_LN]
 
     @property
     def annotations(self) -> AnnotationManager:
+        "Annotation Manager for the cell, holding all annotation layers."
         return self._annotations
 
     @property
     def _all_objects(self) -> dict:
+        "All morphological layers and annotation layers in a single dictionary."
         return {**self._managed_layers, **self._annotations._annotations}
 
     def add_layer(
@@ -226,7 +234,7 @@ class Cell:
             raise ValueError(f'Layer "{name}" must be a GraphLayer!')
         if self._morphsync != layer._morphsync:
             raise ValueError("Incompatible MorphSync objects.")
-        self._managed_layers[name] = layer
+        self._layers._add(layer)
         return self
 
     def add_mesh(
@@ -239,28 +247,49 @@ class Cell:
         linkage: Optional[Link] = None,
         spatial_columns: Optional[list] = None,
     ) -> Self:
+        """Add a mesh layer to the MorphSync.
+
+        Parameters
+        ----------
+        vertices : Union[np.ndarray, pd.DataFrame, MeshLayer]
+            The vertices of the mesh, or a MeshLayer object.
+        faces : Union[np.ndarray, pd.DataFrame]
+            The faces of the mesh. If faces are provided as a dataframe, faces should be in dataframe indices.
+        labels : Optional[Union[dict, pd.DataFrame]]
+            Additional labels for the mesh. If passed as dictionary, the key is the label name and the values are an array of label values.
+        vertex_index : Optional[Union[str, np.ndarray]]
+            The column to use as a vertex index for the mesh, if vertices are a dataframe.
+        linkage : Optional[Link]
+            The linkage information for the mesh.
+        spatial_columns: Optional[list] = None
+            The spatial columns for the mesh, if vertices are a dataframe.
+
+        Returns
+        -------
+        Self
+        """
         if self.mesh is not None:
             raise ValueError('"Mesh already exists!')
 
         if isinstance(spatial_columns, str):
             spatial_columns = utils.process_spatial_columns(col_names=spatial_columns)
         if isinstance(vertices, MeshLayer):
-            self.add_layer(vertices, self.MESH_LN)
+            self.add_layer(vertices)
         else:
-            self._managed_layers[self.MESH_LN] = MeshLayer(
-                name=self.MESH_LN,
-                vertices=vertices,
-                faces=faces,
-                labels=labels,
-                morphsync=self._morphsync,
-                spatial_columns=spatial_columns,
-                linkage=linkage,
-                vertex_index=vertex_index,
+            self._layers._add(
+                MeshLayer(
+                    name=self.MESH_LN,
+                    vertices=vertices,
+                    faces=faces,
+                    labels=labels,
+                    morphsync=self._morphsync,
+                    spatial_columns=spatial_columns,
+                    linkage=linkage,
+                    vertex_index=vertex_index,
+                )
             )
             self._managed_layers[self.MESH_LN]._register_cell(self)
         return self
-
-        pass
 
     def add_skeleton(
         self,
@@ -305,19 +334,21 @@ class Cell:
             spatial_columns = utils.process_spatial_columns(col_names=spatial_columns)
 
         if isinstance(vertices, SkeletonLayer):
-            self.add_layer(vertices, self.SKEL_LN)
+            self.add_layer(vertices)
         else:
-            self._managed_layers[self.SKEL_LN] = SkeletonLayer(
-                name=self.SKEL_LN,
-                vertices=vertices,
-                edges=edges,
-                labels=labels,
-                root=root,
-                morphsync=self._morphsync,
-                spatial_columns=spatial_columns,
-                linkage=linkage,
-                vertex_index=vertex_index,
-                inherited_properties=inherited_properties,
+            self._layers._add(
+                SkeletonLayer(
+                    name=self.SKEL_LN,
+                    vertices=vertices,
+                    edges=edges,
+                    labels=labels,
+                    root=root,
+                    morphsync=self._morphsync,
+                    spatial_columns=spatial_columns,
+                    linkage=linkage,
+                    vertex_index=vertex_index,
+                    inherited_properties=inherited_properties,
+                )
             )
             self._managed_layers[self.SKEL_LN]._register_cell(self)
         return self
@@ -358,17 +389,21 @@ class Cell:
         if isinstance(spatial_columns, str):
             spatial_columns = utils.process_spatial_columns(col_names=spatial_columns)
         if isinstance(vertices, GraphLayer):
-            self.add_layer(vertices, self.GRAPH_LN)
+            self.add_layer(
+                vertices,
+            )
         else:
-            self._managed_layers[self.GRAPH_LN] = GraphLayer(
-                name=self.GRAPH_LN,
-                vertices=vertices,
-                edges=edges,
-                labels=labels,
-                morphsync=self._morphsync,
-                spatial_columns=spatial_columns,
-                linkage=linkage,
-                vertex_index=vertex_index,
+            self._layers._add(
+                GraphLayer(
+                    name=self.GRAPH_LN,
+                    vertices=vertices,
+                    edges=edges,
+                    labels=labels,
+                    morphsync=self._morphsync,
+                    spatial_columns=spatial_columns,
+                    linkage=linkage,
+                    vertex_index=vertex_index,
+                )
             )
             self._managed_layers[self.GRAPH_LN]._register_cell(self)
         return self
@@ -431,13 +466,28 @@ class Cell:
                 linkage=linkage,
             )
         anno._register_cell(self)
-        self._annotations.add(anno)
+        self._annotations._add(anno)
         return self
 
     def apply_mask(
         self, layer: str, mask: np.ndarray, positional: bool = False
     ) -> Self:
-        """Mask the"""
+        """Create a new Cell with vertices masked out.
+
+        Parameters
+        ----------
+        layer : str
+            The layer name that the mask is based on.
+        mask : np.ndarray
+            The mask to apply. Values that are True are preserved, while values that are False are discarded.
+            Can be a boolean array or an array of vertices.
+        positional : bool
+            If mask is an array of vertices, this sets whether indices are in dataframe indices or positional indices.
+
+        Returns
+        -------
+        Self
+        """
         new_morphsync = self.layers[layer]._mask_morphsync(mask, positional=positional)
         return self.__class__._from_existing(new_morphsync, self)
 
@@ -447,7 +497,8 @@ class Cell:
         return f"Cell(name={self.name}, layers={sorted(layers)}, annotations={annos})"
 
     @classmethod
-    def _from_existing(cls, new_morphsync, old_obj) -> Self:
+    def _from_existing(cls, new_morphsync: MorphSync, old_obj: Self) -> Self:
+        """Build a new Cell from existing data and a new morphsync."""
         new_obj = cls(
             name=old_obj.name,
             morphsync=new_morphsync,
@@ -456,16 +507,16 @@ class Cell:
         for old_layer in old_obj.layers:
             new_layer = old_layer.__class__._from_existing(new_morphsync, old_layer)
             new_layer._register_cell(new_obj)
-            new_obj._layers.add(new_layer)
+            new_obj._layers._add(new_layer)
         for old_anno in old_obj.annotations:
             new_anno = old_anno.__class__._from_existing(new_morphsync, old_anno)
             new_anno._register_cell(new_obj)
-            new_obj._annotations.add(new_anno)
+            new_obj._annotations._add(new_anno)
         return new_obj
 
     @property
     def labels(self) -> pd.DataFrame:
-        """Return a DataFrame of all label columns across all layers."""
+        """Return a DataFrame listing all label columns across all layers. Each label is a row, with the layer name and label name as columns."""
         all_labels = []
         for layer in self.layers:
             all_labels.append(
@@ -535,8 +586,15 @@ class Cell:
 
         Parameters
         ----------
-        mask : array or None,
-            A boolean array with the same number of elements as mesh vertices. True elements are kept, False are masked out. If None, resets the mask entirely.
+        layer: str
+            The name of the layer to which the mask applies.
+        mask : array or None
+            A boolean array with the same number of elements as mesh vertices. True elements are kept, False are masked out.
+
+        Example
+        -------
+        >>> with mesh.mask_context("layer_name", mask) as masked_mesh:
+        >>>     result = my_favorite_function(masked_mesh)
         """
         nrn_out = self.apply_mask(layer, mask)
         try:

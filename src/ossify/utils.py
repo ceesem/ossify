@@ -7,15 +7,18 @@ from scipy import sparse, stats
 
 
 def majority_agg() -> Callable:
-    # Return the most common value in x, ignoring NaNs
-    # Used for "majority" aggregation
+    """Return the most common value in x, ignoring NaNs. Used for "majority" aggregation"""
+
     def mode_func(x, nan_policy="omit"):
         return stats.mode(x, nan_policy=nan_policy)[0]
 
     return mode_func
 
 
-def single_path_length(path, vertices, edges) -> float:
+def single_path_length(
+    path: np.ndarray, vertices: np.ndarray, edges: np.ndarray
+) -> float:
+    """Path length of a single set of vertices specified by `path`."""
     vertices = np.asarray(vertices)
     edges = np.asarray(edges)
     return np.linalg.norm(vertices[path[1:]] - vertices[path[:-1]], axis=1).sum()
@@ -35,7 +38,7 @@ def remap_vertices_and_edges(
     return id_map, edgelist_new
 
 
-def process_spatial_columns(col_names="pt_position") -> list[str]:
+def process_spatial_columns(col_names: Union[str, list] = "pt_position") -> list[str]:
     """
     Process spatial column names into a standard format.
     """
@@ -98,7 +101,10 @@ def process_vertices(
 
 
 def build_csgraph(
-    vertices, edges, euclidean_weight=True, directed=False
+    vertices: np.ndarray,
+    edges: np.ndarray,
+    euclidean_weight: bool = True,
+    directed: bool = False,
 ) -> sparse.csr_matrix:
     """
     Builds a csr graph from vertices and edges, with optional control
@@ -132,7 +138,9 @@ def build_csgraph(
     return csgraph
 
 
-def connected_component_slice(G, ind=None, return_boolean=False) -> np.ndarray:
+def connected_component_slice(
+    G: sparse.csr_matrix, ind: Optional[int] = None, return_boolean: bool = False
+) -> np.ndarray:
     """
     Gets a numpy slice of the connected component corresponding to a
     given index. If no index is specified, the slice is of the largest
@@ -152,7 +160,11 @@ def connected_component_slice(G, ind=None, return_boolean=False) -> np.ndarray:
         return np.flatnonzero(labels == label)
 
 
-def find_far_points_graph(mesh_graph, start_ind=None, multicomponent=False) -> tuple:
+def find_far_points_graph(
+    mesh_graph: sparse.csr_matrix,
+    start_ind: Optional[int] = None,
+    multicomponent: bool = False,
+) -> tuple:
     """
     Finds the maximally far point along a graph by bouncing from farthest point
     to farthest point.

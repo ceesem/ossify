@@ -52,18 +52,58 @@ def _process_synapse_table(
 def cell_from_client(
     root_id: int,
     client: "CAVEclient",
+    *,
     synapses: bool = False,
     restore_graph: bool = False,
-    restore_properties: bool = False,
-    synapse_spatial_point: str = "ctr_pt",
+    restore_properties: bool = True,
+    synapse_spatial_point: str = "ctr_pt_position",
+    include_partner_root_id: bool = False,
+    timestamp: Optional["datetime.datetime"] = None,
+    omit_self_synapses: bool = True,
     skeleton_version: int = 4,
-    drop_partner_root_id: bool = True,
-    omit_autapses: bool = True,
 ) -> Cell:
+    """Import an "L2" skeleton and spatial graph using the CAVE skeleton service.
+
+    Parameters
+    ----------
+    root_id: int
+        The root ID of the cell to import.
+    client: CAVEclient
+        The CAVE client to use for data retrieval.
+    synapses: bool
+        Whether to include synapse information in the imported cell. Default is False.
+    restore_graph: bool
+        Whether to restore the complete spatial graph for the imported cell. Default is False. Setting to True will include all graph edges, but can take longer to process.
+    restore_properties: bool
+        Whether to restore all graph vertex properties of the imported cell. Default is False.
+    synapse_spatial_point: str
+        The spatial point column name for synapses. Default is "ctr_pt_position".
+    include_partner_root_id: bool
+        Whether to include the synaptic partner root ID from the imported cell. Default is False.
+        If including partner root id, you are encouraged to set a timestamp to ensure consistent results.
+        Otherwise, querying different cells at different points in time can result in different results for partner root ids.
+    timestamp : Optional[datetime.datetime]
+        The timestamp to use for the query. If not provided, the latest timestamp the root id is valid will be used.
+    omit_self_synapses: bool
+        Whether to omit self-synapses from the imported cell. Default is True, since most are false detections.
+    skeleton_version: int
+        The skeleton service data version to use for the query. Default is 4.
+
+    Returns
+    -------
+    Cell
+        The imported cell object.
+    """
     sk = client.skeleton.get_skeleton(
         root_id, skeleton_version=skeleton_version, output_format="dict"
     )
-    ts = client.chunkedgraph.get_root_timestamps(root_id, latest=True)[0]
+    if timestamp is None:
+        ts = client.chunkedgraph.get_root_timestamps(root_id, latest=True)[0]
+    else:
+        is_valid = client.chunkedgraph.is_latest_roots(root_id, timestamp=timestamp)[0]
+        if not is_valid:
+            raise ValueError(f"Root id {root_id} is not valid at the given timestamp.")
+        ts = timestamp
 
     if synapses:
         synapse_columns = {
@@ -78,8 +118,8 @@ def cell_from_client(
             "pre",
             synapse_columns,
             ts,
-            drop_other_side=drop_partner_root_id,
-            omit_autapses=omit_autapses,
+            drop_other_side=not include_partner_root_id,
+            omit_autapses=omit_self_synapses,
         )
         post_syn_df = _process_synapse_table(
             root_id,
@@ -88,8 +128,8 @@ def cell_from_client(
             "post",
             synapse_columns,
             ts,
-            drop_other_side=drop_partner_root_id,
-            omit_autapses=omit_autapses,
+            drop_other_side=not include_partner_root_id,
+            omit_autapses=omit_self_synapses,
         )
 
     l2ids = sk["lvl2_ids"]
@@ -118,6 +158,10 @@ def cell_from_client(
     nrn = (
         Cell(
             name=root_id,
+            meta={
+                "source": f"SkeletonService({client.local_server})",
+                "timestamp": ts,
+            },
         )
         .add_graph(
             vertices=l2_df,

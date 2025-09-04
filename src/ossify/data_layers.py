@@ -489,6 +489,11 @@ class PointMixin(ABC):
         return self.layer.n_vertices
 
     @property
+    def bbox(self) -> np.array:
+        """Get the axis-aligned bounding box (min, max) of the data layer's vertices."""
+        return np.array([self.vertices.min(axis=0), self.vertices.max(axis=0)])
+
+    @property
     def kdtree(self) -> spatial.KDTree:
         """Get the KDTree for the data layer's vertices for efficient spatial queries. See scipy.spatial.KDTree for documentation."""
         if self._kdtree is None:
