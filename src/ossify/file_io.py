@@ -202,13 +202,13 @@ def _process_layers(metadata, files, tf, cell) -> Cell:
             case "graph":
                 cell = build_graph(parse_graph_files(layer_name, files, tf), cell=cell)
             case "mesh":
-                # mesh = build_mesh(parse_mesh_files(layer_name, files, tf))
-                pass
+                cell = build_mesh(parse_mesh_files(layer_name, files, tf), cell=cell)
             case "points":
-                # pcd = build_point_cloud(
-                # parse_point_cloud_files(layer_name, files, tf)
-                # )
-                pass
+                cell = build_point_cloud(
+                    parse_point_cloud_files(layer_name, files, tf, as_annotation=False),
+                    cell=cell,
+                    as_annotation=False,
+                )
     return cell
 
 
@@ -409,6 +409,16 @@ def export_mesh_layer(layer, tf) -> None:
         ),
         tf=tf,
     )
+    add_file_to_tar(
+        name=f"{datapath}/vertices.feather",
+        data=bytesio_feather(layer.nodes),
+        tf=tf,
+    )
+    add_file_to_tar(
+        name=f"{datapath}/faces.npz",
+        data=bytesio_array(layer.faces),
+        tf=tf,
+    )
 
 
 def extract_metadata(cell) -> bytes:
@@ -538,11 +548,37 @@ def build_skeleton(
 
 
 def parse_mesh_files(layer_name, files, tf):
-    pass
+    prefix = f"layers/{layer_name}"
+    mesh_parts = {}
+    for fn in files.keys():
+        if fn.startswith(prefix):
+            path_parts = Path(fn).parts
+            match (path_parts[-1], path_parts[-2]):
+                case ("meta.json", layer_name):
+                    mesh_parts["meta"] = load_dict(files[fn], tf)
+                case ("nodes.feather", layer_name):
+                    mesh_parts["nodes"] = load_dataframe(files[fn], tf)
+                case ("edges.npz", layer_name):
+                    mesh_parts["faces"] = load_array(files[fn], tf)
+    return mesh_parts
 
 
-def build_mesh():
-    pass
+def build_mesh(mesh_parts: dict, cell: Cell = None) -> Union[MeshLayer, Cell]:
+    if cell is None:
+        mesh_sync = MeshLayer(
+            name=mesh_parts["meta"]["name"],
+            vertices=mesh_parts["nodes"],
+            faces=mesh_parts["faces"],
+            spatial_columns=mesh_parts["meta"]["spatial_columns"],
+        )
+        return mesh_sync
+    else:
+        cell.add_mesh(
+            vertices=mesh_parts["nodes"],
+            faces=mesh_parts["faces"],
+            spatial_columns=mesh_parts["meta"]["spatial_columns"],
+        )
+        return cell
 
 
 def parse_graph_files(layer_name, files, tf) -> dict:
