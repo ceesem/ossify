@@ -1,10 +1,18 @@
-from typing import TYPE_CHECKING, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Optional, Tuple, Union
 
 import numpy as np
-import pandas as pd
 from scipy import sparse
 
 from .base import Cell, SkeletonLayer
+
+__all__ = [
+    "strahler_number",
+    "smooth_labels",
+    "label_axon_from_synapse_flow",
+    "label_axon_from_spectral_split",
+    "synapse_betweenness",
+    "segregation_index",
+]
 
 
 def _strahler_path(baseline):
@@ -300,7 +308,8 @@ def label_axon_from_spectral_split(
     raw_split: bool = False,
     extend_label_to_segment: bool = True,
     max_times: Optional[int] = None,
-    segregation_index_threshold: float = 0,
+    segregation_index_threshold: float = 0.5,
+    return_segregation_index: bool = False,
 ) -> np.ndarray:
     if isinstance(cell, SkeletonLayer):
         skel = cell
@@ -353,11 +362,11 @@ def label_axon_from_spectral_split(
             ]
         )
     split_parents = np.unique(split_parents)
-    print("split parents: ", split_parents)
 
     is_axon_final = np.full(skel.n_vertices, False)
     best_split = 1
     ntimes = 0
+    split_values = {}
     while max_times is None or ntimes < max_times:
         with cell.mask_context(layer="skeleton", mask=~is_axon_final) as masked_cell:
             Hsplits = np.zeros(len(split_parents), dtype=np.float32)
@@ -379,22 +388,21 @@ def label_axon_from_spectral_split(
                         pre_idx_masked,
                         post_idx_masked,
                     )[1]
-            print("Hsplits: ", Hsplits)
             if np.all(np.asarray(Hsplits) <= segregation_index_threshold):
                 break
         best_split_index = split_parents[np.argmax(Hsplits)]
         best_split = np.max(Hsplits)
         if best_split <= segregation_index_threshold:
             break
+        split_values[best_split_index] = best_split
         ds_split = skel.downstream_vertices(
             best_split_index, inclusive=True, as_positional=True
         )
-        print(
-            f"Applying spectral axon split with segregation index {best_split:.3f} at index {best_split_index}"
-        )
         is_axon_final[ds_split] = True
         ntimes += 1
-    return is_axon_final
+    return (
+        is_axon_final if not return_segregation_index else (is_axon_final, split_values)
+    )
 
 
 def _precompute_synapse_inds(skel: SkeletonLayer, syn_inds: np.ndarray) -> tuple:
