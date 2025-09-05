@@ -109,7 +109,7 @@ def build_adjacency_lists(
     forward_adj = defaultdict(list)
     reverse_adj = defaultdict(list)
 
-    for parent, child in edges:
+    for child, parent in edges:
         forward_adj[int(parent)].append(int(child))
         reverse_adj[int(child)].append(int(parent))
 

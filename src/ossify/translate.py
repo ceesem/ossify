@@ -7,6 +7,8 @@ import pandas as pd
 from .base import Cell, Link
 from .utils import get_l2id_column, get_supervoxel_column
 
+__all__ = ["cell_from_client"]
+
 if TYPE_CHECKING:
     import datetime
 

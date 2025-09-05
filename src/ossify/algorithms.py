@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Literal, Optional, Union
+from typing import TYPE_CHECKING, Literal, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -110,7 +110,7 @@ def strahler_number(cell: Union[Cell, SkeletonLayer]) -> np.ndarray:
 
 
 def _distribution_entropy(counts: np.ndarray) -> float:
-    """Compute the distribution entropy of a 2x2 set of synapse counts per compartment."""
+    """Compute the distribution entropy of a Nx2 set of synapse counts per compartment."""
     if np.sum(counts) == 0:
         return 0
     ps = np.divide(
@@ -162,14 +162,15 @@ def segregation_index(
     return 1 - observed_ent / (unsplit_ent + 1e-10)
 
 
-def label_axon_from_synapses(
+def label_axon_from_synapse_flow(
     cell: Union[Cell, SkeletonLayer],
     pre_syn: Union[str, np.ndarray] = "pre_syn",
     post_syn: Union[str, np.ndarray] = "post_syn",
-    how: Literal["synapse_flow", "spectral"] = "synapse_flow",
-    n_splits: int = 1,
-    label_to_segment: bool = False,
-):
+    extend_label_to_segment: bool = False,
+    ntimes: int = 1,
+    return_segregation_index: bool = False,
+    segregation_index_threshold: float = 0,
+) -> Union[np.ndarray, Tuple[np.ndarray, float]]:
     """Split a neuron into axon and dendrite compartments using synapse locations.
 
     Parameters
@@ -184,8 +185,8 @@ def label_axon_from_synapses(
         The method to use for splitting.
     n_splits : int, optional
         The number of splits to perform. Only applies to the "synapse_flow" method.
-    label_to_segment : bool, optional
-        Whether to propagate the is_axon label to the whole segment, rather than the precise vertex.
+    extend_label_to_segment : bool, optional
+        Whether to propagate the is_axon label to the whole segment, rather than a specific vertex.
         This is likely more biologically accurate, but potentially a less optimal split.
 
     Returns
@@ -213,16 +214,49 @@ def label_axon_from_synapses(
         )
     else:
         post_syn_inds = np.array(post_syn)
-    match how:
-        case "synapse_flow":
-            return _label_axon_synapse_flow(
-                skel, pre_syn_inds, post_syn_inds, n_splits, label_to_segment
-            )
-        case "spectral":
-            raise NotImplementedError("Spectral method not yet implemented.")
-            return _label_axon_spectral(
-                skel, pre_syn_inds, post_syn_inds, label_to_segment
-            )
+    is_axon, Hsplit = _label_axon_synapse_flow(
+        skel, pre_syn_inds, post_syn_inds, extend_label_to_segment
+    )
+    if Hsplit < segregation_index_threshold:
+        is_axon = np.full(skel.n_vertices, False)
+    if ntimes > 1:
+        for _ in range(ntimes - 1):
+            with cell.mask_context(~is_axon) as masked_cell:
+                is_axon_sub, Hsplit_sub = _label_axon_synapse_flow(
+                    masked_cell.skeleton,
+                    pre_syn_inds,
+                    post_syn_inds,
+                    extend_label_to_segment,
+                )
+            if Hsplit_sub < segregation_index_threshold:
+                break
+            is_axon[~is_axon] = is_axon_sub
+    return (is_axon, Hsplit) if return_segregation_index else is_axon
+
+
+def _split_direction_and_quality(
+    split_idx, skeleton, pre_inds, post_inds
+) -> Tuple[bool, float]:
+    """Evaluate a split at a given positional index with pre and post syn indices in positional indices.
+    Returns True if the downstream compartment has higher fraction of pre than post, False otherwise, and then the segregation index of the split.
+    """
+    downstream_inds = skeleton.downstream_vertices(
+        split_idx, inclusive=True, as_positional=True
+    )
+    n_pre_ds = np.sum(np.isin(pre_inds, downstream_inds))
+    n_post_ds = np.sum(np.isin(post_inds, downstream_inds))
+    n_pre_us = len(pre_inds) - n_pre_ds
+    n_post_us = len(post_inds) - n_post_ds
+    seg_index = segregation_index(
+        n_pre_ds,
+        n_post_ds,
+        n_pre_us,
+        n_post_us,
+    )
+
+    ds_fraction_pre = n_pre_ds / (n_post_ds + n_pre_ds + 0.0001)
+    us_fraction_pre = n_pre_us / (n_post_us + n_pre_us + 0.0001)
+    return ds_fraction_pre >= us_fraction_pre, seg_index
 
 
 def _label_axon_synapse_flow(
@@ -230,7 +264,7 @@ def _label_axon_synapse_flow(
     pre_syn_inds: np.ndarray,
     post_syn_inds: np.ndarray,
     extend_label_to_segment: bool,
-) -> np.ndarray:
+) -> Tuple[np.ndarray, float]:
     """Label an axon compartment by synapse betweenness. All parameters are as positional indices."""
     syn_btw = synapse_betweenness(skeleton, pre_syn_inds, post_syn_inds)
     high_vinds = np.flatnonzero(syn_btw == max(syn_btw))
@@ -244,28 +278,123 @@ def _label_axon_synapse_flow(
     downstream_inds = skeleton.downstream_vertices(
         axon_split_ind, inclusive=True, as_positional=True
     )
-    n_pre_ds = np.sum(np.isin(pre_syn_inds, downstream_inds))
-    n_post_ds = np.sum(np.isin(post_syn_inds, downstream_inds))
-    n_pre_us = len(pre_syn_inds) - n_pre_ds
-    n_post_us = len(post_syn_inds) - n_post_ds
-    if (n_pre_ds / (n_post_ds + n_pre_ds + 1)) >= (
-        n_pre_us / (n_post_us + n_pre_us + 1)
-    ):
+    axon_is_ds, Hsplit = _split_direction_and_quality(
+        axon_split_ind, skeleton, pre_syn_inds, post_syn_inds
+    )
+    if axon_is_ds:
         is_axon = np.full(skeleton.n_vertices, False)
         is_axon[downstream_inds] = True
     else:
         is_axon = np.full(skeleton.n_vertices, True)
         is_axon[downstream_inds] = False
-    return is_axon
+    return is_axon, Hsplit
 
 
-def _label_axon_spectral(
-    skeleton: SkeletonLayer,
-    pre_syn_inds: np.ndarray,
-    post_syn_inds: np.ndarray,
-    label_to_segment: bool,
-):
-    pass
+def label_axon_from_spectral_split(
+    cell: Union[Cell, SkeletonLayer],
+    pre_syn: str = "pre_syn",
+    post_syn: str = "post_syn",
+    aggregation_distance: float = 1,
+    smoothing_alpha: float = 0.99,
+    axon_bias: float = 0,
+    raw_split: bool = False,
+    extend_label_to_segment: bool = True,
+    max_times: Optional[int] = None,
+    segregation_index_threshold: float = 0,
+) -> np.ndarray:
+    if isinstance(cell, SkeletonLayer):
+        skel = cell
+    else:
+        skel = cell.skeleton
+    if skel is None:
+        raise ValueError("Cell is does not have a skeleton.")
+    pre_density = (
+        skel.map_annotations_to_label(
+            pre_syn,
+            distance_threshold=aggregation_distance,
+            agg="count",
+        )
+        + axon_bias
+    )
+    post_density = skel.map_annotations_to_label(
+        post_syn,
+        distance_threshold=aggregation_distance,
+        agg="count",
+    )
+    syn_density = np.vstack([pre_density, post_density]).T
+    smoothed_label = smooth_labels(
+        skel,
+        label=syn_density,
+        alpha=smoothing_alpha,
+    )
+
+    is_axon = smoothed_label[:, 0] > smoothed_label[:, 1]
+
+    split_edges = np.flatnonzero(
+        is_axon[skel.edges_positional[:, 0]] != is_axon[skel.edges_positional[:, 1]]
+    )
+    if len(split_edges) == 0 or raw_split:
+        return is_axon
+    # If not doing a raw split, treat each split edge as a candidate split point, and evaluate the segregation index of each split.
+
+    split_parents = skel.edges_positional[split_edges, 1]
+    if extend_label_to_segment:
+        split_parent_segments = skel.segment_map[split_parents]
+        split_parents = np.array(
+            [
+                skel.segments_positional[seg][
+                    np.argmin(
+                        skel.distance_to_root(
+                            skel.segments_positional[seg], as_positional=True
+                        )
+                    )
+                ]
+                for seg in split_parent_segments
+            ]
+        )
+    split_parents = np.unique(split_parents)
+    print("split parents: ", split_parents)
+
+    is_axon_final = np.full(skel.n_vertices, False)
+    best_split = 1
+    ntimes = 0
+    while max_times is None or ntimes < max_times:
+        with cell.mask_context(layer="skeleton", mask=~is_axon_final) as masked_cell:
+            Hsplits = np.zeros(len(split_parents), dtype=np.float32)
+            pre_idx_masked = masked_cell.annotations[pre_syn].map_index_to_layer(
+                "skeleton", as_positional=True
+            )
+            post_idx_masked = masked_cell.annotations[post_syn].map_index_to_layer(
+                "skeleton", as_positional=True
+            )
+            for ii, parent in enumerate(split_parents):
+                split_vert_ind = cell.skeleton.vertex_index[parent]
+                if split_vert_ind in masked_cell.skeleton.vertex_index:
+                    local_parent_index = np.flatnonzero(
+                        masked_cell.skeleton.vertex_index == split_vert_ind
+                    )[0]
+                    Hsplits[ii] = _split_direction_and_quality(
+                        local_parent_index,
+                        masked_cell.skeleton,
+                        pre_idx_masked,
+                        post_idx_masked,
+                    )[1]
+            print("Hsplits: ", Hsplits)
+            if np.all(np.asarray(Hsplits) <= segregation_index_threshold):
+                break
+        best_split_index = split_parents[np.argmax(Hsplits)]
+        best_split = np.max(Hsplits)
+        if best_split <= segregation_index_threshold:
+            break
+        ds_split = skel.downstream_vertices(
+            best_split_index, inclusive=True, as_positional=True
+        )
+        print(
+            f"Applying spectral axon split with segregation index {best_split:.3f} at index {best_split_index}"
+        )
+        is_axon_final[ds_split] = True
+        ntimes += 1
+    return is_axon_final
 
 
 def _precompute_synapse_inds(skel: SkeletonLayer, syn_inds: np.ndarray) -> tuple:
@@ -298,8 +427,6 @@ def synapse_betweenness(
     -------
     synapse_betweenness : np.array
         Array with a value for each skeleton vertex, with the number of all paths from source to target vertices passing through that vertex.
-    segregation_index : np.array (optional)
-        Array with a value for each skeleton vertex, with the segregatio index if the cut were to happen at that vertex. Only returned if `use_entropy=True`.
     """
     Npre, n_pre = _precompute_synapse_inds(skel, pre_inds)
     Npost, n_post = _precompute_synapse_inds(skel, post_inds)

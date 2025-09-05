@@ -1,7 +1,9 @@
+import contextlib
 import copy
 import uuid
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, List, Literal, Optional, Self, Tuple, Union
+from numbers import Number
+from typing import TYPE_CHECKING, Generator, List, Literal, Optional, Self, Tuple, Union
 
 import fastremap
 import numpy as np
@@ -991,6 +993,31 @@ class PointMixin(ABC):
                 new_morphsync=new_morphsync, old_obj=self._cell
             )
 
+    @contextlib.contextmanager
+    def mask_context(self, mask: np.ndarray) -> Generator[Self, None, None]:
+        """Context manager to temporarily apply a mask via the current layer.
+
+        Parameters
+        ----------
+        mask: np.ndarray
+            The mask to apply, either in boolean, vertex index, or positional index form.
+
+        Yields
+        ------
+        Self
+            A new object of the same class with the mask applied.
+
+        Example
+        -------
+        >>> with cell.skeleton.mask_context(mask) as masked_cell:
+        >>>     masked_path_length = masked_cell.mesh.surface_area()
+        """
+        new_self = self.apply_mask(mask=mask)
+        try:
+            yield new_self
+        finally:
+            pass
+
     def _register_cell(self, mws: "Cell") -> None:
         """Register a Cell object with this layer.
 
@@ -1623,7 +1650,7 @@ class SkeletonLayer(GraphLayer):
             self._dag_cache.hops_to_root = htr
         return htr[vertices]
 
-    def child_nodes(self, vertices=None, as_positional=False) -> dict:
+    def child_vertices(self, vertices=None, as_positional=False) -> dict:
         """Get mapping from vertices to their child nodes.
 
         Parameters
@@ -1638,6 +1665,8 @@ class SkeletonLayer(GraphLayer):
         dict
             A dictionary mapping each vertex to its child nodes.
         """
+        if isinstance(vertices, Number):
+            vertices = [vertices]
         vertices, as_positional = self._vertices_to_positional(vertices, as_positional)
         cinds = gf.build_child_node_dictionary(vertices, self.csgraph_binary)
         if as_positional:
@@ -1795,7 +1824,7 @@ class SkeletonLayer(GraphLayer):
                 self.vertices,
                 self.edges_positional,
                 self.branch_points_positional,
-                self.child_nodes(as_positional=True),
+                self.child_vertices(as_positional=True),
                 self.hops_to_root(as_positional=True),
             )
         return self._dag_cache.segments
@@ -1811,10 +1840,10 @@ class SkeletonLayer(GraphLayer):
                 self.vertices,
                 self.edges_positional,
                 self.branch_points_positional,
-                self.child_nodes(as_positional=True),
+                self.child_vertices(as_positional=True),
                 self.hops_to_root(as_positional=True),
             )
-        return [self.vertices[seg] for seg in self._dag_cache.segments]
+        return [self.vertex_index[seg] for seg in self._dag_cache.segments]
 
     @property
     def segments_plus_positional(self) -> List[np.ndarray]:
@@ -1849,7 +1878,7 @@ class SkeletonLayer(GraphLayer):
                 self.vertices,
                 self.edges_positional,
                 self.branch_points_positional,
-                self.child_nodes(as_positional=True),
+                self.child_vertices(as_positional=True),
                 self.hops_to_root(as_positional=True),
             )
         return self._dag_cache.segment_map

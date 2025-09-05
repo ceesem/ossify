@@ -21,6 +21,7 @@ theme:
     code: Inconsolata
   icon:
     repo: fontawesome/brands/github
+    logo: material/skull-scan
   features:
     - navigation.indexes
     - navigation.instant

@@ -1,6 +1,7 @@
 from numbers import Number
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
+import cmcrameri  # Keep this import for colormaps — used via string names
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import numpy as np
@@ -25,11 +26,13 @@ __all__ = [
 
 def _map_value_to_colors(
     values: np.ndarray,
-    colormap: Union[str, Colormap, Dict] = "plasma",
+    colormap: Union[str, Colormap, Dict] = "cmc.hawaii",
     color_norm: Optional[Tuple[float, float]] = None,
     alpha: Union[float, np.ndarray] = 1.0,
 ) -> np.ndarray:
     values = np.asarray(values)
+    if values.dtype == bool:
+        values = values.astype(int)
     if isinstance(colormap, dict):
         rgba_colors = np.zeros((len(values), 4))
         rgba_colors[:, 3] = alpha  # Set alpha channel
@@ -223,6 +226,7 @@ def plot_skeleton(
     """
     if ax is None:
         ax = plt.gca()
+    do_autoscale_at_end = not ax.has_data()
 
     # Store original projection for y-axis inversion detection
     orig_projection = projection
@@ -261,7 +265,8 @@ def plot_skeleton(
 
     # Apply y-axis inversion if needed
     ax = _apply_y_inversion_to_axes(ax, orig_projection, invert_y)
-
+    if do_autoscale_at_end:
+        ax.autoscale()
     return ax
 
 
@@ -330,7 +335,7 @@ def plot_points(
             scatter_kws["vmin"], scatter_kws["vmax"] = color_norm
     elif isinstance(palette, dict) and colors:
         colors = [palette[label] for label in colors]
-    if colors:
+    if colors is not None:
         scatter_kws["c"] = colors
 
     ax.scatter(
@@ -378,7 +383,7 @@ def _rescale_scalar(
 def plot_annotations_2d(
     annotation: PointCloudLayer,
     color: Optional[Union[str, np.ndarray, tuple]] = None,
-    palette: Union[str, dict] = "plasma",
+    palette: Union[str, dict] = "coolwarm",
     color_norm: Optional[Tuple[float, float]] = None,
     alpha: float = 1,
     size: Optional[Union[str, np.ndarray, float]] = None,
@@ -426,7 +431,7 @@ def plot_annotations_2d(
 def plot_morphology_2d(
     cell: Union[Cell, SkeletonLayer],
     color: Optional[Union[str, np.ndarray, tuple]] = None,
-    palette: Union[str, dict] = "plasma",
+    palette: Union[str, dict] = "coolwarm",
     color_norm: Optional[Tuple[float, float]] = None,
     alpha: Optional[Union[str, np.ndarray, float]] = 1.0,
     alpha_norm: Optional[Tuple[float, float]] = None,
@@ -453,7 +458,7 @@ def plot_morphology_2d(
         Projection function or string mapping 3d points to a 2d projection.
     color : str, np.ndarray, or tuple, optional
         Color specification - can be label name, array of values, or matplotlib color
-    palette : str or dict, default "plasma"
+    palette : str or dict, default "coolwarm"
         Colormap for mapping array values to colors
     color_norm : tuple of float, optional
         (min, max) tuple for color normalization
@@ -562,6 +567,9 @@ def plot_morphology_2d(
             invert_y=invert_y,
             ax=ax,
             zorder=zorder + 1,
+            projection=projection,
+            offset_h=offset_h,
+            offset_v=offset_v,
         )
     return ax
 
@@ -569,7 +577,7 @@ def plot_morphology_2d(
 def plot_cell_2d(
     cell: Cell,
     color: Optional[Union[str, np.ndarray, tuple]] = None,
-    palette: Union[str, dict] = "plasma",
+    palette: Union[str, dict] = "coolwarm",
     color_norm: Optional[Tuple[float, float]] = None,
     alpha: Optional[Union[str, np.ndarray, float]] = 1.0,
     alpha_norm: Optional[Tuple[float, float]] = None,
@@ -579,7 +587,7 @@ def plot_cell_2d(
     root_as_sphere: bool = False,
     root_size: float = 100.0,
     root_color: Optional[Union[str, tuple]] = None,
-    synapses: Literal["pre", "post", "both", False] = "both",
+    synapses: Literal["pre", "post", "both", False] = False,
     pre_anno: str = "pre_syn",
     pre_color: Optional[Union[str, tuple]] = None,
     pre_palette: Union[str, dict] = None,
@@ -672,7 +680,7 @@ def plot_cell_multiview(
     cell: Cell,
     layout: Literal["stacked", "side_by_side", "three_panel"] = "three_panel",
     color: Optional[Union[str, np.ndarray, tuple]] = None,
-    palette: Union[str, dict] = "plasma",
+    palette: Union[str, dict] = "coolwarm",
     color_norm: Optional[Tuple[float, float]] = None,
     alpha: Optional[Union[str, np.ndarray, float]] = 1.0,
     alpha_norm: Optional[Tuple[float, float]] = None,
@@ -710,7 +718,7 @@ def plot_cell_multiview(
         dpi=dpi,
     )
     for proj in axes:
-        ax = proj["ax"]
+        ax = axes[proj]
         plot_cell_2d(
             cell,
             color=color,
@@ -742,7 +750,7 @@ def plot_cell_multiview(
             ax=ax,
             **syn_kwargs,
         )
-    return fig, axes
+    return axes
 
 
 def single_panel_figure(

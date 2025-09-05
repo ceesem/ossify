@@ -21,6 +21,7 @@ dependencies = [
     "cloud-files>=5.8.0",
     "cortical-tools>=0.0.2",
     "matplotlib>=3.10.6",
+    "cmcrameri>=1.9",
 ]
 authors = [
     { name = "Casey Schneider-Mizell", email = "caseysm@gmail.com" },

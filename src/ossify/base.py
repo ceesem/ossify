@@ -1,6 +1,6 @@
 import contextlib
 import copy
-from typing import Any, Optional, Self, Union
+from typing import Any, Generator, Optional, Self, Union
 
 import numpy as np
 import pandas as pd
@@ -583,7 +583,7 @@ class Cell:
         self,
         layer: str,
         mask: np.ndarray,
-    ):
+    ) -> Generator[Self, None, None]:
         """Create a masked version of the MeshWork object in a context state.
 
         Parameters

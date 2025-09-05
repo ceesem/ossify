@@ -18,14 +18,14 @@ from .data_layers import GraphLayer, Link, MeshLayer, PointCloudLayer, SkeletonL
 if TYPE_CHECKING:
     import scipy
 
-__all__ = ["load_morphology", "save_morphology", "CellFiles"]
+__all__ = ["load_cell", "save_cell", "CellFiles"]
 
 PUTABLE_SCHEMES = ["s3", "gs", "file", "mem"]
 METADATA_FILENAME = "metadata.json"
 OSSIFY_EXTENSION = "osy"
 
 
-def load_morphology(source: Union[str, BinaryIO]) -> Cell:
+def load_cell(source: Union[str, BinaryIO]) -> Cell:
     """Load a neuronal object from a file path or file object.
 
     Parameters
@@ -58,8 +58,8 @@ def _load_from_file_object(file_obj: BinaryIO) -> Cell:
     return _import_neuron_from_bytes(file_bytes)
 
 
-def save_morphology(
-    nrn: Cell,
+def save_cell(
+    cell: Cell,
     file: Union[str, BinaryIO, None] = None,
     allow_overwrite: bool = False,
 ) -> None:
@@ -67,56 +67,55 @@ def save_morphology(
 
     Parameters
     ----------
-    nrn : Cell
+    cell : Cell
         The Cell object to save.
     file: Union[str, BinaryIO, None]
-        File path, open binary file object, or None (uses "<nrn.name>.osy" as a string).
+        File path, open binary file object, or None (uses "<cell.name>.osy" as a string).
     allow_overwrite : bool
         Whether to allow overwriting existing files.
     """
-    # Handle deprecated file parameter
     if isinstance(file, str) or file is None:
-        _save_to_path(nrn, file, allow_overwrite)
+        _save_to_path(cell, file, allow_overwrite)
     else:
-        _save_to_file_object(nrn, file)
+        _save_to_file_object(cell, file)
 
 
-def _save_to_path(nrn: Cell, path: Optional[str], allow_overwrite: bool) -> None:
+def _save_to_path(cell: Cell, path: Optional[str], allow_overwrite: bool) -> None:
     """Save to a file path using cloudfiles."""
     if path:
         basepath = "/".join(path.split("/")[:-1])
         name = path.split("/")[-1]
     else:
         basepath = "."
-        name = f"{nrn.name}.{OSSIFY_EXTENSION}"
-    CellFiles(basepath).save(nrn, name, allow_overwrite=allow_overwrite)
+        name = f"{cell.name}.{OSSIFY_EXTENSION}"
+    CellFiles(basepath).save(cell, name, allow_overwrite=allow_overwrite)
 
 
-def _save_to_file_object(nrn: Cell, file_obj: BinaryIO) -> None:
+def _save_to_file_object(cell: Cell, file_obj: BinaryIO) -> None:
     """Save to an open binary file object."""
-    tar_bytes = _export_neuron_to_bytes(nrn)
+    tar_bytes = _export_neuron_to_bytes(cell)
     file_obj.write(tar_bytes)
 
 
-def _export_neuron_to_bytes(nrn: Cell) -> bytes:
+def _export_neuron_to_bytes(cell: Cell) -> bytes:
     """Export Cell to bytes data."""
     b = io.BytesIO()
     with tarfile.open(fileobj=b, mode="w") as tf:
-        _export_neuron_to_tar(nrn, tf)
+        _export_neuron_to_tar(cell, tf)
     return b.getvalue()
 
 
-def _export_neuron_to_tar(nrn: Cell, tf: tarfile.TarFile) -> None:
+def _export_neuron_to_tar(cell: Cell, tf: tarfile.TarFile) -> None:
     """Export Cell to tar file."""
     # export metadata
     add_file_to_tar(
         name=METADATA_FILENAME,
-        data=extract_metadata(nrn),
+        data=extract_metadata(cell),
         tf=tf,
     )
 
     # Export all layers
-    for l in nrn.layers:
+    for l in cell.layers:
         match l.layer_type:
             case "skeleton":
                 export_skeleton_layer(l, tf)
@@ -128,11 +127,11 @@ def _export_neuron_to_tar(nrn: Cell, tf: tarfile.TarFile) -> None:
                 export_point_cloud_layer(l, tf, as_annotation=False)
 
     # Export all annotations
-    for anno in nrn.annotations:
+    for anno in cell.annotations:
         export_point_cloud_layer(anno, tf, as_annotation=True)
 
     # Export linkage
-    export_linkage(nrn, tf)
+    export_linkage(cell, tf)
 
 
 def _import_neuron_from_bytes(file: bytes) -> Cell:
@@ -142,11 +141,11 @@ def _import_neuron_from_bytes(file: bytes) -> Cell:
         metadata = load_dict(files[METADATA_FILENAME], tf)
         _validate_archive_structure(metadata, files)
 
-        nrn = Cell(name=metadata["name"], meta=metadata["meta"])
-        nrn = _process_layers(metadata, files, tf, nrn)
-        nrn = _process_annotations(metadata, files, tf, nrn)
-        nrn = _process_linkage(metadata, tf, nrn)
-    return nrn
+        cell = Cell(name=metadata["name"], meta=metadata["meta"])
+        cell = _process_layers(metadata, files, tf, cell)
+        cell = _process_annotations(metadata, files, tf, cell)
+        cell = _process_linkage(metadata, tf, cell)
+    return cell
 
 
 def _validate_archive_structure(metadata: dict, files: dict):
@@ -192,16 +191,16 @@ def _validate_archive_structure(metadata: dict, files: dict):
         raise ValueError(f"Missing required files: {missing_files}")
 
 
-def _process_layers(metadata, files, tf, nrn) -> Cell:
+def _process_layers(metadata, files, tf, cell) -> Cell:
     """Process layer data from tar file."""
     for layer_name, layer_info in metadata["structure"]["layers"].items():
         match layer_info["type"]:
             case "skeleton":
-                nrn = build_skeleton(
-                    parse_skeleton_files(layer_name, files, tf), nrn=nrn
+                cell = build_skeleton(
+                    parse_skeleton_files(layer_name, files, tf), cell=cell
                 )
             case "graph":
-                nrn = build_graph(parse_graph_files(layer_name, files, tf), nrn=nrn)
+                cell = build_graph(parse_graph_files(layer_name, files, tf), cell=cell)
             case "mesh":
                 # mesh = build_mesh(parse_mesh_files(layer_name, files, tf))
                 pass
@@ -210,26 +209,26 @@ def _process_layers(metadata, files, tf, nrn) -> Cell:
                 # parse_point_cloud_files(layer_name, files, tf)
                 # )
                 pass
-    return nrn
+    return cell
 
 
-def _process_annotations(metadata, files, tf, nrn) -> Cell:
+def _process_annotations(metadata, files, tf, cell) -> Cell:
     """Process annotation data from tar file."""
     for anno_name, anno_info in metadata["structure"]["annotations"].items():
-        nrn = build_point_cloud(
+        cell = build_point_cloud(
             parse_point_cloud_files(anno_name, files, tf, as_annotation=True),
-            nrn=nrn,
+            cell=cell,
             as_annotation=True,
         )
-    return nrn
+    return cell
 
 
-def _process_linkage(metadata, tf, nrn) -> Cell:
+def _process_linkage(metadata, tf, cell) -> Cell:
     """Process linkage data from tar file."""
     linkages = metadata["linkage"]
     for linkage_pair in linkages:
-        nrn = build_linkage(linkage_pair, tf, nrn=nrn)
-    return nrn
+        cell = build_linkage(linkage_pair, tf, cell=cell)
+    return cell
 
 
 class CellFiles:
@@ -258,7 +257,7 @@ class CellFiles:
 
     def save(
         self,
-        nrn: Cell,
+        cell: Cell,
         filename: Optional[str] = None,
         allow_overwrite: bool = False,
     ):
@@ -267,14 +266,14 @@ class CellFiles:
                 f"Path {self.path} is not writable. Please provide a path with one of the following schemes: {PUTABLE_SCHEMES}"
             )
         if filename is None:
-            filename = f"{nrn.name}.{OSSIFY_EXTENSION}"
+            filename = f"{cell.name}.{OSSIFY_EXTENSION}"
         if not allow_overwrite:
             # Split up to avoid network
             if self.cf.exists(filename):
                 raise FileExistsError(
                     f"{filename} already exists in path {self.cf.cloudpath}."
                 )
-        tar_bytes = _export_neuron_to_bytes(nrn)
+        tar_bytes = _export_neuron_to_bytes(cell)
         self.cf.put(filename, tar_bytes)
 
     def load(self, filename: str) -> Cell:
@@ -308,15 +307,15 @@ def load_sparse_matrix(tinfo, tf) -> "scipy.sparse.csgraph.csr_matrix":
     return load_npz(buf)
 
 
-def export_linkage(nrn, tf) -> None:
+def export_linkage(cell, tf) -> None:
     datapath = f"linkage"
     unique_linkage = np.unique(
-        [sorted(b) for b in list(nrn._morphsync._links.keys())], axis=0
+        [sorted(b) for b in list(cell._morphsync._links.keys())], axis=0
     ).tolist()
     for linkage_pair in unique_linkage:
         add_file_to_tar(
             name=f"{datapath}/{linkage_pair[0]}/{linkage_pair[1]}/linkage.feather",
-            data=bytesio_feather(nrn._morphsync._links[tuple(linkage_pair)]),
+            data=bytesio_feather(cell._morphsync._links[tuple(linkage_pair)]),
             tf=tf,
         )
 
@@ -412,14 +411,14 @@ def export_mesh_layer(layer, tf) -> None:
     )
 
 
-def extract_metadata(nrn) -> bytes:
-    layer_structure = {l.name: {"type": l.layer_type} for l in nrn.layers}
-    annotation_structure = {a.name: {"type": a.layer_type} for a in nrn.annotations}
-    all_links = [sorted(b) for b in list(nrn._morphsync._links.keys())]
+def extract_metadata(cell) -> bytes:
+    layer_structure = {l.name: {"type": l.layer_type} for l in cell.layers}
+    annotation_structure = {a.name: {"type": a.layer_type} for a in cell.annotations}
+    all_links = [sorted(b) for b in list(cell._morphsync._links.keys())]
     linkages = np.unique([sorted(b) for b in all_links], axis=0).tolist()
     metadata = {
-        "name": nrn.name,
-        "meta": nrn.meta,
+        "name": cell.name,
+        "meta": cell.meta,
         "file_version": 1.0,
         "structure": {"layers": layer_structure, "annotations": annotation_structure},
         "linkage": linkages,
@@ -507,7 +506,7 @@ def parse_skeleton_files(layer_name, files, tf) -> dict:
 
 
 def build_skeleton(
-    skeleton_parts: dict, nrn: "Cell" = None
+    skeleton_parts: dict, cell: "Cell" = None
 ) -> Union[SkeletonLayer, Cell]:
     inherited_properties = {}
     inherited_properties.update(skeleton_parts["base_properties"])
@@ -515,7 +514,7 @@ def build_skeleton(
     inherited_properties["base_csgraph_binary"] = skeleton_parts.get(
         "base_csgraph_binary"
     )
-    if nrn is None:
+    if cell is None:
         skel_sync = SkeletonLayer(
             name=skeleton_parts["meta"]["name"],
             vertices=skeleton_parts["nodes"],
@@ -526,16 +525,16 @@ def build_skeleton(
         skel_sync._set_base_properties(inherited_properties)
         return skel_sync
     else:
-        nrn.add_skeleton(
+        cell.add_skeleton(
             vertices=skeleton_parts["nodes"],
             edges=skeleton_parts["edges"],
             root=skeleton_parts["meta"]["root"],
             spatial_columns=skeleton_parts["meta"]["spatial_columns"],
         )
-        nrn.layers[skeleton_parts["meta"]["name"]]._set_base_properties(
+        cell.layers[skeleton_parts["meta"]["name"]]._set_base_properties(
             inherited_properties
         )
-        return nrn
+        return cell
 
 
 def parse_mesh_files(layer_name, files, tf):
@@ -562,8 +561,8 @@ def parse_graph_files(layer_name, files, tf) -> dict:
     return graph_parts
 
 
-def build_graph(graph_parts: dict, nrn: Cell = None) -> Union[GraphLayer, Cell]:
-    if nrn is None:
+def build_graph(graph_parts: dict, cell: Cell = None) -> Union[GraphLayer, Cell]:
+    if cell is None:
         graph_sync = GraphLayer(
             name=graph_parts["meta"]["name"],
             vertices=graph_parts["nodes"],
@@ -572,12 +571,12 @@ def build_graph(graph_parts: dict, nrn: Cell = None) -> Union[GraphLayer, Cell]:
         )
         return graph_sync
     else:
-        nrn.add_graph(
+        cell.add_graph(
             vertices=graph_parts["nodes"],
             edges=graph_parts["edges"],
             spatial_columns=graph_parts["meta"]["spatial_columns"],
         )
-        return nrn
+        return cell
 
 
 def parse_point_cloud_files(layer_name, files, tf, as_annotation: bool = True) -> dict:
@@ -598,9 +597,9 @@ def parse_point_cloud_files(layer_name, files, tf, as_annotation: bool = True) -
 
 
 def build_point_cloud(
-    pcd_parts, nrn: "Cell" = None, as_annotation: bool = True
+    pcd_parts, cell: "Cell" = None, as_annotation: bool = True
 ) -> Union[PointCloudLayer, Cell]:
-    if nrn is None:
+    if cell is None:
         point_cloud_sync = PointCloudLayer(
             name=pcd_parts["meta"]["name"],
             vertices=pcd_parts["nodes"],
@@ -609,37 +608,37 @@ def build_point_cloud(
         return point_cloud_sync
     else:
         if as_annotation:
-            nrn.add_point_annotations(
+            cell.add_point_annotations(
                 name=pcd_parts["meta"]["name"],
                 vertices=pcd_parts["nodes"],
                 spatial_columns=pcd_parts["meta"]["spatial_columns"],
             )
-        return nrn
+        return cell
 
 
 def build_linkage(
     linkage_pair,
     tf,
-    nrn,
+    cell,
 ) -> Cell:
     prefix = f"linkage/{linkage_pair[0]}/{linkage_pair[1]}"
     link_df = load_dataframe(f"{prefix}/linkage.feather", tf)
     # Determine source based on the length of the vertices in the mapping and in the skeleton layer
-    if len(link_df) == len(nrn._all_objects[linkage_pair[0]].nodes):
+    if len(link_df) == len(cell._all_objects[linkage_pair[0]].nodes):
         source_layer = linkage_pair[0]
         target_layer = linkage_pair[1]
-    elif len(link_df) == len(nrn._all_objects[linkage_pair[1]].nodes):
+    elif len(link_df) == len(cell._all_objects[linkage_pair[1]].nodes):
         source_layer = linkage_pair[1]
         target_layer = linkage_pair[0]
     else:
         raise ValueError("Linkage DataFrame does not match any layer.")
 
-    layer = nrn._all_objects[source_layer]
-    nrn._all_objects[source_layer]._process_linkage(
+    layer = cell._all_objects[source_layer]
+    cell._all_objects[source_layer]._process_linkage(
         Link(
             link_df.set_index(source_layer).loc[layer.vertex_index][target_layer],
             source=source_layer,
             target=target_layer,
         )
     )
-    return nrn
+    return cell

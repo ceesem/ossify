@@ -56,5 +56,5 @@ def l2_spatial_columns():
 @pytest.fixture
 def nrn():
     with open("tests/data/test_meshwork.osy", "rb") as f:
-        nrn = file_io.load_morphology(f)
+        nrn = file_io.load_cell(f)
     return nrn
