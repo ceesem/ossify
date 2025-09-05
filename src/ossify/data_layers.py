@@ -3,7 +3,17 @@ import copy
 import uuid
 from abc import ABC, abstractmethod
 from numbers import Number
-from typing import TYPE_CHECKING, Generator, List, Literal, Optional, Self, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    Generator,
+    List,
+    Literal,
+    Optional,
+    Self,
+    Tuple,
+    Union,
+)
 
 import fastremap
 import numpy as np
@@ -992,6 +1002,43 @@ class PointMixin(ABC):
             return self._cell.__class__._from_existing(
                 new_morphsync=new_morphsync, old_obj=self._cell
             )
+
+    def copy(self) -> Self:
+        """Create a deep copy of the current object.
+
+        Returns
+        -------
+        Union[Self, "Cell"]
+            A new object of the same class without the CellSync.
+        """
+        new_morphsync = copy.deepcopy(self._morphsync)
+        l_to_drop = [l for l in new_morphsync._layers if l != self.layer_name]
+        for l in l_to_drop:
+            new_morphsync._layers.pop(l)
+        new_morphsync._links = {}
+
+        return self.__class__._from_existing(
+            new_morphsync=new_morphsync, old_obj=self._cell
+        )
+
+    def transform(
+        self, transform: Union[np.ndarray, Callable], inplace: bool = False
+    ) -> Union[Self, "Cell"]:
+        if inplace:
+            target = self
+        else:
+            target = self.copy()
+        if isinstance(transform, np.ndarray):
+            if not np.all(transform.shape == self.vertices.shape):
+                raise ValueError(
+                    "Transformation as vertices must have the same shape as vertices."
+                )
+            target.layer.nodes[target.spatial_columns] = transform
+        elif callable(transform):
+            target.layer.nodes[target.spatial_columns] = transform(
+                target.layer.vertices
+            )
+        return target
 
     @contextlib.contextmanager
     def mask_context(self, mask: np.ndarray) -> Generator[Self, None, None]:

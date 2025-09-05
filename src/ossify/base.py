@@ -516,6 +516,36 @@ class Cell:
             new_obj._annotations._add(new_anno)
         return new_obj
 
+    def copy(self) -> Self:
+        """Create a deep copy of the Cell."""
+        return self.__class__._from_existing(copy.deepcopy(self._morphsync), self)
+
+    def transform(
+        self, transform: Union[np.ndarray, callable], inplace: bool = False
+    ) -> Self:
+        """Apply a spatial transformation to all spatial layers in the Cell.
+
+        Parameters
+        ----------
+        transform : Union[np.ndarray, callable]
+            If an array, must be the same shape as the vertices of the layer(s).
+            If a callable, must take in a (N, 3) array and return a (N, 3) array.
+        inplace : bool
+            If True, modify the current Cell. If False, return a new Cell.
+
+        Returns
+        -------
+        Self
+            The transformed Cell.
+        """
+        if not inplace:
+            target = self.copy()
+        else:
+            target = self
+        for layer in target._all_objects.values():
+            layer.transform(transform, inplace=True)
+        return target
+
     @property
     def labels(self) -> pd.DataFrame:
         """Return a DataFrame listing all label columns across all layers. Each label is a row, with the layer name and label name as columns."""
