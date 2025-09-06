@@ -592,7 +592,10 @@ class PointMixin(ABC):
             All corresponding target indices for the source indices.
         """
         mapping = self._morphsync.get_mapping(
-            source=self.layer_name, target=layer, source_index=source_index
+            source=self.layer_name,
+            target=layer,
+            source_index=source_index,
+            null_strategy="drop",
         )
         return mapping.values
 
@@ -619,7 +622,10 @@ class PointMixin(ABC):
             One target index for each source index, maintaining order.
         """
         mapping = self._morphsync.get_mapping(
-            source=self.layer_name, target=layer, source_index=source_index
+            source=self.layer_name,
+            target=layer,
+            source_index=source_index,
+            null_strategy="drop",
         )
         if validate:
             if np.any(mapping.index.duplicated()):
@@ -646,13 +652,19 @@ class PointMixin(ABC):
             Dictionary mapping each source index to a list of all corresponding target indices.
         """
         mapping = self._morphsync.get_mapping(
-            source=self.layer_name, target=layer, source_index=source_index
+            source=self.layer_name,
+            target=layer,
+            source_index=source_index,
+            null_strategy="drop",
         )
         mapping_dict = mapping.groupby(by=mapping.index).agg(list).to_dict()
         return {k: np.array(v) for k, v in mapping_dict.items()}
 
     def map_labels_to_layer(
-        self, labels: Union[str, list], layer: str, agg: Union[str, dict]
+        self,
+        labels: Union[str, list],
+        layer: str,
+        agg: Union[str, dict] = "mean",
     ) -> pd.DataFrame:
         """Map labels from one layer to another.
 
@@ -671,14 +683,17 @@ class PointMixin(ABC):
         Returns
         -------
         pd.DataFrame
-            The mapped labels for the target layer.
+            The mapped labels for the target layer. Vertices with no mapping will have NaN values.
         """
         if layer == self.layer_name:
             return self.nodes[labels]
         if isinstance(labels, str):
             labels = [labels]
         mapping = self._morphsync.get_mapping(
-            source=self.layer_name, target=layer, source_index=self.vertex_index
+            source=self.layer_name,
+            target=layer,
+            source_index=self.vertex_index,
+            null_strategy="keep",
         )
         mapping_merged = mapping.to_frame().merge(
             self.nodes[labels],
@@ -688,11 +703,10 @@ class PointMixin(ABC):
         )
         if agg == "majority":
             agg = utils.majority_agg()
-        return (
-            mapping_merged.groupby(layer)
-            .agg(agg)
-            .loc[self._morphsync._layers[layer].nodes.index]
-        )
+        # Group by target layer and aggregate, then reindex to ensure all target vertices are included
+        grouped_result = mapping_merged.groupby(layer).agg(agg)
+        target_layer_index = self._morphsync._layers[layer].nodes.index
+        return grouped_result.reindex(target_layer_index)
 
     def _map_index_to_layer(
         self,
@@ -935,7 +949,7 @@ class PointMixin(ABC):
             if len(mask) == self.n_vertices and np.issubdtype(mask.dtype, np.bool_):
                 mask = mask.astype(bool)
             else:
-                mask = self.vertex_index.isin(mask)
+                mask = np.isin(self.vertex_index, mask)
         return self._morphsync.apply_mask(
             layer_name=self.layer_name,
             mask=mask,
@@ -1074,6 +1088,114 @@ class PointMixin(ABC):
             Cell object to register with this layer.
         """
         self._cell = mws
+
+    def get_unmapped_vertices(
+        self,
+        target_layers: Optional[Union[str, List[str]]] = None,
+    ) -> np.ndarray:
+        """Identify vertices in this layer that have no mapping to specified target layers.
+
+        Parameters
+        ----------
+        target_layers : Optional[Union[str, List[str]]], optional
+            Target layer name(s) to check mappings against. If None, checks all other layers
+            in the morphsync object except the current layer.
+
+        Returns
+        -------
+        np.ndarray
+            Vertices in this layer that have null mappings to any of the target layers.
+        """
+        if target_layers is None:
+            # Get all layers except the current one
+            all_layers = list(self._morphsync.layer_names)
+            target_layers = [layer for layer in all_layers if layer != self.layer_name]
+        elif isinstance(target_layers, str):
+            target_layers = [target_layers]
+
+        # Get all vertices that have null mappings to any target layer
+        unmapped_vertices_sets = []
+
+        for target_layer in target_layers:
+            # Get mapping with nulls preserved
+            mapping = self._morphsync.get_mapping(
+                source=target_layer,
+                target=self.layer_name,
+                null_strategy="keep",
+            )
+
+            # Find indices with null mappings (NaN or pd.NA)
+            null_mask = mapping.isna()
+            unmapped_in_target = mapping.index[null_mask]
+            unmapped_vertices_sets.append(set(unmapped_in_target))
+
+        # Get union of all unmapped vertices (vertices unmapped to ANY target)
+        all_unmapped = (
+            set.union(*unmapped_vertices_sets) if unmapped_vertices_sets else set()
+        )
+        unmapped_array = np.array(list(all_unmapped))
+        return unmapped_array
+
+    def mask_out_unmapped(
+        self,
+        target_layers: Optional[Union[str, List[str]]] = None,
+        self_only: bool = False,
+    ) -> Union[Self, "Cell"]:
+        """Create a new object with unmapped vertices removed.
+
+        This function identifies vertices that have null mappings to specified target layers
+        and creates a masked version of the object with those vertices removed.
+
+        Parameters
+        ----------
+        target_layers : Optional[Union[str, List[str]]], optional
+            Target layer name(s) to check mappings against. If None, checks all other layers
+            in the morphsync object except the current layer.
+        self_only : bool, optional
+            If True, only apply mask to current layer. If False, apply to entire Cell. Default False.
+
+        Returns
+        -------
+        Union[Self, "Cell"]
+            New object with unmapped vertices removed.
+
+        Examples
+        --------
+        >>> # Remove skeleton vertices that don't map to mesh
+        >>> clean_skeleton = skeleton.mask_out_unmapped("mesh")
+
+        >>> # Remove vertices that don't map to multiple layers
+        >>> clean_skeleton = skeleton.mask_out_unmapped(["mesh", "annotations"])
+
+        >>> # Clean up only the current layer, not the whole cell
+        >>> clean_skeleton = skeleton.mask_out_unmapped("mesh", self_only=True)
+
+        >>> # Remove vertices that don't map to ANY other layer
+        >>> clean_skeleton = skeleton.mask_out_unmapped()
+        """
+        source_index = self.vertex_index
+
+        # Get unmapped vertices
+        unmapped = self.get_unmapped_vertices(
+            target_layers=target_layers,
+        )
+
+        # Create mask to keep only mapped vertices (inverse of unmapped)
+        all_indices = set(source_index)
+        unmapped_set = set(unmapped)
+        keep_indices = np.array(list(all_indices - unmapped_set))
+
+        # Check if we would be left with no vertices
+        if len(keep_indices) == 0:
+            raise ValueError(
+                f"All vertices in layer '{self.layer_name}' are unmapped to the target layers. "
+                f"Cannot create an empty layer. Consider checking your mappings or using a different target layer."
+            )
+
+        # Apply mask using existing functionality
+        return self.apply_mask(
+            mask=keep_indices, as_positional=False, self_only=self_only
+        )
 
 
 class GraphLayer(PointMixin, EdgeMixin):

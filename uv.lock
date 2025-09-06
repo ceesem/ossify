@@ -704,7 +704,7 @@ wheels = [
 [[package]]
 name = "cortical-tools"
 version = "0.0.2"
-source = { registry = "https://pypi.org/simple" }
+source = { editable = "../cortical_tools" }
 dependencies = [
     { name = "caveclient" },
     { name = "cloud-volume" },
@@ -716,9 +716,39 @@ dependencies = [
     { name = "standard-transform" },
     { name = "tqdm-joblib" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/42/e8/b837821d9e0bde96c69ebb1286c15ce7edf4d9d4a2a1fc987194eab6e479/cortical_tools-0.0.2.tar.gz", hash = "sha256:b73d73c596e87ebfd7f8a864e31673f491bf347c8f2cc8e62b7b2ec1989f8b7b", size = 1113130, upload-time = "2025-08-13T22:33:22.504Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a2/27/8802c94d6b0e39af5db0c50e88842c6a4e3f32a44d14b5ec61368f38491f/cortical_tools-0.0.2-py3-none-any.whl", hash = "sha256:a817afd8071b922ca72e4a60c152a1e2ec24e518d601d5c55846df5a30a9e54c", size = 21465, upload-time = "2025-08-13T22:33:20.9Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "caveclient", specifier = ">=7.7.4" },
+    { name = "cloud-volume", specifier = ">=12.3.1" },
+    { name = "gpytoolbox", specifier = ">=0.3.6" },
+    { name = "nglui", specifier = ">=4.4.2" },
+    { name = "numpy", specifier = ">=2.0.2" },
+    { name = "pandas", specifier = ">=2.2.3" },
+    { name = "pcg-skel", specifier = ">=1.3.1" },
+    { name = "standard-transform", specifier = ">=1.4.1" },
+    { name = "tqdm-joblib", specifier = ">=0.0.4" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "bump-my-version" },
+    { name = "ipykernel" },
+    { name = "jupyter-server-proxy" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "pyvista", extras = ["all"] },
+    { name = "seaborn" },
+]
+docs = [
+    { name = "mkdocs" },
+    { name = "mkdocs-material" },
+    { name = "mkdocstrings", extras = ["python"] },
+]
+lint = [{ name = "ruff" }]
+profile = [
+    { name = "pyinstrument" },
+    { name = "scalene" },
 ]
 
 [[package]]
@@ -2717,7 +2747,7 @@ requires-dist = [
     { name = "cloud-files", specifier = ">=5.8.0" },
     { name = "cloud-volume", specifier = ">=11.1.5" },
     { name = "cmcrameri", specifier = ">=1.9" },
-    { name = "cortical-tools", specifier = ">=0.0.2" },
+    { name = "cortical-tools", editable = "../cortical_tools" },
     { name = "matplotlib", specifier = ">=3.10.6" },
     { name = "morphsync", editable = "../morphsync" },
     { name = "numpy", specifier = ">=2.0.2" },

@@ -63,6 +63,7 @@ default-groups = ["dev", "docs", "lint", "profile", "viz"]
 
 [tool.uv.sources]
 morphsync = { path = "../morphsync", editable = true }
+cortical-tools = { path = "../cortical_tools", editable = true }
 
 [tool.bumpversion]
 current_version = "0.0.1"
