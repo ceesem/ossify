@@ -178,6 +178,7 @@ def label_axon_from_synapse_flow(
     ntimes: int = 1,
     return_segregation_index: bool = False,
     segregation_index_threshold: float = 0,
+    as_postitional: bool = False,
 ) -> Union[np.ndarray, Tuple[np.ndarray, float]]:
     """Split a neuron into axon and dendrite compartments using synapse locations.
 
@@ -186,9 +187,9 @@ def label_axon_from_synapse_flow(
     cell : Union[Cell, SkeletonLayer]
         The neuron to split.
     pre_syn : Union[str, np.ndarray], optional
-        The annotation associated with presynaptic sites or a list of skeleton ids.
+        The annotation associated with presynaptic sites or a list of skeleton vertex ids (see as_postitional).
     post_syn : Union[str, np.ndarray], optional
-        The annotation associated with postsynaptic sites or a list of skeleton ids.
+        The annotation associated with postsynaptic sites or a list of skeleton vertex ids (see as_postitional).
     how : Literal["synapse_flow", "spectral"], optional
         The method to use for splitting.
     n_splits : int, optional
@@ -196,6 +197,12 @@ def label_axon_from_synapse_flow(
     extend_label_to_segment : bool, optional
         Whether to propagate the is_axon label to the whole segment, rather than a specific vertex.
         This is likely more biologically accurate, but potentially a less optimal split.
+    segregation_index_threshold : float, optional
+        The minimum segregation index required to accept a split. If the best split has a segregation index
+        below this threshold, no split is performed and all vertices are labeled as dendrite.
+    as_positional : bool, optional
+        If True, assumes the pre_syn and post_syn arrays are positional indices into the skeleton vertex array.
+        If False, assumes they are the vertex indices (i.e. cell.skeleton.vertex_indices).
 
     Returns
     -------
@@ -210,30 +217,78 @@ def label_axon_from_synapse_flow(
         if isinstance(cell, SkeletonLayer):
             raise ValueError("If passing a SkeletonLayer, pre_syn must be an array.")
         pre_syn_inds = cell.annotations[pre_syn].map_index_to_layer(
-            "skeleton", positional=True
+            "skeleton", as_positional=True
         )
     else:
-        pre_syn_inds = np.array(pre_syn)
+        if not as_postitional:
+            pre_syn_inds = np.array(
+                [np.flatnonzero(skel.vertex_index == vid)[0] for vid in pre_syn]
+            )
+        else:
+            pre_syn_inds = np.asarray(pre_syn)
     if isinstance(post_syn, str):
         if isinstance(cell, SkeletonLayer):
             raise ValueError("If passing a SkeletonLayer, post_syn must be an array.")
         post_syn_inds = cell.annotations[post_syn].map_index_to_layer(
-            "skeleton", positional=True
+            "skeleton", as_positional=True
         )
     else:
-        post_syn_inds = np.array(post_syn)
+        if not as_postitional:
+            post_syn_inds = np.array(
+                [np.flatnonzero(skel.vertex_index == vid)[0] for vid in post_syn]
+            )
+        else:
+            post_syn_inds = np.asarray(post_syn)
     is_axon, Hsplit = _label_axon_synapse_flow(
         skel, pre_syn_inds, post_syn_inds, extend_label_to_segment
     )
     if Hsplit < segregation_index_threshold:
         is_axon = np.full(skel.n_vertices, False)
     if ntimes > 1:
+        if not isinstance(cell, Cell):
+            raise ValueError(
+                "Multiple iterations (ntimes > 1) requires a Cell object, not SkeletonLayer"
+            )
+
         for _ in range(ntimes - 1):
-            with cell.mask_context(~is_axon) as masked_cell:
+            with cell.mask_context("skeleton", ~is_axon) as masked_cell:
+                # Recalculate synapse indices for the masked skeleton
+                if isinstance(pre_syn, str):
+                    masked_pre_syn_inds = masked_cell.annotations[
+                        pre_syn
+                    ].map_index_to_layer("skeleton", as_positional=True)
+                else:
+                    # Map original indices to masked skeleton indices
+                    masked_pre_syn_inds = []
+                    for idx in pre_syn_inds:
+                        if (
+                            idx < len(is_axon) and ~is_axon[idx]
+                        ):  # This vertex is still in masked skeleton
+                            # Find its position in the masked skeleton
+                            masked_idx = np.sum(~is_axon[: idx + 1]) - 1
+                            masked_pre_syn_inds.append(masked_idx)
+                    masked_pre_syn_inds = np.array(masked_pre_syn_inds)
+
+                if isinstance(post_syn, str):
+                    masked_post_syn_inds = masked_cell.annotations[
+                        post_syn
+                    ].map_index_to_layer("skeleton", as_positional=True)
+                else:
+                    # Map original indices to masked skeleton indices
+                    masked_post_syn_inds = []
+                    for idx in post_syn_inds:
+                        if (
+                            idx < len(is_axon) and ~is_axon[idx]
+                        ):  # This vertex is still in masked skeleton
+                            # Find its position in the masked skeleton
+                            masked_idx = np.sum(~is_axon[: idx + 1]) - 1
+                            masked_post_syn_inds.append(masked_idx)
+                    masked_post_syn_inds = np.array(masked_post_syn_inds)
+
                 is_axon_sub, Hsplit_sub = _label_axon_synapse_flow(
                     masked_cell.skeleton,
-                    pre_syn_inds,
-                    post_syn_inds,
+                    masked_pre_syn_inds,
+                    masked_post_syn_inds,
                     extend_label_to_segment,
                 )
             if Hsplit_sub < segregation_index_threshold:

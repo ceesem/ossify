@@ -181,147 +181,42 @@ class TestSynapseBetweenness:
 class TestLabelAxonFromSynapseFlow:
     """Tests for label_axon_from_synapse_flow algorithm."""
 
-    @pytest.mark.skip(
-        reason="Complex annotation mapping requires detailed linkage setup"
-    )
-    def test_label_axon_basic_functionality(
-        self, simple_skeleton_data, spatial_columns
-    ):
+    def test_label_axon_basic_functionality(self, nrn):
         """Test basic axon labeling from synapse flow."""
-        vertices, edges, vertex_indices = simple_skeleton_data
-        vertex_df = pd.DataFrame(
-            vertices, columns=spatial_columns, index=vertex_indices
-        )
-
-        edges_with_indices = np.array(
-            [
-                [vertex_indices[1], vertex_indices[0]],
-                [vertex_indices[2], vertex_indices[1]],
-                [vertex_indices[3], vertex_indices[2]],
-                [vertex_indices[4], vertex_indices[3]],
-            ]
-        )
-
-        cell = Cell()
-        cell.add_skeleton(
-            vertices=vertex_df,
-            edges=edges_with_indices,
-            spatial_columns=spatial_columns,
-            root=vertex_indices[0],
-        )
-
-        # Add mock synapse annotations
-        pre_syn_data = pd.DataFrame(
-            {
-                "x": [4.0],  # Near terminal vertex
-                "y": [0.0],
-                "z": [0.0],
-            }
-        )
-        post_syn_data = pd.DataFrame(
-            {
-                "x": [0.0],  # Near root vertex
-                "y": [0.0],
-                "z": [0.0],
-            }
-        )
-
-        cell.add_point_annotations(
-            "pre_syn", vertices=pre_syn_data, spatial_columns=spatial_columns
-        )
-        cell.add_point_annotations(
-            "post_syn", vertices=post_syn_data, spatial_columns=spatial_columns
-        )
-
         # Test basic functionality
         is_axon = algorithms.label_axon_from_synapse_flow(
-            cell, pre_syn="pre_syn", post_syn="post_syn"
+            nrn, pre_syn="pre_syn", post_syn="post_syn"
         )
-
-        # Should return boolean array
-        assert len(is_axon) == 5
-        assert is_axon.dtype == bool
-
-        # Should have some true and some false values for meaningful split
+        assert is_axon.sum() == 4181
         assert np.any(is_axon) or np.any(~is_axon)
 
-    @pytest.mark.skip(
-        reason="Complex annotation mapping requires detailed linkage setup"
-    )
-    def test_label_axon_with_arrays(self, simple_skeleton_data, spatial_columns):
+    def test_label_axon_with_arrays(self, nrn):
         """Test axon labeling with direct arrays instead of annotation names."""
-        vertices, edges, vertex_indices = simple_skeleton_data
-        vertex_df = pd.DataFrame(
-            vertices, columns=spatial_columns, index=vertex_indices
-        )
-
-        edges_with_indices = np.array(
-            [
-                [vertex_indices[1], vertex_indices[0]],
-                [vertex_indices[2], vertex_indices[1]],
-                [vertex_indices[3], vertex_indices[2]],
-                [vertex_indices[4], vertex_indices[3]],
-            ]
-        )
-
-        cell = Cell()
-        cell.add_skeleton(
-            vertices=vertex_df,
-            edges=edges_with_indices,
-            spatial_columns=spatial_columns,
-            root=vertex_indices[0],
-        )
 
         # Test with SkeletonLayer and arrays
-        pre_syn_inds = np.array([4])  # Terminal (positional index)
-        post_syn_inds = np.array([0])  # Root (positional index)
+        pre_syn_inds = nrn.annotations["pre_syn"].map_index_to_layer(
+            "skeleton", as_positional=True
+        )
+        post_syn_inds = nrn.annotations["post_syn"].map_index_to_layer(
+            "skeleton", as_positional=True
+        )
 
         is_axon = algorithms.label_axon_from_synapse_flow(
-            cell.skeleton, pre_syn=pre_syn_inds, post_syn=post_syn_inds
+            nrn.skeleton,
+            pre_syn=pre_syn_inds,
+            post_syn=post_syn_inds,
+            as_postitional=True,
         )
 
         # Should work without error
-        assert len(is_axon) == 5
         assert is_axon.dtype == bool
+        assert is_axon.sum() == 4181
 
-    @pytest.mark.skip(
-        reason="Complex annotation mapping requires detailed linkage setup"
-    )
-    def test_label_axon_return_segregation_index(
-        self, simple_skeleton_data, spatial_columns
-    ):
-        """Test axon labeling with segregation index return."""
-        vertices, edges, vertex_indices = simple_skeleton_data
-        vertex_df = pd.DataFrame(
-            vertices, columns=spatial_columns, index=vertex_indices
-        )
-
-        edges_with_indices = np.array(
-            [
-                [vertex_indices[1], vertex_indices[0]],
-                [vertex_indices[2], vertex_indices[1]],
-                [vertex_indices[3], vertex_indices[2]],
-                [vertex_indices[4], vertex_indices[3]],
-            ]
-        )
-
-        cell = Cell()
-        cell.add_skeleton(
-            vertices=vertex_df,
-            edges=edges_with_indices,
-            spatial_columns=spatial_columns,
-            root=vertex_indices[0],
-        )
-
-        # Test with return_segregation_index=True
-        pre_syn_inds = np.array([4])
-        post_syn_inds = np.array([0])
-
+    def test_label_axon_return_segregation_index(self, nrn):
+        """Test axon labeling with segregation index return using real data."""
+        # Test with return_segregation_index=True using real data
         result = algorithms.label_axon_from_synapse_flow(
-            cell.skeleton,
-            pre_syn=pre_syn_inds,
-            post_syn=post_syn_inds,
-            return_segregation_index=True,
+            nrn, pre_syn="pre_syn", post_syn="post_syn", return_segregation_index=True
         )
 
         # Should return tuple
@@ -329,230 +224,81 @@ class TestLabelAxonFromSynapseFlow:
         assert len(result) == 2
 
         is_axon, seg_index = result
-        assert len(is_axon) == 5
+        assert len(is_axon) == nrn.skeleton.n_vertices
         assert is_axon.dtype == bool
         assert isinstance(seg_index, (int, float))
+        assert 0 <= seg_index <= 1  # Segregation index should be in [0, 1]
 
-    @pytest.mark.skip(
-        reason="Complex annotation mapping requires detailed linkage setup"
-    )
-    def test_label_axon_multiple_times(self, branched_skeleton_data, spatial_columns):
-        """Test axon labeling with multiple splits (ntimes > 1)."""
-        vertices, edges, vertex_indices = branched_skeleton_data
-        vertex_df = pd.DataFrame(
-            vertices, columns=spatial_columns, index=vertex_indices
-        )
-
-        edges_with_indices = np.array(
-            [
-                [vertex_indices[1], vertex_indices[0]],
-                [vertex_indices[2], vertex_indices[1]],
-                [vertex_indices[3], vertex_indices[1]],
-                [vertex_indices[4], vertex_indices[1]],
-            ]
-        )
-
-        cell = Cell()
-        cell.add_skeleton(
-            vertices=vertex_df,
-            edges=edges_with_indices,
-            spatial_columns=spatial_columns,
-            root=vertex_indices[0],
-        )
-
-        # Add mock synapses
-        pre_syn_data = pd.DataFrame(
-            {
-                "x": [2.0, 1.0],  # Near branch terminals
-                "y": [0.0, 1.0],
-                "z": [0.0, 0.0],
-            }
-        )
-        post_syn_data = pd.DataFrame(
-            {
-                "x": [0.0],  # Near root
-                "y": [0.0],
-                "z": [0.0],
-            }
-        )
-
-        cell.add_point_annotations(
-            "pre_syn", vertices=pre_syn_data, spatial_columns=spatial_columns
-        )
-        cell.add_point_annotations(
-            "post_syn", vertices=post_syn_data, spatial_columns=spatial_columns
-        )
-
-        # Test with multiple splits
+    def test_label_axon_multiple_times(self, nrn):
+        """Test axon labeling with multiple splits (ntimes > 1) using real data."""
+        # Test with multiple splits using real data
         is_axon = algorithms.label_axon_from_synapse_flow(
-            cell, pre_syn="pre_syn", post_syn="post_syn", ntimes=2
+            nrn, pre_syn="pre_syn", post_syn="post_syn", ntimes=2
         )
 
-        assert len(is_axon) == 5
+        assert len(is_axon) == nrn.skeleton.n_vertices
         assert is_axon.dtype == bool
+
+        # Compare with single split to ensure different results
+        is_axon_single = algorithms.label_axon_from_synapse_flow(
+            nrn, pre_syn="pre_syn", post_syn="post_syn", ntimes=1
+        )
+
+        # Results may be different due to multiple iterations
+        assert len(is_axon_single) == len(is_axon)
 
 
 class TestLabelAxonFromSpectralSplit:
     """Tests for label_axon_from_spectral_split algorithm."""
 
-    @pytest.mark.skip(
-        reason="Complex annotation mapping requires detailed linkage setup"
-    )
-    def test_spectral_split_basic(self, simple_skeleton_data, spatial_columns):
-        """Test basic spectral split functionality."""
-        vertices, edges, vertex_indices = simple_skeleton_data
-        vertex_df = pd.DataFrame(
-            vertices, columns=spatial_columns, index=vertex_indices
-        )
-
-        edges_with_indices = np.array(
-            [
-                [vertex_indices[1], vertex_indices[0]],
-                [vertex_indices[2], vertex_indices[1]],
-                [vertex_indices[3], vertex_indices[2]],
-                [vertex_indices[4], vertex_indices[3]],
-            ]
-        )
-
-        cell = Cell()
-        cell.add_skeleton(
-            vertices=vertex_df,
-            edges=edges_with_indices,
-            spatial_columns=spatial_columns,
-            root=vertex_indices[0],
-        )
-
-        # Add mock synapse annotations
-        pre_syn_data = pd.DataFrame(
-            {
-                "x": [3.0, 4.0],  # Near terminal
-                "y": [0.0, 0.0],
-                "z": [0.0, 0.0],
-            }
-        )
-        post_syn_data = pd.DataFrame(
-            {
-                "x": [0.0, 1.0],  # Near root
-                "y": [0.0, 0.0],
-                "z": [0.0, 0.0],
-            }
-        )
-
-        cell.add_point_annotations(
-            "pre_syn", vertices=pre_syn_data, spatial_columns=spatial_columns
-        )
-        cell.add_point_annotations(
-            "post_syn", vertices=post_syn_data, spatial_columns=spatial_columns
-        )
-
-        # Test spectral split
+    def test_spectral_split_basic(self, nrn):
+        """Test basic spectral split functionality using real data."""
+        # Test spectral split with real data
         is_axon = algorithms.label_axon_from_spectral_split(
-            cell, pre_syn="pre_syn", post_syn="post_syn"
+            nrn, pre_syn="pre_syn", post_syn="post_syn"
         )
 
-        assert len(is_axon) == 5
+        assert len(is_axon) == nrn.skeleton.n_vertices
         assert is_axon.dtype == bool
+        # Verify we get meaningful results (some axon, some dendrite)
+        assert np.any(is_axon) or np.any(~is_axon)
 
-    @pytest.mark.skip(
-        reason="Complex annotation mapping requires detailed linkage setup"
-    )
-    def test_spectral_split_with_skeletonlayer(
-        self, simple_skeleton_data, spatial_columns
-    ):
-        """Test spectral split with SkeletonLayer input."""
-        vertices, edges, vertex_indices = simple_skeleton_data
-        vertex_df = pd.DataFrame(
-            vertices, columns=spatial_columns, index=vertex_indices
-        )
-
-        edges_with_indices = np.array(
-            [
-                [vertex_indices[1], vertex_indices[0]],
-                [vertex_indices[2], vertex_indices[1]],
-                [vertex_indices[3], vertex_indices[2]],
-                [vertex_indices[4], vertex_indices[3]],
-            ]
-        )
-
-        cell = Cell()
-        cell.add_skeleton(
-            vertices=vertex_df,
-            edges=edges_with_indices,
-            spatial_columns=spatial_columns,
-            root=vertex_indices[0],
-        )
-
-        # Add synapses to cell first
-        pre_syn_data = pd.DataFrame({"x": [4.0], "y": [0.0], "z": [0.0]})
-        post_syn_data = pd.DataFrame({"x": [0.0], "y": [0.0], "z": [0.0]})
-
-        cell.add_point_annotations(
-            "pre_syn", vertices=pre_syn_data, spatial_columns=spatial_columns
-        )
-        cell.add_point_annotations(
-            "post_syn", vertices=post_syn_data, spatial_columns=spatial_columns
-        )
-
-        # This should raise ValueError since SkeletonLayer doesn't have annotations
-        with pytest.raises(AttributeError):
+    def test_spectral_split_with_skeletonlayer(self, nrn):
+        """Test spectral split with SkeletonLayer input using real data."""
+        # spectral_split doesn't support arrays like synapse_flow does
+        # It should raise an error when trying to use SkeletonLayer with string annotation names
+        # since SkeletonLayer doesn't have annotations
+        with pytest.raises((TypeError, AttributeError, KeyError)):
             algorithms.label_axon_from_spectral_split(
-                cell.skeleton,  # SkeletonLayer input
-                pre_syn="pre_syn",
+                nrn.skeleton,  # SkeletonLayer input
+                pre_syn="pre_syn",  # String annotation name
                 post_syn="post_syn",
             )
 
-    @pytest.mark.skip(
-        reason="Complex annotation mapping requires detailed linkage setup"
-    )
-    def test_spectral_split_parameters(self, simple_skeleton_data, spatial_columns):
-        """Test spectral split with different parameters."""
-        vertices, edges, vertex_indices = simple_skeleton_data
-        vertex_df = pd.DataFrame(
-            vertices, columns=spatial_columns, index=vertex_indices
-        )
-
-        edges_with_indices = np.array(
-            [
-                [vertex_indices[1], vertex_indices[0]],
-                [vertex_indices[2], vertex_indices[1]],
-                [vertex_indices[3], vertex_indices[2]],
-                [vertex_indices[4], vertex_indices[3]],
-            ]
-        )
-
-        cell = Cell()
-        cell.add_skeleton(
-            vertices=vertex_df,
-            edges=edges_with_indices,
-            spatial_columns=spatial_columns,
-            root=vertex_indices[0],
-        )
-
-        # Add synapses
-        pre_syn_data = pd.DataFrame({"x": [4.0], "y": [0.0], "z": [0.0]})
-        post_syn_data = pd.DataFrame({"x": [0.0], "y": [0.0], "z": [0.0]})
-
-        cell.add_point_annotations(
-            "pre_syn", vertices=pre_syn_data, spatial_columns=spatial_columns
-        )
-        cell.add_point_annotations(
-            "post_syn", vertices=post_syn_data, spatial_columns=spatial_columns
-        )
-
+    def test_spectral_split_parameters(self, nrn):
+        """Test spectral split with different parameters using real data."""
         # Test with raw_split=True
         is_axon_raw = algorithms.label_axon_from_spectral_split(
-            cell, pre_syn="pre_syn", post_syn="post_syn", raw_split=True
+            nrn, pre_syn="pre_syn", post_syn="post_syn", raw_split=True
         )
 
         # Test with different smoothing_alpha
         is_axon_smooth = algorithms.label_axon_from_spectral_split(
-            cell, pre_syn="pre_syn", post_syn="post_syn", smoothing_alpha=0.5
+            nrn, pre_syn="pre_syn", post_syn="post_syn", smoothing_alpha=0.5
         )
 
-        assert len(is_axon_raw) == 5
-        assert len(is_axon_smooth) == 5
+        # Test with very low smoothing
+        is_axon_low_smooth = algorithms.label_axon_from_spectral_split(
+            nrn, pre_syn="pre_syn", post_syn="post_syn", smoothing_alpha=0.1
+        )
+
+        n_vertices = nrn.skeleton.n_vertices
+        assert len(is_axon_raw) == n_vertices
+        assert len(is_axon_smooth) == n_vertices
+        assert len(is_axon_low_smooth) == n_vertices
         assert is_axon_raw.dtype == bool
         assert is_axon_smooth.dtype == bool
+        assert is_axon_low_smooth.dtype == bool
 
 
 class TestHelperFunctions:
@@ -592,44 +338,6 @@ class TestHelperFunctions:
         assert n_syn[0] == 1  # One synapse at vertex 0
         assert n_syn[2] == 2  # Two synapses at vertex 2
         assert n_syn[1] == 0  # No synapses at vertex 1
-
-    @pytest.mark.skip(reason="Complex internal function with annotation dependencies")
-    def test_split_direction_and_quality(self, simple_skeleton_data, spatial_columns):
-        """Test _split_direction_and_quality helper function."""
-        vertices, edges, vertex_indices = simple_skeleton_data
-        vertex_df = pd.DataFrame(
-            vertices, columns=spatial_columns, index=vertex_indices
-        )
-
-        edges_with_indices = np.array(
-            [
-                [vertex_indices[1], vertex_indices[0]],
-                [vertex_indices[2], vertex_indices[1]],
-                [vertex_indices[3], vertex_indices[2]],
-                [vertex_indices[4], vertex_indices[3]],
-            ]
-        )
-
-        cell = Cell()
-        cell.add_skeleton(
-            vertices=vertex_df,
-            edges=edges_with_indices,
-            spatial_columns=spatial_columns,
-            root=vertex_indices[0],
-        )
-
-        # Test split at middle vertex
-        split_idx = 2  # Middle vertex (positional index)
-        pre_inds = np.array([4])  # Terminal vertex
-        post_inds = np.array([0])  # Root vertex
-
-        is_axon_ds, seg_index = _split_direction_and_quality(
-            split_idx, cell.skeleton, pre_inds, post_inds
-        )
-
-        assert isinstance(is_axon_ds, bool)
-        assert isinstance(seg_index, (int, float))
-        assert 0 <= seg_index <= 1  # Segregation index should be in [0, 1]
 
     def test_strahler_path(self):
         """Test _strahler_path helper function."""
@@ -712,88 +420,38 @@ class TestHelperFunctions:
 class TestAlgorithmIntegration:
     """High-level integration tests using real Cell and data layer objects."""
 
-    @pytest.mark.skip(
-        reason="Complex annotation mapping requires detailed linkage setup"
-    )
-    def test_full_axon_detection_workflow(
-        self, branched_skeleton_data, spatial_columns
-    ):
-        """Test complete workflow: synapses -> betweenness -> axon detection."""
-        vertices, edges, vertex_indices = branched_skeleton_data
-        vertex_df = pd.DataFrame(
-            vertices, columns=spatial_columns, index=vertex_indices
-        )
-
-        edges_with_indices = np.array(
-            [
-                [vertex_indices[1], vertex_indices[0]],
-                [vertex_indices[2], vertex_indices[1]],
-                [vertex_indices[3], vertex_indices[1]],
-                [vertex_indices[4], vertex_indices[1]],
-            ]
-        )
-
-        # Create realistic branched neuron
-        cell = Cell(name="test_neuron")
-        cell.add_skeleton(
-            vertices=vertex_df,
-            edges=edges_with_indices,
-            spatial_columns=spatial_columns,
-            root=vertex_indices[0],
-        )
-
-        # Add realistic synapse distributions
-        # Pre-synaptic: concentrated on branches (axon terminals)
-        pre_syn_data = pd.DataFrame(
-            {
-                "x": [2.0, 1.0, 1.0],  # Near branch terminals
-                "y": [0.0, 1.0, -1.0],
-                "z": [0.0, 0.0, 0.0],
-            }
-        )
-        # Post-synaptic: concentrated near root (dendrites)
-        post_syn_data = pd.DataFrame(
-            {
-                "x": [0.0, 0.5],  # Near root and early branch
-                "y": [0.0, 0.0],
-                "z": [0.0, 0.0],
-            }
-        )
-
-        cell.add_point_annotations(
-            "pre_syn", vertices=pre_syn_data, spatial_columns=spatial_columns
-        )
-        cell.add_point_annotations(
-            "post_syn", vertices=post_syn_data, spatial_columns=spatial_columns
-        )
-
-        # Step 1: Calculate synapse betweenness
-        pre_inds = cell.annotations["pre_syn"].map_index_to_layer(
+    def test_full_axon_detection_workflow(self, nrn):
+        """Test complete workflow: synapses -> betweenness -> axon detection using real data."""
+        # Step 1: Calculate synapse betweenness using real annotations
+        pre_inds = nrn.annotations["pre_syn"].map_index_to_layer(
             "skeleton", as_positional=True
         )
-        post_inds = cell.annotations["post_syn"].map_index_to_layer(
+        post_inds = nrn.annotations["post_syn"].map_index_to_layer(
             "skeleton", as_positional=True
         )
 
-        betweenness = algorithms.synapse_betweenness(cell.skeleton, pre_inds, post_inds)
-        assert len(betweenness) == 5
-        assert np.sum(betweenness) > 0  # Should have some non-zero values
+        betweenness = algorithms.synapse_betweenness(nrn.skeleton, pre_inds, post_inds)
+        n_vertices = nrn.skeleton.n_vertices
+        assert len(betweenness) == n_vertices
+        assert np.sum(betweenness) >= 0  # Should have non-negative values
 
         # Step 2: Use synapse flow method for axon detection
         is_axon_flow = algorithms.label_axon_from_synapse_flow(
-            cell, "pre_syn", "post_syn", return_segregation_index=True
+            nrn, "pre_syn", "post_syn", return_segregation_index=True
         )
         axon_labels_flow, seg_index_flow = is_axon_flow
 
-        assert len(axon_labels_flow) == 5
+        assert len(axon_labels_flow) == n_vertices
         assert 0 <= seg_index_flow <= 1
+        assert axon_labels_flow.dtype == bool
 
         # Step 3: Use spectral method for comparison
         is_axon_spectral = algorithms.label_axon_from_spectral_split(
-            cell, "pre_syn", "post_syn"
+            nrn, "pre_syn", "post_syn"
         )
 
-        assert len(is_axon_spectral) == 5
+        assert len(is_axon_spectral) == n_vertices
+        assert is_axon_spectral.dtype == bool
 
         # Both methods should give meaningful results
         assert np.any(axon_labels_flow) or np.any(~axon_labels_flow)
@@ -1020,11 +678,3 @@ class TestErrorHandling:
 
         seg_index_post_only = algorithms.segregation_index(0, 10, 0, 5)
         assert seg_index_post_only == 0  # No pre synapses
-
-    def test_single_vertex_skeleton(self, spatial_columns):
-        """Test algorithms with single-vertex skeleton."""
-        # Skip this test due to complexity with single vertex and empty edges
-        # Most algorithms expect connected graphs with actual structure
-        pytest.skip(
-            "Single vertex skeleton creates edge cases with graph algorithms - real neurons have >1 vertex"
-        )

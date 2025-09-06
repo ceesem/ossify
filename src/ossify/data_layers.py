@@ -759,33 +759,19 @@ class PointMixin(ABC):
                         layer=layer, source_index=source_index
                     )
             if as_positional:
-                if isinstance(mapping, np.ndarray):
-                    mapping = fastremap.remap(
-                        mapping,
-                        {
-                            int(k): ii
-                            for ii, k in enumerate(
-                                np.array(
-                                    self._morphsync.layers[layer].vertices_index.values
-                                )
-                            )
-                        },
-                    )
-                elif isinstance(mapping, dict):
+                if how in ["one_to_one", "range_to_range"]:
+                    mapping = self._vertices_to_positional(
+                        np.asarray(mapping),
+                        as_positional=False,
+                        vertex_index=self._cell._all_objects[layer].vertex_index,
+                    )[0]
+                elif how == "one_to_list":
                     mapping = {
-                        self.vertex_index_map[k]: fastremap.remap(
+                        self.vertex_index_map[k]: self._vertices_to_positional(
                             v,
-                            {
-                                int(kk): ii
-                                for ii, kk in enumerate(
-                                    np.array(
-                                        self._morphsync.layers[
-                                            layer
-                                        ].vertices_index.values
-                                    )
-                                )
-                            },
-                        )
+                            as_positional=False,
+                            vertex_index=self._cell._all_objects[layer].vertex_index,
+                        )[0]
                         for k, v in mapping.items()
                     }
             return mapping
@@ -819,12 +805,14 @@ class PointMixin(ABC):
             There will be exactly one target index for each source index, no matter how many viable target indices there are.
             If `as_positional` is True, the mapping is based on the position of the vertices not the dataframe index.
         """
-        return self._map_index_to_layer(
-            layer=layer,
-            source_index=source_index,
-            as_positional=as_positional,
-            how="one_to_one",
-            validate=validate,
+        return np.array(
+            self._map_index_to_layer(
+                layer=layer,
+                source_index=source_index,
+                as_positional=as_positional,
+                how="one_to_one",
+                validate=validate,
+            )
         )
 
     def map_region_to_layer(
@@ -851,11 +839,13 @@ class PointMixin(ABC):
             Not necessarily the same length as the source indices, because it maps a region to another region.
             If `as_positional` is True, the mapping is based on the position of the vertices not the dataframe index.
         """
-        return self._map_index_to_layer(
-            layer=layer,
-            source_index=source_index,
-            as_positional=as_positional,
-            how="range_to_range",
+        return np.array(
+            self._map_index_to_layer(
+                layer=layer,
+                source_index=source_index,
+                as_positional=as_positional,
+                how="range_to_range",
+            )
         )
 
     def map_index_to_layer_region(
@@ -911,11 +901,13 @@ class PointMixin(ABC):
             raise ValueError(
                 "Mask must be a boolean array with the same length as the number of vertices."
             )
-        mapping = self._map_index_to_layer(
-            layer=layer,
-            source_index=mask,
-            as_positional=True,
-            how="range_to_range",
+        mapping = np.array(
+            self._map_index_to_layer(
+                layer=layer,
+                source_index=mask,
+                as_positional=True,
+                how="range_to_range",
+            )
         )
         mask_out = np.full(self._cell._all_objects[layer].n_vertices, False)
         mask_out[mapping] = True
