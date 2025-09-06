@@ -1113,8 +1113,8 @@ class PointMixin(ABC):
         elif isinstance(target_layers, str):
             target_layers = [target_layers]
 
-        # Get all vertices that have null mappings to any target layer
-        unmapped_vertices_sets = []
+        # Collect all unmapped vertex indices efficiently
+        all_unmapped_indices = []
 
         for target_layer in target_layers:
             # Get mapping with nulls preserved
@@ -1126,15 +1126,18 @@ class PointMixin(ABC):
 
             # Find indices with null mappings (NaN or pd.NA)
             null_mask = mapping.isna()
-            unmapped_in_target = mapping.index[null_mask]
-            unmapped_vertices_sets.append(set(unmapped_in_target))
+            unmapped_in_target = mapping.index[null_mask].values
+            all_unmapped_indices.append(unmapped_in_target)
 
-        # Get union of all unmapped vertices (vertices unmapped to ANY target)
-        all_unmapped = (
-            set.union(*unmapped_vertices_sets) if unmapped_vertices_sets else set()
-        )
-        unmapped_array = np.array(list(all_unmapped))
-        return unmapped_array
+        # Get union of all unmapped vertices efficiently
+        if all_unmapped_indices:
+            # Concatenate all unmapped indices and get unique values
+            all_unmapped = np.concatenate(all_unmapped_indices)
+            unique_unmapped = np.unique(all_unmapped)
+        else:
+            unique_unmapped = np.array([])
+
+        return unique_unmapped
 
     def mask_out_unmapped(
         self,
@@ -1173,17 +1176,15 @@ class PointMixin(ABC):
         >>> # Remove vertices that don't map to ANY other layer
         >>> clean_skeleton = skeleton.mask_out_unmapped()
         """
-        source_index = self.vertex_index
+        source_vertices = self.vertex_index
 
-        # Get unmapped vertices
-        unmapped = self.get_unmapped_vertices(
-            target_layers=target_layers,
-        )
+        # Get unmapped vertices using optimized numpy operations
+        unmapped = self.get_unmapped_vertices(target_layers=target_layers)
 
-        # Create mask to keep only mapped vertices (inverse of unmapped)
-        all_indices = set(source_index)
-        unmapped_set = set(unmapped)
-        keep_indices = np.array(list(all_indices - unmapped_set))
+        # Create boolean mask for mapped vertices (inverse of unmapped)
+        # This avoids set operations entirely
+        keep_mask = ~np.isin(source_vertices, unmapped)
+        keep_indices = source_vertices[keep_mask]
 
         # Check if we would be left with no vertices
         if len(keep_indices) == 0:
