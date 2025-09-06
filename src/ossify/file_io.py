@@ -410,7 +410,7 @@ def export_mesh_layer(layer, tf) -> None:
         tf=tf,
     )
     add_file_to_tar(
-        name=f"{datapath}/vertices.feather",
+        name=f"{datapath}/nodes.feather",
         data=bytesio_feather(layer.nodes),
         tf=tf,
     )
@@ -558,7 +558,7 @@ def parse_mesh_files(layer_name, files, tf):
                     mesh_parts["meta"] = load_dict(files[fn], tf)
                 case ("nodes.feather", layer_name):
                     mesh_parts["nodes"] = load_dataframe(files[fn], tf)
-                case ("edges.npz", layer_name):
+                case ("faces.npz", layer_name):
                     mesh_parts["faces"] = load_array(files[fn], tf)
     return mesh_parts
 
