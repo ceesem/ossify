@@ -310,12 +310,12 @@ def load_sparse_matrix(tinfo, tf) -> "scipy.sparse.csgraph.csr_matrix":
 def export_linkage(cell, tf) -> None:
     datapath = f"linkage"
     unique_linkage = np.unique(
-        [sorted(b) for b in list(cell._morphsync._links.keys())], axis=0
+        [sorted(b) for b in list(cell._morphsync.links.keys())], axis=0
     ).tolist()
     for linkage_pair in unique_linkage:
         add_file_to_tar(
             name=f"{datapath}/{linkage_pair[0]}/{linkage_pair[1]}/linkage.feather",
-            data=bytesio_feather(cell._morphsync._links[tuple(linkage_pair)]),
+            data=bytesio_feather(cell._morphsync.links[tuple(linkage_pair)]),
             tf=tf,
         )
 
@@ -424,7 +424,7 @@ def export_mesh_layer(layer, tf) -> None:
 def extract_metadata(cell) -> bytes:
     layer_structure = {l.name: {"type": l.layer_type} for l in cell.layers}
     annotation_structure = {a.name: {"type": a.layer_type} for a in cell.annotations}
-    all_links = [sorted(b) for b in list(cell._morphsync._links.keys())]
+    all_links = [sorted(b) for b in list(cell._morphsync.links.keys())]
     linkages = np.unique([sorted(b) for b in all_links], axis=0).tolist()
     metadata = {
         "name": cell.name,

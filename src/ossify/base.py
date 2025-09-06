@@ -167,11 +167,6 @@ class Cell:
         "Get the non-annotation layers of the cell."
         return self._layers
 
-    @property
-    def layer_df(self) -> pd.DataFrame:
-        """A descriptive DataFrame for all of the layers of the Cell"""
-        return self._morphsync.layers
-
     def _get_layer(self, layer_name: str):
         "Get a managed layer by name."
         return self._managed_layers.get(layer_name)

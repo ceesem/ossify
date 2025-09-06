@@ -80,6 +80,11 @@ class Link:
 
     def mapping_to_index(self, vertex_data: pd.DataFrame) -> np.ndarray:
         "Map positional values to index values"
+        # Handle string column reference
+        if isinstance(self.mapping, str):
+            return vertex_data[self.mapping].values
+
+        # Handle array mapping
         if self.map_value_is_index:
             return self.mapping
         else:

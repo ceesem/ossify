@@ -394,9 +394,7 @@ class PointMixin(ABC):
                 linkage.target = self.layer_name
             if isinstance(linkage.mapping, str):
                 linkage.mapping = (
-                    self._morphsync._layers[linkage.source]
-                    .nodes[linkage.mapping]
-                    .values
+                    self._morphsync.layers[linkage.source].nodes[linkage.mapping].values
                 )
             self._process_linkage(linkage)
 
@@ -454,7 +452,7 @@ class PointMixin(ABC):
         return self._get_layer(self.layer_name)
 
     def _get_layer(self, layer_name: str) -> Facet:  # type: ignore
-        return self._morphsync._layers[layer_name]
+        return self._morphsync.layers[layer_name]
 
     @property
     def vertices(self) -> np.ndarray:
@@ -563,7 +561,7 @@ class PointMixin(ABC):
         if np.any(label.columns.isin(self.nodes.columns)):
             raise ValueError('"Label name already exists in the nodes DataFrame.")')
 
-        self._morphsync._layers[self.layer_name].nodes = self.nodes.merge(
+        self._morphsync.layers[self.layer_name].nodes = self.nodes.merge(
             label,
             left_index=True,
             right_index=True,
@@ -705,7 +703,7 @@ class PointMixin(ABC):
             agg = utils.majority_agg()
         # Group by target layer and aggregate, then reindex to ensure all target vertices are included
         grouped_result = mapping_merged.groupby(layer).agg(agg)
-        target_layer_index = self._morphsync._layers[layer].nodes.index
+        target_layer_index = self._morphsync.layers[layer].nodes.index
         return grouped_result.reindex(target_layer_index)
 
     def _map_index_to_layer(
@@ -746,7 +744,7 @@ class PointMixin(ABC):
         source_index = np.asarray(source_index)
         if as_positional or np.issubdtype(source_index.dtype, np.bool):
             source_index = self.vertex_index[source_index]
-        if layer in self._morphsync._layers:
+        if layer in self._morphsync.layers:
             match how:
                 case "one_to_one":
                     mapping = self._map_index_one_to_one(
@@ -768,7 +766,7 @@ class PointMixin(ABC):
                             int(k): ii
                             for ii, k in enumerate(
                                 np.array(
-                                    self._morphsync._layers[layer].vertices_index.values
+                                    self._morphsync.layers[layer].vertices_index.values
                                 )
                             )
                         },
@@ -781,7 +779,7 @@ class PointMixin(ABC):
                                 int(kk): ii
                                 for ii, kk in enumerate(
                                     np.array(
-                                        self._morphsync._layers[
+                                        self._morphsync.layers[
                                             layer
                                         ].vertices_index.values
                                     )
@@ -1026,10 +1024,10 @@ class PointMixin(ABC):
             A new object of the same class without the CellSync.
         """
         new_morphsync = copy.deepcopy(self._morphsync)
-        l_to_drop = [l for l in new_morphsync._layers if l != self.layer_name]
+        l_to_drop = [l for l in new_morphsync.layers if l != self.layer_name]
         for l in l_to_drop:
-            new_morphsync._layers.pop(l)
-        new_morphsync._links = {}
+            new_morphsync.layers.pop(l)
+        new_morphsync.links = {}
 
         return self.__class__._from_existing(
             new_morphsync=new_morphsync, old_obj=self._cell
@@ -1294,7 +1292,7 @@ class GraphLayer(PointMixin, EdgeMixin):
                 "prox_idx": self.vertex_index[prox_list],
             }
         )
-        anno_df = self._morphsync._layers[annotation].nodes
+        anno_df = self._morphsync.layers[annotation].nodes
         local_vertex = self._cell.annotations[annotation].map_index_to_layer(
             self.layer_name, validate=validate
         )
@@ -1680,9 +1678,12 @@ class SkeletonLayer(GraphLayer):
         if root is None:
             root = self._root
 
+        # Convert root to positional index for array operations
+        root_positional = np.flatnonzero(self.vertex_index == root)[0]
+
         _, lbls = sparse.csgraph.connected_components(self.csgraph_binary)
 
-        root_comp = lbls[root]
+        root_comp = lbls[root_positional]
         if apply_to_all_components:
             comps_to_reroot = np.unique(lbls)
         else:
@@ -1692,7 +1693,7 @@ class SkeletonLayer(GraphLayer):
 
         for comp in comps_to_reroot:
             if comp == root_comp:
-                comp_root = int(root)
+                comp_root = int(root_positional)
             else:
                 comp_root = utils.find_far_points_graph(
                     self.csgraph_binary,
@@ -1719,7 +1720,7 @@ class SkeletonLayer(GraphLayer):
 
         # Update facets/edges
         for ii in [0, 1]:
-            self._morphsync._layers[self.layer_name].facets[ii] = self.vertex_index[
+            self._morphsync.layers[self.layer_name].facets[ii] = self.vertex_index[
                 edges_positional_new[:, ii]
             ]
 
@@ -2269,7 +2270,7 @@ class PointCloudLayer(PointMixin):
         """
         if self._cell is None:
             raise ValueError("PointCloud is not attached to a Cell object.")
-        if via not in self._morphsync._layers:
+        if via not in self._morphsync.layers:
             raise ValueError(f"Cell does not have a {via.capitalize()} object.")
 
         vertices, as_positional = self._vertices_to_positional(vertices, as_positional)

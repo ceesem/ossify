@@ -61,7 +61,7 @@ def _map_value_to_colors(
         return rgba_colors
     # Handle continuous mapping
     if isinstance(colormap, str):
-        cmap = cm.get_cmap(colormap)
+        cmap = plt.get_cmap(colormap)
     else:
         cmap = colormap
 
@@ -132,8 +132,13 @@ def _apply_y_inversion_to_axes(
 
 
 def projection_factory(
-    proj: Literal["xy", "yx", "yz", "zy", "zx", "xz"],
+    proj: Union[str, Callable],
 ) -> Callable:
+    # If already a callable, return as-is
+    if callable(proj):
+        return proj
+
+    # Handle string projections
     match proj:
         case "xy":
             return lambda pts: np.array(pts)[:, [0, 1]]
@@ -174,7 +179,9 @@ def _plotted_bounds(
     """
     if isinstance(projection, str):
         projection = projection_factory(proj=projection)
-    projected = projection(vertices)
+    projected = projection(vertices).astype(
+        float
+    )  # Ensure float type for offset operations
     projected[:, 0] += offset_h
     projected[:, 1] += offset_v
     xmin, xmax = projected[:, 0].min(), projected[:, 0].max()
@@ -234,13 +241,22 @@ def plot_skeleton(
         projection = projection_factory(proj=projection)
 
     for path in skel.cover_paths:
-        match skel.parent_node_array[path[-1]]:
+        # Convert vertex index to positional index for parent_node_array access
+        path_end_vertex = path[-1]
+        path_end_positional = np.flatnonzero(skel.vertex_index == path_end_vertex)[0]
+        match skel.parent_node_array[path_end_positional]:
             case -1:
                 path_plus = path
             case parent:
-                path_plus = np.concat((path, [parent]))
+                # Convert parent positional index back to vertex index
+                parent_vertex = skel.vertex_index[parent]
+                path_plus = np.concat((path, [parent_vertex]))
 
-        path_spatial = projection(skel.vertices[path_plus])
+        # Convert vertex indices to positional indices for vertices array access
+        path_plus_positional = np.array(
+            [np.flatnonzero(skel.vertex_index == v)[0] for v in path_plus]
+        )
+        path_spatial = projection(skel.vertices[path_plus_positional])
         path_spatial[:, 0] = path_spatial[:, 0] + offset_h
         path_spatial[:, 1] = path_spatial[:, 1] + offset_v
         path_segs = [
@@ -250,11 +266,23 @@ def plot_skeleton(
         # Extract styling for this path
         lc_kwargs = {}
         if colors is not None:
-            lc_kwargs["colors"] = colors[path]
+            # Convert vertex indices to positional indices for colors array access
+            path_positional = np.array(
+                [np.flatnonzero(skel.vertex_index == v)[0] for v in path]
+            )
+            lc_kwargs["colors"] = colors[path_positional]
         if alpha is not None:
-            lc_kwargs["alpha"] = alpha[path]
+            # Convert vertex indices to positional indices for alpha array access
+            path_positional = np.array(
+                [np.flatnonzero(skel.vertex_index == v)[0] for v in path]
+            )
+            lc_kwargs["alpha"] = alpha[path_positional]
         if linewidths is not None:
-            lc_kwargs["linewidths"] = linewidths[path]
+            # Convert vertex indices to positional indices for linewidths array access
+            path_positional = np.array(
+                [np.flatnonzero(skel.vertex_index == v)[0] for v in path]
+            )
+            lc_kwargs["linewidths"] = linewidths[path_positional]
         if zorder is not None:
             lc_kwargs["zorder"] = zorder
 
@@ -587,7 +615,7 @@ def plot_cell_2d(
     root_as_sphere: bool = False,
     root_size: float = 100.0,
     root_color: Optional[Union[str, tuple]] = None,
-    synapses: Literal["pre", "post", "both", False] = False,
+    synapses: Literal["pre", "post", "both", True, False] = False,
     pre_anno: str = "pre_syn",
     pre_color: Optional[Union[str, tuple]] = None,
     pre_palette: Union[str, dict] = None,
@@ -639,40 +667,42 @@ def plot_cell_2d(
         invert_y=invert_y,
         ax=ax,
     )
-    if synapses == "both" or synapses == "pre":
-        ax = plot_annotations_2d(
-            cell.annotations[pre_anno],
-            color=pre_color,
-            palette=pre_palette,
-            color_norm=pre_color_norm,
-            alpha=syn_alpha,
-            size=syn_size,
-            size_norm=syn_size_norm,
-            sizes=syn_sizes,
-            ax=ax,
-            offset_h=offset_h,
-            offset_v=offset_v,
-            invert_y=invert_y,
-            projection=projection,
-            **syn_kwargs,
-        )
-    if synapses == "both" or synapses == "post":
-        ax = plot_annotations_2d(
-            cell.annotations[post_anno],
-            color=post_color,
-            palette=post_palette,
-            color_norm=post_color_norm,
-            alpha=syn_alpha,
-            size=syn_size,
-            size_norm=syn_size_norm,
-            sizes=syn_sizes,
-            ax=ax,
-            offset_h=offset_h,
-            offset_v=offset_v,
-            invert_y=invert_y,
-            projection=projection,
-            **syn_kwargs,
-        )
+    if synapses == "both" or synapses == "pre" or synapses is True:
+        if pre_anno in cell.annotations.names:
+            ax = plot_annotations_2d(
+                cell.annotations[pre_anno],
+                color=pre_color,
+                palette=pre_palette,
+                color_norm=pre_color_norm,
+                alpha=syn_alpha,
+                size=syn_size,
+                size_norm=syn_size_norm,
+                sizes=syn_sizes,
+                ax=ax,
+                offset_h=offset_h,
+                offset_v=offset_v,
+                invert_y=invert_y,
+                projection=projection,
+                **syn_kwargs,
+            )
+    if synapses == "both" or synapses == "post" or synapses is True:
+        if post_anno in cell.annotations.names:
+            ax = plot_annotations_2d(
+                cell.annotations[post_anno],
+                color=post_color,
+                palette=post_palette,
+                color_norm=post_color_norm,
+                alpha=syn_alpha,
+                size=syn_size,
+                size_norm=syn_size_norm,
+                sizes=syn_sizes,
+                ax=ax,
+                offset_h=offset_h,
+                offset_v=offset_v,
+                invert_y=invert_y,
+                projection=projection,
+                **syn_kwargs,
+            )
     return ax
 
 
@@ -690,7 +720,7 @@ def plot_cell_multiview(
     root_as_sphere: bool = False,
     root_size: float = 100.0,
     root_color: Optional[Union[str, tuple]] = None,
-    synapses: Literal["pre", "post", "both", False] = "both",
+    synapses: Literal["pre", "post", "both", True, False] = False,
     pre_anno: str = "pre_syn",
     pre_color: Optional[Union[str, tuple]] = None,
     pre_palette: Union[str, dict] = None,
