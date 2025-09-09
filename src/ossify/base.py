@@ -218,6 +218,31 @@ class Cell:
         return self._annotations
 
     @property
+    def s(self) -> Optional[SkeletonLayer]:
+        "Alias for skeleton."
+        return self.skeleton
+
+    @property
+    def g(self) -> Optional[GraphLayer]:
+        "Alias for graph."
+        return self.graph
+
+    @property
+    def m(self) -> Optional[MeshLayer]:
+        "Alias for mesh."
+        return self.mesh
+
+    @property
+    def a(self) -> LayerManager:
+        "Alias for annotations."
+        return self.annotations
+
+    @property
+    def l(self) -> LayerManager:
+        "Alias for layers."
+        return self.layers
+
+    @property
     def _all_objects(self) -> dict:
         "All morphological layers and annotation layers in a single dictionary."
         return {**self._managed_layers, **self._annotations._layers}

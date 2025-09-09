@@ -694,13 +694,15 @@ def import_legacy_meshwork(
     l2_skeleton : bool
         Whether to import the skeleton as a level 2 skeleton (True, puts "mesh" data into cell.graph) or as a mesh (False, puts "mesh" data into cell.mesh).
     as_pcg_skel : bool
-        Whether to process the skeleton to remap pcg-skel built skeleton annotations into labels.
+        Whether to process the skeleton to remap typical pcg-skel built skeleton annotations like segment properties and volume properties into labels.
+        Volume properties are mapped to graph labels (since they are associated with L2 graph vertices) while segment properties are mapped to skeleton labels.
 
     Returns
     -------
     tuple[Cell, np.ndarray]
         The imported Cell object and a boolean mask indicating which mesh vertices correspond to skeleton nodes.
         Note the mask is not pre-applied, since masking removes data in ossify.
+        You can apply the mask with `cell.graph.apply_mask(mask)` (if l2_skeleton is True) or `cell.mesh.apply_mask(mask)` (if l2_skeleton is False).
     """
     mwi = MeshworkImporter(filename, l2_skeleton=l2_skeleton)
     cell, node_mask = mwi.import_cell(process_pcg_skel=as_pcg_skel)
