@@ -3,6 +3,7 @@ from typing import Callable, Optional, Union
 import fastremap
 import numpy as np
 import pandas as pd
+from morphsync.base import DEFAULT_SPATIAL_COLUMNS
 from scipy import sparse, stats
 
 
@@ -38,10 +39,14 @@ def remap_vertices_and_edges(
     return id_map, edgelist_new
 
 
-def process_spatial_columns(col_names: Union[str, list] = "pt_position") -> list[str]:
+def process_spatial_columns(
+    col_names: Optional[Union[str, list]] = None,
+) -> list[str]:
     """
     Process spatial column names into a standard format.
     """
+    if col_names is None:
+        col_names = DEFAULT_SPATIAL_COLUMNS
     if isinstance(col_names, str):
         col_names = [
             f"{col_names}_x",

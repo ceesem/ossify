@@ -5,8 +5,15 @@ repo_name: ceesem/ossify
 
 nav:
 - About: index.md
-- Function Reference:
-    - reference/api.md
+- API Reference:
+    - Overview: reference/index.md
+    - Core Classes: reference/core.md
+    - Data Layers: reference/layers.md
+    - Algorithms: reference/algorithms.md
+    - Plotting: reference/plotting.md
+    - File I/O: reference/io.md
+    - External Integrations: reference/external.md
+    - Complete API: reference/api.md
 - Changelog: changelog.md
 
   
@@ -39,22 +46,32 @@ theme:
     - search.share
     - content.code.copy
     - header.autohide
+
+extra_css:
+  - stylesheets/extra.css
     
 markdown_extensions:
   - admonition
   - attr_list
   - md_in_html
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
 
 plugins:
   - mkdocstrings:
       default_handler: python
       handlers:
         python:
-          import:
+          inventories:
             - https://docs.python.org/3/objects.inv
             - https://numpy.org/doc/stable/objects.inv
             - https://pandas.pydata.org/pandas-docs/stable/objects.inv
-          paths: [.]
+          paths: [src]
           options:
             show_source: false
             docstring_style: numpy
@@ -62,7 +79,6 @@ plugins:
             docstring_options:
               ignore_init_summary: false
             merge_init_into_class: true
-            allow_section_blank_line: false
             show_root_heading: false
             show_root_toc_entry: false
             show_object_full_path: false

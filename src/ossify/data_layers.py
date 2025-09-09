@@ -42,6 +42,8 @@ class EdgeMixin(ABC):
         """
         Get the edges of the layer in dataframe indices.
         """
+        if len(self.layer.edges) == 0:
+            return np.empty((0, 2), dtype=int)
         return self.layer.edges
 
     @property
@@ -49,6 +51,8 @@ class EdgeMixin(ABC):
         """
         Get the edges of the layer as a DataFrame.
         """
+        if len(self.layer.edges_df) == 0:
+            return pd.DataFrame(columns=[0, 1])
         return self.layer.edges_df
 
     @property
@@ -56,6 +60,8 @@ class EdgeMixin(ABC):
         """
         Get the edges of the layer in positional indices.
         """
+        if len(self.layer.edges) == 0:
+            return np.empty((0, 2), dtype=int)
         return self.layer.edges_positional
 
     def _map_edges_to_index(
@@ -552,6 +558,8 @@ class PointMixin(ABC):
         elif isinstance(label, dict):
             label = pd.DataFrame(label, index=self.vertex_index)
         elif isinstance(label, pd.DataFrame) or isinstance(label, pd.Series):
+            # if isinstan/ce(label, pd.Series):
+            # label = label.to_frame()
             label = label.loc[self.vertex_index]
         else:
             raise ValueError("Label must be a list, np.ndarray, dict or pd.DataFrame.")
@@ -1251,6 +1259,7 @@ class GraphLayer(PointMixin, EdgeMixin):
         agg: Union[str, dict] = "count",
         chunk_size: int = 1000,
         validate: bool = False,
+        agg_direction: str = "undirected",
     ) -> Union[pd.Series, pd.DataFrame]:
         """Aggregate a point annotation to a label on the layer.
 
@@ -1266,6 +1275,12 @@ class GraphLayer(PointMixin, EdgeMixin):
             Size of processing chunks for memory efficiency. Default 1000.
         validate : bool, optional
             Whether to validate mapping consistency. Default False.
+        agg_direction : str, optional
+            Direction along the skeleton to consider for aggregation. Options are 'undirected', 'upstream', 'downstream'.
+            "undirected" considers all neighbors within the distance threshold.
+            "upstream" considers only neighbors towards the root.
+            "downstream" considers only neighbors away from the root.
+            Default is 'undirected'.
 
         Returns
         -------
@@ -1277,6 +1292,7 @@ class GraphLayer(PointMixin, EdgeMixin):
             self.csgraph,
             distance_threshold=distance_threshold,
             chunk_size=chunk_size,
+            orientation=agg_direction,
         )
         prox_df = pd.DataFrame(
             {

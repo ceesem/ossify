@@ -1,6 +1,7 @@
 import contextlib
 import copy
-from typing import Any, Generator, Optional, Self, Union
+from functools import partial
+from typing import Any, Callable, Generator, Optional, Self, Union
 
 import numpy as np
 import pandas as pd
@@ -24,103 +25,118 @@ __all__ = [
     "SkeletonLayer",
     "PointCloudLayer",
     "Link",
+    "LayerManager",
+    "AnnotationManager",
 ]
 
 
 class LayerManager:
+    """Unified manager for both morphological layers and annotations with flexible validation."""
+
     def __init__(
         self,
-        managed_layers: dict,
+        managed_layers: Optional[dict] = None,
+        validation: Union[str, Callable] = "any",
+        context: str = "layer",
+        initial_layers: Optional[list] = None,
     ):
-        self._managed_layers = managed_layers
+        """Initialize the unified layer manager.
+
+        Parameters
+        ----------
+        managed_layers : dict, optional
+            Dictionary to store layers in. If None, creates new dict.
+        validation : str or callable, default 'any'
+            Type validation mode:
+            - 'any': Accept any layer type
+            - 'point_cloud_only': Only accept PointCloudLayer
+            - callable: Custom validation function
+        context : str, default 'layer'
+            Context name for error messages ('layer', 'annotation', etc.)
+        initial_layers : list, optional
+            Initial layers to add (with validation)
+        """
+        self._layers = managed_layers if managed_layers is not None else {}
+        self._validation = validation
+        self._context = context
+
+        # Add initial layers if provided
+        if initial_layers is not None:
+            for layer in initial_layers:
+                self._add(layer)
+
+    def _validate_layer(self, layer) -> None:
+        """Validate layer type based on validation mode."""
+        if self._validation == "any":
+            # Accept any layer type
+            return
+        elif self._validation == "point_cloud_only":
+            if not isinstance(layer, PointCloudLayer):
+                raise ValueError(
+                    f"{self._context.capitalize()} layers must be PointCloudLayer instances."
+                )
+        elif callable(self._validation):
+            if not self._validation(layer):
+                raise ValueError(
+                    f"Layer validation failed for {self._context}: {layer}"
+                )
+        else:
+            raise ValueError(f"Unknown validation mode: {self._validation}")
 
     @property
     def names(self) -> list:
         """Return a list of managed layer names."""
-        return list(self._managed_layers.keys())
+        return list(self._layers.keys())
 
     def _add(
         self, layer: Union[SkeletonLayer, GraphLayer, MeshLayer, PointCloudLayer]
     ) -> None:
         """Add a new layer to the manager. Should only be used by the Cell object."""
-        self._managed_layers[layer.name] = layer
+        self._validate_layer(layer)
+        self._layers[layer.name] = layer
 
-    def __getitem__(self, name: str) -> Optional[Union[SkeletonLayer, GraphLayer]]:
-        return self._managed_layers.get(name)
+    def get(self, name: str, default: Any = None):
+        """Get a layer by name with optional default."""
+        return self._layers.get(name, default)
 
-    def __getattr__(self, name: str) -> Optional[Union[SkeletonLayer, GraphLayer]]:
-        if name in self._managed_layers:
-            return self._managed_layers[name]
+    def __getitem__(self, name: str):
+        return self._layers[name]
+
+    def __getattr__(self, name: str):
+        if name in self._layers:
+            return self._layers[name]
         else:
-            raise AttributeError(f'Layer "{name}" does not exist.')
+            raise AttributeError(
+                f'{self._context.capitalize()} "{name}" does not exist.'
+            )
 
     def __dir__(self):
-        return super().__dir__() + list(self._managed_layers.keys())
+        return super().__dir__() + list(self._layers.keys())
+
+    def __contains__(self, name: str) -> bool:
+        """Check if a layer exists by name."""
+        return name in self._layers
 
     def __iter__(self):
         """Iterate over managed layers in order."""
-        return iter(self._managed_layers.values())
+        return iter(self._layers.values())
 
     def __len__(self):
-        return len(self._managed_layers)
+        return len(self._layers)
+
+    def _remove(self, name: str) -> None:
+        """Remove a layer from the manager. Should only be used internally."""
+        if name not in self._layers:
+            raise ValueError(f'{self._context.capitalize()} "{name}" does not exist.')
+        del self._layers[name]
 
     def __repr__(self) -> str:
-        return str(self.names)
+        return f"LayerManager({self._context}s={list(self._layers.keys())})"
 
 
-class AnnotationManager:
-    def __init__(
-        self,
-        managed_layers: list,
-        annotation_layers: Optional[list] = None,
-    ):
-        self._annotations = {}
-        self._managed_layers = managed_layers
-        if annotation_layers is not None:
-            for layer in annotation_layers:
-                if issubclass(type(layer), PointCloudLayer):
-                    self._add(layer)
-                else:
-                    raise ValueError("Annotation layers must be point clouds.")
-
-    def _add(self, layer: PointCloudLayer) -> None:
-        "Add a layer to the annotations"
-        self._annotations[layer.name] = layer
-
-    def get(self, name: str, default: Any = None) -> PointCloudLayer:
-        "Get a point cloud layer by name."
-        return self._annotations.get(name, default)
-
-    def __getitem__(self, name: str) -> PointCloudLayer:
-        return self._annotations[name]
-
-    def __getattr__(self, name: str) -> PointCloudLayer:
-        if name in self._annotations:
-            return self._annotations[name]
-        else:
-            raise AttributeError(f'Annotation "{name}" does not exist.')
-
-    def __len__(self):
-        return len(self._annotations)
-
-    def __dir__(self):
-        return super().__dir__() + list(self._annotations.keys())
-
-    @property
-    def names(self) -> list:
-        """Return a list of annotation names."""
-        return list(self._annotations.keys())
-
-    def __contains__(self, name: str) -> bool:
-        """Check if an annotation exists by name."""
-        return name in self._annotations
-
-    def __iter__(self):
-        """Iterate over annotations in order."""
-        return iter(self._annotations.values())
-
-    def __repr__(self) -> str:
-        return f"AnnotationManager(annotations={list(self._annotations.keys())})"
+AnnotationManager = partial(
+    LayerManager, validation="point_cloud_only", context="annotation"
+)
 
 
 class Cell:
@@ -146,10 +162,14 @@ class Cell:
         else:
             self._meta = copy.copy(meta)
         self._managed_layers = {}
-        self._layers = LayerManager(self._managed_layers)
-        self._annotations = AnnotationManager(
-            managed_layers=self._managed_layers,
-            annotation_layers=annotation_layers,
+        self._layers = LayerManager(
+            managed_layers=self._managed_layers, validation="any", context="layer"
+        )
+        self._annotations = LayerManager(
+            managed_layers=None,  # Separate dict for annotations
+            validation="point_cloud_only",
+            context="annotation",
+            initial_layers=annotation_layers,
         )
 
     @property
@@ -193,14 +213,14 @@ class Cell:
         return self._managed_layers[self.MESH_LN]
 
     @property
-    def annotations(self) -> AnnotationManager:
+    def annotations(self) -> LayerManager:
         "Annotation Manager for the cell, holding all annotation layers."
         return self._annotations
 
     @property
     def _all_objects(self) -> dict:
         "All morphological layers and annotation layers in a single dictionary."
-        return {**self._managed_layers, **self._annotations._annotations}
+        return {**self._managed_layers, **self._annotations._layers}
 
     def add_layer(
         self,
@@ -406,15 +426,16 @@ class Cell:
     def add_point_annotations(
         self,
         name: str,
-        vertices: Union[np.ndarray, pd.DataFrame],
+        vertices: Optional[Union[np.ndarray, pd.DataFrame]] = None,
         spatial_columns: Optional[list] = None,
         *,
         vertex_index: Optional[Union[str, np.ndarray]] = None,
         labels: Optional[Union[dict, pd.DataFrame]] = None,
         linkage: Optional[Link] = None,
+        vertices_from_linkage: bool = False,
     ) -> Self:
         """
-        Add point annotations to the MeshWork object.
+        Add point annotations to the MeshWork object.  This is intended for annotations which are typically sparse and represent specific features, unlike general point clouds that represent the morphology of the cell.
 
         Parameters
         ----------
@@ -424,6 +445,91 @@ class Cell:
             The vertices of the annotation layer.
         spatial_columns : Optional[list]
             The spatial columns for the annotation layer.
+        vertex_index : Optional[Union[str, np.ndarray]]
+            The vertex index for the annotation layer.
+        labels : Optional[Union[dict, pd.DataFrame]]
+            The labels for the annotation layer.
+        linkage : Optional[Link]
+            The linkage information for the annotation layer. Typically, you will define the target vertices for annotations.
+        vertices_from_linkage : bool
+            If True, the vertices will be inferred from the linkage mapping rather than the provided vertices. This is useful if you want to create an annotation layer that directly maps to another layer without providing separate vertex coordinates.
+
+        Returns
+        -------
+        Self
+        """
+
+        if name in self._managed_layers:
+            raise ValueError(f"Layer '{name}' already exists.")
+
+        if isinstance(spatial_columns, str) or spatial_columns is None:
+            spatial_columns = utils.process_spatial_columns(col_names=spatial_columns)
+
+        if vertices is None and not vertices_from_linkage:
+            raise ValueError(
+                "Either vertices or vertices_from_linkage must be provided."
+            )
+
+        if isinstance(vertices, PointCloudLayer):
+            anno = PointCloudLayer(
+                name=name,
+                vertices=vertices.vertices,
+                spatial_columns=vertices.spatial_columns,
+                morphsync=self._morphsync,
+                linkage=linkage,
+            )
+        else:
+            if vertices_from_linkage:
+                if not isinstance(vertices, pd.DataFrame):
+                    raise ValueError(
+                        "Vertices must be a DataFrame when using vertices_from_linkage."
+                    )
+                if linkage.map_value_is_index:
+                    sp_verts = (
+                        self._all_objects[linkage.target]
+                        .vertex_df.loc[linkage.mapping]
+                        .values
+                    )
+                else:
+                    sp_verts = self._all_objects[linkage.target].vertices[
+                        linkage.mapping
+                    ]
+                for ii, col in enumerate(spatial_columns):
+                    vertices[col] = sp_verts[:, ii]
+            anno = PointCloudLayer(
+                name=name,
+                vertices=vertices,
+                spatial_columns=spatial_columns,
+                vertex_index=vertex_index,
+                labels=labels,
+                morphsync=self._morphsync,
+                linkage=linkage,
+            )
+        anno._register_cell(self)
+        self._annotations._add(anno)
+        return self
+
+    def add_point_layer(
+        self,
+        name: str,
+        vertices: Union[np.ndarray, pd.DataFrame],
+        spatial_columns: Optional[list] = None,
+        *,
+        vertex_index: Optional[Union[str, np.ndarray]] = None,
+        labels: Optional[Union[dict, pd.DataFrame]] = None,
+        linkage: Optional[Link] = None,
+    ) -> Self:
+        """
+        Add point layer to the MeshWork object. This is intended for general point clouds that represent the morphology of the cell, unlike annotations which are typically sparse and represent specific features.
+
+        Parameters
+        ----------
+        name : str
+            The name of the point layer.
+        vertices : Union[np.ndarray, pd.DataFrame]
+            The vertices of the point layer.
+        spatial_columns : Optional[list]
+            The spatial columns for the point layer.
         vertex_index : Optional[Union[str, np.ndarray]]
             The vertex index for the annotation layer.
         labels : Optional[Union[dict, pd.DataFrame]]
@@ -443,7 +549,7 @@ class Cell:
             spatial_columns = utils.process_spatial_columns(col_names=spatial_columns)
 
         if isinstance(vertices, PointCloudLayer):
-            anno = PointCloudLayer(
+            layer = PointCloudLayer(
                 name=name,
                 vertices=vertices.vertices,
                 spatial_columns=vertices.spatial_columns,
@@ -451,7 +557,7 @@ class Cell:
                 linkage=linkage,
             )
         else:
-            anno = PointCloudLayer(
+            layer = PointCloudLayer(
                 name=name,
                 vertices=vertices,
                 spatial_columns=spatial_columns,
@@ -460,8 +566,8 @@ class Cell:
                 morphsync=self._morphsync,
                 linkage=linkage,
             )
-        anno._register_cell(self)
-        self._annotations._add(anno)
+        layer._register_cell(self)
+        self._layers._add(layer)
         return self
 
     def apply_mask(
@@ -628,3 +734,84 @@ class Cell:
             yield nrn_out
         finally:
             pass
+
+    def _cleanup_links(self, layer_name: str) -> None:
+        """Remove all links involving the specified layer from MorphSync."""
+        links_to_remove = []
+        for link_key in self._morphsync.links.keys():
+            if layer_name in link_key:
+                links_to_remove.append(link_key)
+
+        for link_key in links_to_remove:
+            del self._morphsync.links[link_key]
+
+    def remove_layer(self, name: str) -> Self:
+        """Remove a morphological layer from the Cell.
+
+        Parameters
+        ----------
+        name : str
+            The name of the layer to remove
+
+        Returns
+        -------
+        Self
+            The Cell object for method chaining
+
+        Raises
+        ------
+        ValueError
+            If the layer does not exist or is a core layer that cannot be removed
+        """
+        # Check if layer exists
+        if name not in self._managed_layers:
+            raise ValueError(f'Layer "{name}" does not exist.')
+
+        # Prevent removal of core layers if they have specific restrictions
+        # (This could be extended based on business logic requirements)
+
+        # Remove from layer manager
+        self._layers._remove(name)
+
+        # Remove from MorphSync layers
+        if name in self._morphsync.layers:
+            del self._morphsync.layers[name]
+
+        # Clean up all related links
+        self._cleanup_links(name)
+
+        return self
+
+    def remove_annotation(self, name: str) -> Self:
+        """Remove an annotation layer from the Cell.
+
+        Parameters
+        ----------
+        name : str
+            The name of the annotation to remove
+
+        Returns
+        -------
+        Self
+            The Cell object for method chaining
+
+        Raises
+        ------
+        ValueError
+            If the annotation does not exist
+        """
+        # Check if annotation exists
+        if name not in self._annotations:
+            raise ValueError(f'Annotation "{name}" does not exist.')
+
+        # Remove from annotation manager
+        self._annotations._remove(name)
+
+        # Remove from MorphSync layers
+        if name in self._morphsync.layers:
+            del self._morphsync.layers[name]
+
+        # Clean up all related links
+        self._cleanup_links(name)
+
+        return self

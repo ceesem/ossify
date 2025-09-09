@@ -545,20 +545,6 @@ wheels = [
 ]
 
 [[package]]
-name = "cmcrameri"
-version = "1.9"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "matplotlib" },
-    { name = "numpy" },
-    { name = "packaging" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/fe/18/61ac7ea74f7c4d82ce3a1d49e9a26492b0df5a8792025066efcb318a88e2/cmcrameri-1.9.tar.gz", hash = "sha256:56faf9b7f53eb03fed450137bec7dc25c1854929d7b841b9c75616fc2c357640", size = 260122, upload-time = "2024-04-22T08:23:54.5Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f9/a2/4c88f17ee50af5093978c4d989936883f959d7d81e1e2fa093863b080c1c/cmcrameri-1.9-py3-none-any.whl", hash = "sha256:daefca10cc405f437ad292bad52f704c2ba8ae692b3e100da8c25f641997e337", size = 277448, upload-time = "2024-04-22T08:23:52.894Z" },
-]
-
-[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -2705,14 +2691,20 @@ dependencies = [
     { name = "caveclient" },
     { name = "cloud-files" },
     { name = "cloud-volume" },
-    { name = "cmcrameri" },
     { name = "cortical-tools" },
     { name = "matplotlib" },
+    { name = "meshparty" },
     { name = "morphsync" },
     { name = "numpy" },
     { name = "orjson" },
+    { name = "pcg-skel" },
     { name = "scipy" },
     { name = "trimesh", extra = ["easy"] },
+]
+
+[package.optional-dependencies]
+legacy = [
+    { name = "h5py" },
 ]
 
 [package.dev-dependencies]
@@ -2746,15 +2738,18 @@ requires-dist = [
     { name = "caveclient", specifier = ">=7.6.0" },
     { name = "cloud-files", specifier = ">=5.8.0" },
     { name = "cloud-volume", specifier = ">=11.1.5" },
-    { name = "cmcrameri", specifier = ">=1.9" },
     { name = "cortical-tools", editable = "../cortical_tools" },
+    { name = "h5py", marker = "extra == 'legacy'", specifier = ">=3.14.0" },
     { name = "matplotlib", specifier = ">=3.10.6" },
+    { name = "meshparty", specifier = ">=2.0.3" },
     { name = "morphsync", editable = "../morphsync" },
     { name = "numpy", specifier = ">=2.0.2" },
     { name = "orjson", specifier = ">=3.10.15" },
+    { name = "pcg-skel", specifier = ">=1.3.1" },
     { name = "scipy", specifier = ">=1.13.1" },
     { name = "trimesh", extras = ["easy"], specifier = ">=4.6.2" },
 ]
+provides-extras = ["legacy"]
 
 [package.metadata.requires-dev]
 dev = [

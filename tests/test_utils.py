@@ -90,7 +90,7 @@ class TestProcessSpatialColumns:
         """Test processing spatial columns with default input."""
         result = utils.process_spatial_columns()
 
-        assert result == ["pt_position_x", "pt_position_y", "pt_position_z"]
+        assert result == ["x", "y", "z"]
 
 
 class TestSinglePathLength:

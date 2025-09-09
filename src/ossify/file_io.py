@@ -12,13 +12,15 @@ import pyarrow as pa
 from numpy import savez_compressed
 from scipy.sparse import load_npz, save_npz
 
+from ossify import utils
+
 from .base import Cell
 from .data_layers import GraphLayer, Link, MeshLayer, PointCloudLayer, SkeletonLayer
 
 if TYPE_CHECKING:
     import scipy
 
-__all__ = ["load_cell", "save_cell", "CellFiles"]
+__all__ = ["load_cell", "save_cell", "CellFiles", "import_legacy_meshwork"]
 
 PUTABLE_SCHEMES = ["s3", "gs", "file", "mem"]
 METADATA_FILENAME = "metadata.json"
@@ -678,3 +680,270 @@ def build_linkage(
         )
     )
     return cell
+
+
+def import_legacy_meshwork(
+    filename: Union[str, BinaryIO], l2_skeleton: bool = True, as_pcg_skel: bool = False
+) -> tuple[Cell, np.ndarray]:
+    """Import a legacy MeshWork file as a Cell object. Requires `h5py`, which can be installed with `pip install ossify[legacy]`.
+
+    Parameters
+    ----------
+    filename : Union[str, BinaryIO]
+        The path to the MeshWork file or an open binary file object.
+    l2_skeleton : bool
+        Whether to import the skeleton as a level 2 skeleton (True, puts "mesh" data into cell.graph) or as a mesh (False, puts "mesh" data into cell.mesh).
+    as_pcg_skel : bool
+        Whether to process the skeleton to remap pcg-skel built skeleton annotations into labels.
+
+    Returns
+    -------
+    tuple[Cell, np.ndarray]
+        The imported Cell object and a boolean mask indicating which mesh vertices correspond to skeleton nodes.
+        Note the mask is not pre-applied, since masking removes data in ossify.
+    """
+    mwi = MeshworkImporter(filename, l2_skeleton=l2_skeleton)
+    cell, node_mask = mwi.import_cell(process_pcg_skel=as_pcg_skel)
+    return cell, node_mask
+
+
+def _process_pcg_skel_import(cell: Cell) -> Cell:
+    if "compartment" in cell.annotations:
+        cell.skeleton.add_label(
+            cell.skeleton.map_annotations_to_label(
+                "compartment",
+                distance_threshold=0,
+                agg={"compartment": ("compartment", "mean")},
+            ),
+            "compartment",
+        )
+    if "segment_properties" in cell.annotations:
+        labels = cell.skeleton.map_annotations_to_label(
+            "segment_properties",
+            distance_threshold=0,
+            agg={
+                "area": ("area", "mean"),
+                "area_factor": ("area", "mean"),
+                "len": ("len", "mean"),
+                "r_eff": ("r_eff", "mean"),
+                "strahler": ("strahler", "mean"),
+                "vol": ("vol", "mean"),
+            },
+        )
+        cell.skeleton.add_label(labels)
+    if "lvl2_ids" in cell.annotations:
+        cell.graph.add_label(cell.annotations.lvl2_ids.labels[["lvl2_id"]])
+    if "is_axon" in cell.annotations:
+        is_axon = cell.skeleton.nodes.index.isin(cell.annotations.is_axon.vertex_index)
+        cell.skeleton.add_label(is_axon, "is_axon")
+    if "vol_prop" in cell.annotations:
+        cell.graph.add_label(cell.annotations.vol_prop.labels)
+    for anno in [
+        "compartment",
+        "segment_properties",
+        "lvl2_ids",
+        "is_axon",
+        "vol_prop",
+    ]:
+        if anno in cell.annotations:
+            cell.remove_annotation(anno)
+    return cell
+
+
+class MeshworkImporter:
+    NULL_VERSION = 1
+
+    def __init__(self, filename: Union[str, BinaryIO], l2_skeleton: bool = True):
+        try:
+            import h5py
+
+            self.h5py = h5py
+        except ImportError:
+            self.h5py = None
+            raise ImportError(
+                "h5py is required to import legacy MeshWork files. Install ossify with `pip install ossify[legacy]` to enable importing legacy meshwork files."
+            )
+        self.file = filename
+        self.l2_skeleton = l2_skeleton
+
+        self.meta = None
+        self.cell = None
+        self.mesh_mask = None
+        self.node_mask = None
+        self.anno_load_function = {
+            1: self._load_dataframe_pandas,
+            2: self._load_dataframe_generic,
+        }
+        self.annotation_dfs = None
+
+    def import_cell(self, process_pcg_skel: bool = False) -> tuple[Cell, np.ndarray]:
+        self.import_metadata()
+        self.cell = Cell(name=self.meta.get("seg_id", "unknown"), meta=self.meta)
+
+        self.import_mesh(self.l2_skeleton)
+        self.import_skeleton()
+        self.import_annotations()
+        if process_pcg_skel:
+            cell_out = _process_pcg_skel_import(self.cell)
+            return cell_out, self.node_mask
+        else:
+            return self.cell, self.node_mask
+
+    @property
+    def version(self):
+        return self.meta.get("version", self.NULL_VERSION)
+
+    def _load_dataframe_generic(self, table_name):
+        key = f"annotations/{table_name}/data"
+        with self.h5py.File(self.file, "r") as f:
+            dat = f[key][()].tobytes()
+            df = pd.DataFrame.from_records(orjson.loads(dat))
+            try:
+                df.index = np.array(df.index, dtype="int")
+            except:
+                pass
+        return df
+
+    def _load_dataframe_pandas(self, table_name):
+        return pd.read_hdf(self.file, f"annotations/{table_name}/data")
+
+    def import_metadata(self):
+        meta = {}
+        with self.h5py.File(self.file, "r") as f:
+            meta["seg_id"] = f.attrs.get("seg_id", None)
+            meta["voxel_resolution"] = f.attrs.get("voxel_resolution", None)
+            meta["version"] = f.attrs.get("version", self.NULL_VERSION)
+        self.meta = meta
+
+    def import_mesh(self, l2_skeleton: bool = True):
+        with self.h5py.File(self.file, "r") as f:
+            verts = f["mesh/vertices"][()]
+            faces = f["mesh/faces"][()]
+            if len(faces.shape) == 1:
+                faces = faces.reshape(-1, 3)
+
+            if "link_edges" in f["mesh"].keys():
+                link_edges = f["mesh/link_edges"][()]
+            else:
+                link_edges = None
+
+            node_mask = f["mesh/node_mask"][()]
+            voxel_scaling = f["mesh"].attrs.get("voxel_scaling", None)
+            mesh_mask = f["mesh/mesh_mask"][()]
+
+        if voxel_scaling is None:
+            voxel_scaling = np.atleast_2d(np.asarray([1.0, 1.0, 1.0]))
+        verts = verts * voxel_scaling
+
+        if l2_skeleton:
+            self.cell.add_graph(
+                vertices=verts,
+                edges=link_edges,
+            )
+        else:
+            self.cell.add_mesh(
+                vertices=verts,
+                faces=faces,
+            )
+        self.mesh_mask = mesh_mask
+        self.node_mask = node_mask
+
+    def import_skeleton(self):
+        with self.h5py.File(self.file, "r") as f:
+            if "skeleton" not in f:
+                return
+
+            if "meta" in f["skeleton"].keys():
+                meta = orjson.loads(f["skeleton/meta"][()].tobytes())
+            else:
+                meta = {}
+
+            verts = f["skeleton/vertices"][()]
+            edges = f["skeleton/edges"][()]
+            root = f["skeleton/root"][()]
+            mesh_to_skel_map = f["skeleton/mesh_to_skel_map"][()]
+
+            if "radius" in f["skeleton"].keys():
+                radius = f["skeleton/radius"][()]
+            else:
+                radius = None
+            voxel_scaling = f["skeleton"].attrs.get("voxel_scaling", None)
+
+            if voxel_scaling is None:
+                voxel_scaling = np.atleast_2d(np.asarray([1.0, 1.0, 1.0]))
+            verts = verts * voxel_scaling
+
+        if self.l2_skeleton:
+            source_layer = "graph"
+        else:
+            source_layer = "mesh"
+        self.cell.add_skeleton(
+            vertices=verts,
+            edges=edges,
+            root=root,
+            labels={"radius": radius} if radius is not None else None,
+            linkage=Link(
+                mesh_to_skel_map, source=source_layer, map_value_is_index=False
+            ),
+        )
+
+    def import_annotations(self):
+        with self.h5py.File(self.file, "r") as f:
+            if "annotations" not in f:
+                return {}
+            table_names = list(f["annotations"].keys())
+
+            annotation_dfs = {}
+            for table_name in table_names:
+                annotation_dfs[table_name] = {}
+                annotation_dfs[table_name]["data"] = self.anno_load_function[
+                    self.version
+                ](table_name)
+                dset = f[f"annotations/{table_name}"]
+                annotation_dfs[table_name]["anchor_to_mesh"] = bool(
+                    dset.attrs.get("anchor_to_mesh")
+                )
+                annotation_dfs[table_name]["point_column"] = dset.attrs.get(
+                    "point_column", None
+                )
+                annotation_dfs[table_name]["max_distance"] = dset.attrs.get(
+                    "max_distance"
+                )
+                if bool(dset.attrs.get("defined_index", False)):
+                    annotation_dfs[table_name]["index_column"] = dset.attrs.get(
+                        "index_column", None
+                    )
+        for name, df_info in annotation_dfs.items():
+            df = df_info["data"]
+
+            pt_col = df.get("point_column", None)
+            if pt_col is None:
+                vertices_from_linkage = True
+                spatial_cols = None
+            else:
+                vertices_from_linkage = False
+                spatial_cols = utils.process_spatial_columns(pt_col)
+                for ii, c in enumerate(spatial_cols):
+                    df[c] = df[pt_col].values[:, ii]
+                df.drop(columns=[pt_col], inplace=True)
+
+            linkage_col = df_info.get("index_column")
+            mapping = df[linkage_col].values
+            df.drop(columns=[linkage_col], inplace=True)
+
+            if self.l2_skeleton:
+                target = "graph"
+            else:
+                target = "mesh"
+
+            self.cell.add_point_annotations(
+                name,
+                vertices=df,
+                spatial_columns=None,
+                linkage=Link(
+                    mapping=mapping,
+                    target=target,
+                    map_value_is_index=False,
+                ),
+                vertices_from_linkage=vertices_from_linkage,
+            )

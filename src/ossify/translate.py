@@ -166,6 +166,8 @@ def cell_from_client(
             meta={
                 "source": f"SkeletonService({client.local_server})",
                 "timestamp": ts,
+                "datastack": client.datastack_name,
+                "root_id": root_id,
             },
         )
         .add_graph(

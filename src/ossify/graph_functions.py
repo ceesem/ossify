@@ -1,6 +1,6 @@
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 from scipy import sparse
@@ -832,7 +832,11 @@ def build_cover_paths(
 
 
 def build_proximity_lists_chunked(
-    vertices, csgraph, distance_threshold, chunk_size=1000
+    vertices,
+    csgraph,
+    distance_threshold,
+    chunk_size=1000,
+    orientation: Literal["downstream", "upstream", "undirected"] = "undirected",
 ):
     n_vertices = len(vertices)
     index_list = []
@@ -841,9 +845,23 @@ def build_proximity_lists_chunked(
         end_idx = min(start_idx + chunk_size, n_vertices)
         indices = np.arange(start_idx, end_idx)
 
-        distances = sparse.csgraph.dijkstra(
-            csgraph, indices=indices, directed=False, limit=distance_threshold
-        )
+        match orientation:
+            case "undirected":
+                distances = sparse.csgraph.dijkstra(
+                    csgraph, indices=indices, directed=False, limit=distance_threshold
+                )
+            case "downstream":
+                distances = sparse.csgraph.dijkstra(
+                    csgraph, indices=indices, directed=True, limit=distance_threshold
+                )
+            case "upstream":
+                distances = sparse.csgraph.dijkstra(
+                    csgraph.T, indices=indices, directed=True, limit=distance_threshold
+                )
+            case _:
+                raise ValueError(
+                    "orientation must be 'downstream', 'upstream', or 'undirected'"
+                )
         for ii, idx in enumerate(indices):
             proximal_indices = np.flatnonzero(distances[ii] <= distance_threshold)
             index_list.append([idx] * len(proximal_indices))

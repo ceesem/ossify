@@ -310,3 +310,51 @@ class TestRealDataCompatibility:
         if cell_with_mesh.mesh is not None:
             assert loaded_cell.mesh.n_vertices == cell_with_mesh.mesh.n_vertices
             assert loaded_cell.mesh.faces.shape[0] == cell_with_mesh.mesh.faces.shape[0]
+
+
+class TestLegacyMeshworkImport:
+    """Tests for legacy meshwork import functionality."""
+
+    def test_import_legacy_meshwork_as_pcg_skel_true(self):
+        """Test import_legacy_meshwork with l2_skeleton=True and as_pcg_skel=True."""
+        test_file = "tests/data/v1dd_864691132533489754.h5"
+
+        # Import the legacy meshwork file
+        cell, node_mask = file_io.import_legacy_meshwork(
+            test_file, l2_skeleton=True, as_pcg_skel=True
+        )
+
+        # Verify the cell was created
+        assert cell is not None
+        assert isinstance(cell, Cell)
+        assert node_mask is not None
+        assert isinstance(node_mask, np.ndarray)
+
+        # Verify it has the expected structure for l2_skeleton=True
+        assert cell.graph is not None  # Should have graph layer when l2_skeleton=True
+        assert cell.skeleton is not None  # Should also have skeleton
+
+        # Verify node_mask is boolean array
+        assert node_mask.dtype == bool
+
+    def test_import_legacy_meshwork_as_pcg_skel_false(self):
+        """Test import_legacy_meshwork with l2_skeleton=True and as_pcg_skel=False."""
+        test_file = "tests/data/v1dd_864691132533489754.h5"
+
+        # Import the legacy meshwork file
+        cell, node_mask = file_io.import_legacy_meshwork(
+            test_file, l2_skeleton=True, as_pcg_skel=False
+        )
+
+        # Verify the cell was created
+        assert cell is not None
+        assert isinstance(cell, Cell)
+        assert node_mask is not None
+        assert isinstance(node_mask, np.ndarray)
+
+        # Verify it has the expected structure for l2_skeleton=True
+        assert cell.graph is not None  # Should have graph layer when l2_skeleton=True
+        assert cell.skeleton is not None  # Should also have skeleton
+
+        # Verify node_mask is boolean array
+        assert node_mask.dtype == bool
