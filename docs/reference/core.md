@@ -39,6 +39,7 @@ The core classes provide the foundational architecture for neuromorphological da
 ## Manager Classes {: .doc-heading}
 
 These classes are used internally by `Cell` to organize and access different types of data layers.
+Users should not need to interact with these directly.
 
 ### LayerManager
 

@@ -1,7 +1,7 @@
 import contextlib
 import copy
 from functools import partial
-from typing import Any, Callable, Generator, Optional, Self, Union
+from typing import Any, Callable, Generator, List, Optional, Self, Union
 
 import numpy as np
 import pandas as pd
@@ -840,3 +840,497 @@ class Cell:
         self._cleanup_links(name)
 
         return self
+
+    def describe(self, html: bool = False) -> None:
+        """Generate a hierarchical summary description of the cell and its layers.
+
+        Provides a tree-like overview including:
+        - Cell name and basic info
+        - Layers section with expandable details
+        - Annotations section with expandable details
+
+        Parameters
+        ----------
+        html : bool, optional
+            If True, create expandable HTML widgets in Jupyter.
+            If False, print formatted string (default).
+
+        Returns
+        -------
+        None
+            Always returns None (prints text or displays HTML widgets)
+
+        Examples
+        --------
+        >>> cell.describe()  # Prints formatted string
+        >>> cell.describe(html=True)  # Shows HTML widgets in Jupyter
+        """
+        if html:
+            self._describe_html()
+        else:
+            print(self._describe_text())
+
+    def _describe_text(self) -> str:
+        """Generate text-based hierarchical description."""
+        lines = []
+
+        # Cell header
+        cell_name = str(self.name) if self.name is not None else "Unnamed"
+        lines.append(f"Cell: {cell_name}")
+        lines.append("├─ Layers")
+
+        # Core "blessed" layers - always show these
+        core_layers = [
+            (self.MESH_LN, self.mesh, "mesh"),
+            (self.SKEL_LN, self.skeleton, "skeleton"),
+            (self.GRAPH_LN, self.graph, "graph"),
+        ]
+
+        # Additional layers (non-core layers)
+        core_layer_names = {self.MESH_LN, self.SKEL_LN, self.GRAPH_LN}
+        additional_layers = [
+            layer for layer in self.layers if layer.name not in core_layer_names
+        ]
+
+        total_layers = len(core_layers) + len(additional_layers)
+        layer_count = 0
+
+        # Process core layers
+        for layer_name, layer_obj, layer_type in core_layers:
+            layer_count += 1
+            is_last_layer = layer_count == total_layers and len(self.annotations) == 0
+            is_last_before_annotations = (
+                layer_count == total_layers and len(self.annotations) > 0
+            )
+
+            if is_last_layer:
+                prefix = "   └─"
+                continuation = "     "
+            elif is_last_before_annotations:
+                prefix = "   ├─"
+                continuation = "   │ "
+            else:
+                prefix = "   ├─"
+                continuation = "   │ "
+
+            if layer_obj is not None:
+                lines.append(f"{prefix} {layer_name} ({layer_type})")
+                lines.append(f"{continuation}   n_vertices: {len(layer_obj.vertices)}")
+
+                # Add specific metrics based on layer type
+                if hasattr(layer_obj, "faces"):  # Mesh layers
+                    face_count = (
+                        len(layer_obj.faces) if len(layer_obj.faces.shape) > 1 else 0
+                    )
+                    lines.append(f"{continuation}   n_faces: {face_count}")
+                elif hasattr(layer_obj, "edges"):  # Graph/Skeleton layers
+                    edge_count = (
+                        len(layer_obj.edges) if len(layer_obj.edges.shape) > 1 else 0
+                    )
+                    lines.append(f"{continuation}   n_edges: {edge_count}")
+
+                # Add label names
+                if hasattr(layer_obj, "label_names") and len(layer_obj.label_names) > 0:
+                    label_list = ", ".join(layer_obj.label_names)
+                    label_line = f"{continuation}   labels: [{label_list}]"
+                    lines.extend(
+                        self._wrap_line(label_line, 120, continuation + "           ")
+                    )
+                else:
+                    lines.append(f"{continuation}   labels: []")
+            else:
+                lines.append(f"{prefix} {layer_name} ({layer_type})")
+                lines.append(f"{continuation}   not present")
+
+        # Process additional layers
+        for i, layer in enumerate(additional_layers):
+            layer_count += 1
+            is_last_layer = layer_count == total_layers and len(self.annotations) == 0
+            is_last_before_annotations = (
+                layer_count == total_layers and len(self.annotations) > 0
+            )
+
+            if is_last_layer:
+                prefix = "   └─"
+                continuation = "     "
+            elif is_last_before_annotations:
+                prefix = "   ├─"
+                continuation = "   │ "
+            else:
+                prefix = "   ├─"
+                continuation = "   │ "
+
+            lines.append(f"{prefix} {layer.name} ({layer.layer_type})")
+            lines.append(f"{continuation}   n_vertices: {len(layer.vertices)}")
+
+            # Add specific metrics based on layer type
+            if hasattr(layer, "faces"):  # Mesh layers
+                face_count = len(layer.faces) if len(layer.faces.shape) > 1 else 0
+                lines.append(f"{continuation}   n_faces: {face_count}")
+            elif hasattr(layer, "edges"):  # Graph/Skeleton layers
+                edge_count = len(layer.edges) if len(layer.edges.shape) > 1 else 0
+                lines.append(f"{continuation}   n_edges: {edge_count}")
+
+            # Add label names
+            if hasattr(layer, "label_names") and len(layer.label_names) > 0:
+                label_list = ", ".join(layer.label_names)
+                label_line = f"{continuation}   labels: [{label_list}]"
+                lines.extend(
+                    self._wrap_line(label_line, 120, continuation + "           ")
+                )
+            else:
+                lines.append(f"{continuation}   labels: []")
+
+        # Annotations section
+        if len(self.annotations) > 0:
+            lines.append("└─ Annotations")
+
+            for i, annotation in enumerate(self.annotations):
+                is_last = i == len(self.annotations) - 1
+                prefix = "   └─" if is_last else "   ├─"
+                continuation = "     " if is_last else "   │ "
+
+                lines.append(f"{prefix} {annotation.name}")
+                lines.append(f"{continuation}   n_vertices: {len(annotation.vertices)}")
+
+                # Add label names
+                if (
+                    hasattr(annotation, "label_names")
+                    and len(annotation.label_names) > 0
+                ):
+                    label_list = ", ".join(annotation.label_names)
+                    label_line = f"{continuation}   labels: [{label_list}]"
+                    lines.extend(
+                        self._wrap_line(label_line, 120, continuation + "           ")
+                    )
+                else:
+                    lines.append(f"{continuation}   labels: []")
+
+        return "\n".join(lines)
+
+    def _wrap_line(
+        self, line: str, max_width: int, continuation_indent: str
+    ) -> List[str]:
+        """Wrap a long line to max_width characters with proper indentation."""
+        if len(line) <= max_width:
+            return [line]
+
+        # Find where the actual content starts (after tree characters and whitespace)
+        content_start = 0
+        for i, char in enumerate(line):
+            if char not in "├└─│ ":
+                content_start = i
+                break
+
+        prefix = line[:content_start]
+        content = line[content_start:]
+
+        # Calculate available width for content
+        available_width = max_width - len(prefix)
+
+        if len(content) <= available_width:
+            return [line]
+
+        # Split the content, preserving brackets and commas
+        wrapped_lines = []
+        current_line = prefix + content
+
+        while len(current_line) > max_width:
+            # Find the best place to break (prefer after comma + space)
+            break_pos = max_width
+
+            # Look for comma + space within reasonable range
+            search_start = max(max_width - 30, len(prefix))
+            for i in range(min(max_width, len(current_line) - 1), search_start, -1):
+                if current_line[i : i + 2] == ", ":
+                    break_pos = i + 2
+                    break
+
+            # If no good break found, break at max_width
+            if break_pos == max_width and break_pos < len(current_line):
+                # Make sure we don't break in the middle of a word
+                while break_pos > len(prefix) and current_line[break_pos] not in ", ":
+                    break_pos -= 1
+                if break_pos <= len(prefix):
+                    break_pos = max_width
+
+            wrapped_lines.append(current_line[:break_pos])
+            current_line = continuation_indent + current_line[break_pos:].lstrip()
+
+        if current_line.strip():
+            wrapped_lines.append(current_line)
+
+        return wrapped_lines
+
+    def _describe_html(self) -> None:
+        """Generate HTML widgets with expandable sections for Jupyter."""
+        try:
+            import uuid
+
+            from IPython.display import HTML, display
+
+            # Generate unique IDs for this cell description
+            cell_id = str(uuid.uuid4())[:8]
+
+            # Cell name
+            cell_name = str(self.name) if self.name is not None else "Unnamed"
+
+            # Build layers section
+            layers_html = self._build_layers_html()
+
+            # Build annotations section
+            annotations_html = self._build_annotations_html()
+
+            # Complete HTML with styling
+            html_content = f"""
+            <style>
+            .cell-describe-{{
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                margin: 10px 0;
+                border-left: 3px solid #007acc;
+                padding-left: 10px;
+            }}
+            .cell-title {{
+                font-size: 18px;
+                font-weight: bold;
+                color: var(--jp-content-font-color1, var(--vscode-foreground, #000000));
+                margin-bottom: 10px;
+                background: var(--jp-layout-color0, var(--vscode-editor-background, transparent));
+                padding: 4px 8px;
+                border-radius: 4px;
+                border: 1px solid var(--jp-border-color1, var(--vscode-panel-border, #007acc));
+            }}
+            .section-header {{
+                background: #f8f9fa;
+                border: 1px solid #dee2e6;
+                padding: 8px 12px;
+                cursor: pointer;
+                user-select: none;
+                margin: 5px 0;
+                border-radius: 4px;
+                transition: background-color 0.2s;
+                color: #000000;
+                font-weight: 500;
+            }}
+            .section-header:hover {{
+                background: #e9ecef;
+            }}
+            .section-header::before {{
+                content: '▶ ';
+                transition: transform 0.2s;
+                display: inline-block;
+            }}
+            .section-header.expanded::before {{
+                transform: rotate(90deg);
+            }}
+            .section-content {{
+                display: none;
+                padding: 10px 15px;
+                margin-left: 20px;
+                border-left: 2px solid #dee2e6;
+                background: #fafbfc;
+            }}
+            .section-content.expanded {{
+                display: block;
+            }}
+            .layer-item {{
+                margin: 8px 0;
+                padding: 6px;
+                background: white;
+                border-radius: 3px;
+                border-left: 3px solid #28a745;
+            }}
+            .layer-item.not-present {{
+                border-left-color: #dc3545;
+                opacity: 0.7;
+            }}
+            .layer-name {{
+                font-weight: bold;
+                color: #495057;
+            }}
+            .layer-details {{
+                font-size: 0.9em;
+                color: #6c757d;
+                margin-top: 4px;
+            }}
+            .annotation-item {{
+                margin: 8px 0;
+                padding: 6px;
+                background: white;
+                border-radius: 3px;
+                border-left: 3px solid #17a2b8;
+            }}
+            </style>
+            
+            <div class="cell-describe">
+                <div class="cell-title">Cell: {cell_name}</div>
+                
+                <div class="section-header" onclick="toggleSection('{cell_id}_layers')">
+                    Layers ({self._count_present_layers()}/{self._count_total_layers()})
+                </div>
+                <div class="section-content" id="{cell_id}_layers">
+                    {layers_html}
+                </div>
+                
+                <div class="section-header" onclick="toggleSection('{cell_id}_annotations')">
+                    Annotations ({len(self.annotations)})
+                </div>
+                <div class="section-content" id="{cell_id}_annotations">
+                    {annotations_html}
+                </div>
+            </div>
+            
+            <script>
+            function toggleSection(sectionId) {{
+                const content = document.getElementById(sectionId);
+                const header = content.previousElementSibling;
+                
+                if (content.classList.contains('expanded')) {{
+                    content.classList.remove('expanded');
+                    header.classList.remove('expanded');
+                }} else {{
+                    content.classList.add('expanded');
+                    header.classList.add('expanded');
+                }}
+            }}
+            </script>
+            """
+
+            display(HTML(html_content))
+            return None
+
+        except ImportError:
+            # Fallback to text version if not in Jupyter
+            return self._describe_text()
+
+    def _count_present_layers(self) -> int:
+        """Count how many core layers are present."""
+        count = 0
+        if self.mesh is not None:
+            count += 1
+        if self.skeleton is not None:
+            count += 1
+        if self.graph is not None:
+            count += 1
+        # Add additional layers
+        core_layer_names = {self.MESH_LN, self.SKEL_LN, self.GRAPH_LN}
+        count += len([l for l in self.layers if l.name not in core_layer_names])
+        return count
+
+    def _count_total_layers(self) -> int:
+        """Count total possible layers (3 core + additional)."""
+        core_layer_names = {self.MESH_LN, self.SKEL_LN, self.GRAPH_LN}
+        additional_count = len(
+            [l for l in self.layers if l.name not in core_layer_names]
+        )
+        return 3 + additional_count
+
+    def _build_layers_html(self) -> str:
+        """Build HTML for layers section."""
+        html_parts = []
+
+        # Core layers
+        core_layers = [
+            (self.MESH_LN, self.mesh, "mesh"),
+            (self.SKEL_LN, self.skeleton, "skeleton"),
+            (self.GRAPH_LN, self.graph, "graph"),
+        ]
+
+        for layer_name, layer_obj, layer_type in core_layers:
+            if layer_obj is not None:
+                vertex_count = len(layer_obj.vertices)
+
+                if hasattr(layer_obj, "faces"):
+                    face_count = (
+                        len(layer_obj.faces) if len(layer_obj.faces.shape) > 1 else 0
+                    )
+                    details = f"vertices: {vertex_count:,} | faces: {face_count:,}"
+                elif hasattr(layer_obj, "edges"):
+                    edge_count = (
+                        len(layer_obj.edges) if len(layer_obj.edges.shape) > 1 else 0
+                    )
+                    details = f"vertices: {vertex_count:,} | edges: {edge_count:,}"
+                else:
+                    details = f"vertices: {vertex_count:,}"
+
+                # Add labels info
+                if hasattr(layer_obj, "label_names") and len(layer_obj.label_names) > 0:
+                    labels_str = ", ".join(layer_obj.label_names)
+                    details += f" | labels: [{labels_str}]"
+                else:
+                    details += " | labels: []"
+
+                html_parts.append(f"""
+                <div class="layer-item">
+                    <div class="layer-name">{layer_name} ({layer_type})</div>
+                    <div class="layer-details">{details}</div>
+                </div>
+                """)
+            else:
+                html_parts.append(f"""
+                <div class="layer-item not-present">
+                    <div class="layer-name">{layer_name} ({layer_type})</div>
+                    <div class="layer-details">not present</div>
+                </div>
+                """)
+
+        # Additional layers
+        core_layer_names = {self.MESH_LN, self.SKEL_LN, self.GRAPH_LN}
+        for layer in self.layers:
+            if layer.name not in core_layer_names:
+                vertex_count = len(layer.vertices)
+
+                if hasattr(layer, "faces"):
+                    face_count = len(layer.faces) if len(layer.faces.shape) > 1 else 0
+                    details = f"vertices: {vertex_count:,} | faces: {face_count:,}"
+                elif hasattr(layer, "edges"):
+                    edge_count = len(layer.edges) if len(layer.edges.shape) > 1 else 0
+                    details = f"vertices: {vertex_count:,} | edges: {edge_count:,}"
+                else:
+                    details = f"vertices: {vertex_count:,}"
+
+                # Add labels info
+                if hasattr(layer, "label_names") and len(layer.label_names) > 0:
+                    labels_str = ", ".join(layer.label_names)
+                    details += f" | labels: [{labels_str}]"
+                else:
+                    details += " | labels: []"
+
+                html_parts.append(f"""
+                <div class="layer-item">
+                    <div class="layer-name">{layer.name} ({layer.layer_type})</div>
+                    <div class="layer-details">{details}</div>
+                </div>
+                """)
+
+        return (
+            "\n".join(html_parts)
+            if html_parts
+            else '<div style="color: #6c757d; font-style: italic;">No layers present</div>'
+        )
+
+    def _build_annotations_html(self) -> str:
+        """Build HTML for annotations section."""
+        if len(self.annotations) == 0:
+            return '<div style="color: #6c757d; font-style: italic;">No annotations present</div>'
+
+        html_parts = []
+        for annotation in self.annotations:
+            vertex_count = len(annotation.vertices)
+            details = f"vertices: {vertex_count:,}"
+
+            # Add labels info
+            if hasattr(annotation, "label_names") and len(annotation.label_names) > 0:
+                labels_str = ", ".join(annotation.label_names)
+                details += f" | labels: [{labels_str}]"
+            else:
+                details += " | labels: []"
+
+            html_parts.append(f"""
+            <div class="annotation-item">
+                <div class="layer-name">{annotation.name}</div>
+                <div class="layer-details">{details}</div>
+            </div>
+            """)
+
+        return "\n".join(html_parts)

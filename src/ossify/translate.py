@@ -7,7 +7,7 @@ import pandas as pd
 from .base import Cell, Link
 from .utils import get_l2id_column, get_supervoxel_column
 
-__all__ = ["cell_from_client"]
+__all__ = ["load_cell_from_client"]
 
 if TYPE_CHECKING:
     import datetime
@@ -54,7 +54,7 @@ def _process_synapse_table(
     return syn_df
 
 
-def cell_from_client(
+def load_cell_from_client(
     root_id: int,
     client: "CAVEclient",
     *,

@@ -30,30 +30,23 @@ Ossify provides computational methods for analyzing neuromorphological structure
 #### Usage Example
 
 ```python
-import ossify
+import ossify as osy
 
 # Load a cell with skeleton
-cell = ossify.load_cell("neuron.osy")
+cell = osy.load_cell("neuron.osy")
 
-# Calculate Strahler numbers
-strahler = ossify.strahler_number(cell.skeleton)
+# Calculate morphological properties
+strahler = osy.algorithms.strahler_number(cell)
 
 # Add as label to skeleton
 cell.skeleton.add_label(strahler, "strahler_order")
 
 # Visualize with color coding
-fig, ax = ossify.plot_morphology_2d(
+fig, ax = osy.plot.plot_morphology_2d(
     cell, 
     color="strahler_order",
     palette="viridis"
 )
-
-# Analyze branch hierarchy
-max_order = strahler.max()
-primary_branches = (strahler == max_order).sum()
-print(f"Maximum Strahler order: {max_order}")
-print(f"Primary branches: {primary_branches}")
-```
 
 #### Interpretation
 
@@ -77,7 +70,9 @@ print(f"Primary branches: {primary_branches}")
         separate_signature: true
         show_source: false
 
-**Calculates betweenness centrality for synaptic flow, measuring how many presynaptic→postsynaptic paths pass through each vertex.**
+**Calculates [synapse flow betweenness], measuring how many presynaptic→postsynaptic paths pass through each vertex.**
+
+    [synapse flow betweenness]: https://doi.org/10.7554/eLife.12059
 
 #### Usage Example
 

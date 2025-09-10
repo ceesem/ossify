@@ -1,7 +1,6 @@
 from numbers import Number
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
-import cmcrameri  # Keep this import for colormaps — used via string names
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import numpy as np
@@ -153,7 +152,7 @@ def projection_factory(
         case "yz":
             return lambda pts: np.array(pts)[:, [1, 2]]
     raise ValueError(
-        f"Unknown projection {proj}, expected one of 'xy', 'yx', 'yz', 'zy', 'zx', or 'xz'"
+        f"Unknown projection {proj}, expected a callable or one of 'xy', 'yx', 'yz', 'zy', 'zx', or 'xz'"
     )
 
 
@@ -177,8 +176,7 @@ def _plotted_bounds(
     np.ndarray
         (2, 2) array with [[xmin, xmax], [ymin, ymax]] of the projected points
     """
-    if isinstance(projection, str):
-        projection = projection_factory(proj=projection)
+    projection = projection_factory(proj=projection)
     projected = projection(vertices).astype(
         float
     )  # Ensure float type for offset operations
@@ -237,26 +235,20 @@ def plot_skeleton(
 
     # Store original projection for y-axis inversion detection
     orig_projection = projection
-    if isinstance(projection, str):
-        projection = projection_factory(proj=projection)
+    projection = projection_factory(proj=projection)
 
-    for path in skel.cover_paths:
+    for path in skel.cover_paths_positional:
         # Convert vertex index to positional index for parent_node_array access
         path_end_vertex = path[-1]
-        path_end_positional = np.flatnonzero(skel.vertex_index == path_end_vertex)[0]
-        match skel.parent_node_array[path_end_positional]:
+        match skel.parent_node_array[path_end_vertex]:
             case -1:
                 path_plus = path
             case parent:
                 # Convert parent positional index back to vertex index
-                parent_vertex = skel.vertex_index[parent]
-                path_plus = np.concat((path, [parent_vertex]))
+                path_plus = np.concat((path, [parent]))
 
         # Convert vertex indices to positional indices for vertices array access
-        path_plus_positional = np.array(
-            [np.flatnonzero(skel.vertex_index == v)[0] for v in path_plus]
-        )
-        path_spatial = projection(skel.vertices[path_plus_positional])
+        path_spatial = projection(skel.vertices[path_plus])
         path_spatial[:, 0] = path_spatial[:, 0] + offset_h
         path_spatial[:, 1] = path_spatial[:, 1] + offset_v
         path_segs = [
@@ -267,22 +259,13 @@ def plot_skeleton(
         lc_kwargs = {}
         if colors is not None:
             # Convert vertex indices to positional indices for colors array access
-            path_positional = np.array(
-                [np.flatnonzero(skel.vertex_index == v)[0] for v in path]
-            )
-            lc_kwargs["colors"] = colors[path_positional]
+            lc_kwargs["colors"] = colors[path_plus]
         if alpha is not None:
             # Convert vertex indices to positional indices for alpha array access
-            path_positional = np.array(
-                [np.flatnonzero(skel.vertex_index == v)[0] for v in path]
-            )
-            lc_kwargs["alpha"] = alpha[path_positional]
+            lc_kwargs["alpha"] = alpha[path_plus]
         if linewidths is not None:
             # Convert vertex indices to positional indices for linewidths array access
-            path_positional = np.array(
-                [np.flatnonzero(skel.vertex_index == v)[0] for v in path]
-            )
-            lc_kwargs["linewidths"] = linewidths[path_positional]
+            lc_kwargs["linewidths"] = linewidths[path]
         if zorder is not None:
             lc_kwargs["zorder"] = zorder
 
@@ -346,10 +329,9 @@ def plot_points(
 
     # Store original projection for y-axis inversion detection
     orig_projection = projection
-    if isinstance(projection, str):
-        projection = projection_factory(
-            proj=projection,
-        )
+    projection = projection_factory(
+        proj=projection,
+    )
     points_proj = projection(points)
     points_proj[:, 0] = points_proj[:, 0] + offset_h
     points_proj[:, 1] = points_proj[:, 1] + offset_v
@@ -364,7 +346,11 @@ def plot_points(
     elif isinstance(palette, dict) and colors:
         colors = [palette[label] for label in colors]
     if colors is not None:
-        scatter_kws["c"] = colors
+        if isinstance(colors, str):
+            # Single color string
+            scatter_kws["color"] = colors
+        else:
+            scatter_kws["c"] = colors
 
     ax.scatter(
         x=points_proj[:, 0],
@@ -463,13 +449,14 @@ def plot_morphology_2d(
     color_norm: Optional[Tuple[float, float]] = None,
     alpha: Optional[Union[str, np.ndarray, float]] = 1.0,
     alpha_norm: Optional[Tuple[float, float]] = None,
+    alpha_extent: Optional[Tuple[float, float]] = None,
     linewidth: Optional[Union[str, np.ndarray, float]] = 1.0,
     linewidth_norm: Optional[Tuple[float, float]] = None,
     widths: Optional[tuple] = (1, 50),
     projection: Union[str, Callable] = "xy",
     offset_h: float = 0.0,
     offset_v: float = 0.0,
-    root_as_sphere: bool = False,
+    root_marker: bool = False,
     root_size: float = 100.0,
     root_color: Optional[Union[str, tuple]] = None,
     zorder: int = 2,
@@ -533,15 +520,20 @@ def plot_morphology_2d(
 
     # Process alpha (similar to existing logic)
     alpha_array = None
+    if alpha_extent is None:
+        alpha_extent = (0.1, 1.0)
     if isinstance(alpha, str):
         alpha_values = skel.get_label(alpha)
-        if alpha_norm is not None:
-            alpha_array = np.asarray(Normalize(*alpha_norm, clip=True)(alpha_values))
-        else:
-            alpha_array = np.asarray(alpha_values)
+        if alpha_norm is None:
+            alpha_norm = (np.min(alpha_values), np.max(alpha_values))
+        alpha_array = np.asarray(Normalize(*alpha_norm, clip=True)(alpha_values))
+        alpha_array = alpha_array[0] + alpha_array * (alpha_extent[1] - alpha_extent[0])
     elif isinstance(alpha, (np.ndarray, list, pd.Series)):
         if alpha_norm is not None:
             alpha_array = np.asarray(Normalize(*alpha_norm, clip=True)(alpha))
+            alpha_array = alpha_extent[0] + alpha_array * (
+                alpha_extent[1] - alpha_extent[0]
+            )
         else:
             alpha_array = np.asarray(alpha)
     elif isinstance(alpha, Number):
@@ -580,17 +572,22 @@ def plot_morphology_2d(
         invert_y=invert_y,
         ax=ax,
     )
-    if root_as_sphere:
-        root_location = np.atleast_2d(skel.root_location)
+    if root_marker:
+        root_location = np.atleast_2d(skel.base_root_location)
         if root_color is None:
-            root_color = (
-                colors_array[skel.root_positional] if colors_array is not None else None
-            )
-        if root_color is not None:
-            root_color = _resolve_color_parameter(root_color, skel)
+            if skel.base_root in skel.vertex_index:
+                root_color = (
+                    colors_array[skel.root_positional]
+                    if colors_array is not None
+                    else None
+                )
+            else:
+                raise ValueError(
+                    "root_color must be provided explicitly if root is not in skeleton vertices"
+                )
         ax = plot_points(
             root_location,
-            colors=np.atleast_2d([root_color]),
+            colors=root_color,
             sizes=[root_size],
             invert_y=invert_y,
             ax=ax,
@@ -612,7 +609,7 @@ def plot_cell_2d(
     linewidth: Optional[Union[str, np.ndarray, float]] = 1.0,
     linewidth_norm: Optional[Tuple[float, float]] = None,
     widths: Optional[tuple] = (1, 50),
-    root_as_sphere: bool = False,
+    root_marker: bool = False,
     root_size: float = 100.0,
     root_color: Optional[Union[str, tuple]] = None,
     synapses: Literal["pre", "post", "both", True, False] = False,
@@ -658,7 +655,7 @@ def plot_cell_2d(
         linewidth=linewidth,
         linewidth_norm=linewidth_norm,
         widths=widths,
-        root_as_sphere=root_as_sphere,
+        root_marker=root_marker,
         root_size=root_size,
         root_color=root_color,
         projection=projection,
@@ -717,7 +714,7 @@ def plot_cell_multiview(
     linewidth: Optional[Union[str, np.ndarray, float]] = 1.0,
     linewidth_norm: Optional[Tuple[float, float]] = None,
     widths: Optional[tuple] = (1, 50),
-    root_as_sphere: bool = False,
+    root_marker: bool = False,
     root_size: float = 100.0,
     root_color: Optional[Union[str, tuple]] = None,
     synapses: Literal["pre", "post", "both", True, False] = False,
@@ -759,7 +756,7 @@ def plot_cell_multiview(
             linewidth=linewidth,
             linewidth_norm=linewidth_norm,
             widths=widths,
-            root_as_sphere=root_as_sphere,
+            root_marker=root_marker,
             root_size=root_size,
             root_color=root_color,
             projection=proj,

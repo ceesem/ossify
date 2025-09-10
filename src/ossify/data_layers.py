@@ -427,10 +427,10 @@ class PointMixin(ABC):
             Tuple of (positional_indices, is_positional_flag).
         """
         if vertices is None:
-            vertices = np.arange(self.n_vertices)
-            as_positional = True
+            vertices = self.vertex_index
+            as_positional = False
         else:
-            vertices = np.array(vertices)
+            vertices = np.asarray(vertices)
             if np.issubdtype(vertices.dtype, np.bool_):
                 if len(vertices) != self.n_vertices:
                     raise ValueError(
@@ -438,13 +438,13 @@ class PointMixin(ABC):
                     )
                 vertices = np.flatnonzero(vertices)
                 as_positional = True
-            if not as_positional:
-                if vertex_index is None:
-                    vertex_index_map = self.vertex_index_map
-                else:
-                    vertex_index_map = {v: i for i, v in enumerate(vertex_index)}
-                vertices = fastremap.remap(vertices, vertex_index_map)
-            vertices = np.array(vertices)
+        if not as_positional:
+            if vertex_index is None:
+                vertex_index_map = self.vertex_index_map
+            else:
+                vertex_index_map = {v: i for i, v in enumerate(vertex_index)}
+            vertices = fastremap.remap(vertices, vertex_index_map)
+        vertices = np.array(vertices)
         return vertices, as_positional
 
     @property
@@ -1376,7 +1376,8 @@ class SkeletonLayer(GraphLayer):
 
             self._set_base_properties(
                 base_properties={
-                    "base_root": self.root_positional,
+                    "base_root": self.root,
+                    "base_root_location": self.root_location,
                     "base_vertex_index": self.vertex_index,
                     "base_parent_array": self.parent_node_array,
                     "base_csgraph": self.csgraph,
@@ -1571,6 +1572,7 @@ class SkeletonLayer(GraphLayer):
         """
         if not base_properties:
             self._base_properties["base_root"] = self.root
+            self._base_properties["base_root_location"] = self.root_location
             self._base_properties["base_vertex_index"] = self.vertex_index
             self._base_properties["base_parent_array"] = self.parent_node_array
             self._base_properties["base_csgraph"] = self.csgraph
@@ -1588,6 +1590,21 @@ class SkeletonLayer(GraphLayer):
             Base root index from original skeleton.
         """
         return self._base_properties["base_root"]
+
+    @property
+    def base_root_positional(self) -> int:
+        """Get the base root positional index from original unmasked skeleton.
+
+        Returns
+        -------
+        int
+            Base root positional index from original skeleton.
+        """
+        return np.flatnonzero(self.base_vertex_index == self.base_root)[0]
+
+    @property
+    def base_root_location(self) -> np.ndarray:
+        return np.asarray(self._base_properties["base_root_location"])
 
     @property
     def base_csgraph(self) -> sparse.csr_matrix:
@@ -1620,7 +1637,7 @@ class SkeletonLayer(GraphLayer):
         Union[str, np.ndarray]
             Base vertex indices from original skeleton.
         """
-        return self._base_properties["base_vertex_index"]
+        return np.asarray(self._base_properties["base_vertex_index"])
 
     @property
     def base_parent_array(self) -> np.ndarray:
@@ -1631,7 +1648,7 @@ class SkeletonLayer(GraphLayer):
         np.ndarray
             Base parent node array from original skeleton.
         """
-        return self._base_properties["base_parent_array"]
+        return np.asarray(self._base_properties["base_parent_array"])
 
     def _reset_derived_properties(self) -> None:
         super()._reset_derived_properties()
@@ -1758,6 +1775,7 @@ class SkeletonLayer(GraphLayer):
                 "base_vertex_index": self.vertex_index,
                 "base_parent_array": self.parent_node_array,
                 "base_csgraph": self.csgraph,
+                "base_root_location": self.root_location,
             }
         )
         return self
@@ -1783,7 +1801,13 @@ class SkeletonLayer(GraphLayer):
         np.ndarray
             The distance from the root for each vertex.
         """
-        # Vertices must be positional for the dijkstra
+        # Vertices must be positional but in the base space for the dijkstra
+        if as_positional:
+            if vertices is None:
+                vertices = self.vertex_index
+            else:
+                vertices = self.vertex_index[vertices]
+            as_positional = False
         vertices, as_positional = self._vertices_to_positional(
             vertices, as_positional, vertex_index=self.base_vertex_index
         )
@@ -1793,9 +1817,9 @@ class SkeletonLayer(GraphLayer):
             dtr = sparse.csgraph.dijkstra(
                 self.base_csgraph,
                 directed=False,
-                indices=self.base_root,
+                indices=self.base_root_positional,
             )
-            self._dag_cache.distance_to_root = dtr
+            self._dag_cache.distance_to_root = dtr.flatten()
         return dtr[vertices]
 
     def hops_to_root(
@@ -1824,7 +1848,7 @@ class SkeletonLayer(GraphLayer):
             htr = sparse.csgraph.dijkstra(
                 self.base_csgraph_binary,
                 directed=False,
-                indices=self.base_root,
+                indices=self.base_root_positional,
             )
             self._dag_cache.hops_to_root = htr
         return htr[vertices]
