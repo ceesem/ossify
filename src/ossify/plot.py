@@ -269,7 +269,7 @@ def plot_skeleton(
         if zorder is not None:
             lc_kwargs["zorder"] = zorder
 
-        lc = LineCollection(path_segs, capstyle="butt", joinstyle="round", **lc_kwargs)
+        lc = LineCollection(path_segs, capstyle="round", joinstyle="round", **lc_kwargs)
         ax.add_collection(lc)
 
     ax.set_aspect("equal")

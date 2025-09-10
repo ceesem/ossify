@@ -426,9 +426,11 @@ class PointMixin(ABC):
         Tuple[np.ndarray, bool]
             Tuple of (positional_indices, is_positional_flag).
         """
+        if vertex_index is None:
+            vertex_index = self.vertex_index
         if vertices is None:
-            vertices = self.vertex_index
-            as_positional = False
+            vertices = np.arange(len(self.vertex_index))
+            as_positional = True
         else:
             vertices = np.asarray(vertices)
             if np.issubdtype(vertices.dtype, np.bool_):
@@ -558,8 +560,8 @@ class PointMixin(ABC):
         elif isinstance(label, dict):
             label = pd.DataFrame(label, index=self.vertex_index)
         elif isinstance(label, pd.DataFrame) or isinstance(label, pd.Series):
-            # if isinstan/ce(label, pd.Series):
-            # label = label.to_frame()
+            if isinstance(label, pd.Series):
+                label = label.to_frame()
             label = label.loc[self.vertex_index]
         else:
             raise ValueError("Label must be a list, np.ndarray, dict or pd.DataFrame.")
@@ -1196,6 +1198,9 @@ class PointMixin(ABC):
             mask=keep_indices, as_positional=False, self_only=self_only
         )
 
+    def __len__(self) -> int:
+        return self.n_vertices
+
 
 class GraphLayer(PointMixin, EdgeMixin):
     layer_name = GRAPH_LAYER_NAME
@@ -1388,8 +1393,7 @@ class SkeletonLayer(GraphLayer):
             # Infer all values from inherited properties and/or the existing morphsync.
             self._set_base_properties(base_properties=inherited_properties)
 
-            old_root_pos = inherited_properties.get("base_root")
-            old_root_idx = inherited_properties.get("base_vertex_index")[old_root_pos]
+            old_root_idx = inherited_properties.get("base_root")
 
             if old_root_idx in self.vertex_index:
                 self._root = old_root_idx
