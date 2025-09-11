@@ -66,6 +66,33 @@ cell.skeleton.add_label([1,2,2,3,3], "compartment")
 
 Many cells have both - use the appropriate layer for each analysis.
 
+### How do I add a mesh to a cell with an L2 skeleton?
+
+The [`cortical_tools`](https://www.csdashm.com/cortical-tools/) package has a function to map mesh vertices to L2 IDs, which can then be used to link the mesh to the graph layer in ossify.
+It takes one to several minutes to compute the mapping for large meshes, but can be useful for generating surface mesh visualizations masked by compartment or other labels. The function `compute_vertex_to_l2_mapping` provides an L2 ID for each mesh vertex, which can be aligned with an ossify cell via the "graph" layer.
+
+```python
+import ossify as osy
+from cortical_tools.datasets.microns_public import client # note that this is NOT a CAVEclient
+
+root_id = 864691135336055529
+cell = osy.load_cell_from_client(
+    root_id,
+    client.cave,
+    synapses=True,
+    restore_graph=True,
+)
+
+mesh = client.mesh.get_mesh(root_id)
+mesh_labels = client.mesh.compute_vertex_to_l2_mapping(root_id=root_id, vertices=mesh.vertices, faces=mesh.faces)
+
+cell.add_mesh(
+    vertices=mesh.vertices,
+    faces=mesh.faces,
+    linkage=Link(mesh_labels, target='graph')
+)
+```
+
 ## Data Management
 
 ### How do I handle different coordinate units?

@@ -25,8 +25,8 @@ class TestUtilityFunctions:
 
         colors = plot._map_value_to_colors(values, colormap=colormap)
 
-        # Should return RGBA colors
-        assert colors.shape == (4, 4)
+        # Should return RGB colors (consistent with default alpha=1.0)
+        assert colors.shape == (4, 3)
         assert np.all((colors >= 0) & (colors <= 1))
         # First and third should be same (both 'A')
         np.testing.assert_array_equal(colors[0], colors[2])
@@ -51,6 +51,108 @@ class TestUtilityFunctions:
 
         assert colors.shape == (3, 3)
         assert np.all((colors >= 0) & (colors <= 1))
+
+    def test_is_discrete_data(self):
+        """Test automatic discrete data detection."""
+        # String data should be discrete
+        assert plot._is_discrete_data(np.array(["A", "B", "C"]))
+
+        # Boolean data should be discrete
+        assert plot._is_discrete_data(np.array([True, False, True]))
+
+        # Few unique numeric values should be discrete
+        assert plot._is_discrete_data(np.array([1, 2, 3, 1, 2, 3, 1, 2, 3]))
+
+        # Many continuous values should not be discrete
+        assert not plot._is_discrete_data(np.linspace(0, 1, 100))
+
+        # Empty array
+        assert not plot._is_discrete_data(np.array([]))
+
+    def test_get_discrete_colormap(self):
+        """Test discrete colormap generation."""
+        # Test automatic selection
+        cmap_small = plot._get_discrete_colormap("auto", 5)
+        assert len(cmap_small.colors) == 5
+
+        cmap_large = plot._get_discrete_colormap("auto", 15)
+        assert len(cmap_large.colors) == 15
+
+        # Test standard qualitative colormaps
+        cmap_set1 = plot._get_discrete_colormap("Set1", 5)
+        assert len(cmap_set1.colors) == 5
+
+        # Test exceeding colormap capacity
+        cmap_exceed = plot._get_discrete_colormap("Set1", 15)
+        assert len(cmap_exceed.colors) == 15
+
+    def test_create_discrete_color_dict(self):
+        """Test discrete color dictionary creation."""
+        values = np.array(["red", "green", "blue", "red"])
+        color_dict = plot._create_discrete_color_dict(values, "Set1")
+
+        assert len(color_dict) == 4  # 3 unique values + missing color
+        assert "red" in color_dict
+        assert "green" in color_dict
+        assert "blue" in color_dict
+        assert "__missing__" in color_dict
+
+    def test_map_value_to_colors_auto_discrete(self):
+        """Test automatic discrete color mapping."""
+        # Categorical string data
+        values = np.array(["cat", "dog", "cat", "bird", "dog"])
+        colors = plot._map_value_to_colors(values, colormap="auto")
+
+        assert colors.shape[0] == 5
+        assert colors.shape[1] in [3, 4]  # RGB or RGBA
+
+        # Same category should get same color
+        np.testing.assert_array_equal(colors[0], colors[2])  # Both "cat"
+        np.testing.assert_array_equal(colors[1], colors[4])  # Both "dog"
+
+    def test_map_value_to_colors_discrete_numeric(self):
+        """Test discrete mapping with numeric categorical data."""
+        # Small number of numeric categories
+        values = np.array([1, 2, 3, 1, 2, 3])
+        colors = plot._map_value_to_colors(values, colormap="Set1", force_discrete=True)
+
+        assert colors.shape[0] == 6
+        # Same values should get same colors
+        np.testing.assert_array_equal(colors[0], colors[3])  # Both 1
+        np.testing.assert_array_equal(colors[1], colors[4])  # Both 2
+
+    def test_map_value_to_colors_with_missing_values(self):
+        """Test color mapping with missing/NaN values."""
+        values = np.array([1.0, 2.0, np.nan, 3.0, np.nan])
+        colors = plot._map_value_to_colors(
+            values, colormap="viridis", missing_color="red"
+        )
+
+        assert colors.shape[0] == 5
+        # Check that NaN values got the missing color (red = [1, 0, 0])
+        np.testing.assert_allclose(colors[2, :3], [1.0, 0.0, 0.0], atol=0.1)
+        np.testing.assert_allclose(colors[4, :3], [1.0, 0.0, 0.0], atol=0.1)
+
+    def test_map_value_to_colors_force_continuous(self):
+        """Test forcing continuous mapping on discrete-looking data."""
+        values = np.array([1, 2, 3, 1, 2, 3])
+        colors = plot._map_value_to_colors(
+            values, colormap="viridis", force_discrete=False
+        )
+
+        assert colors.shape[0] == 6
+        # Should treat as continuous, so same values get same colors but different from discrete mode
+        np.testing.assert_array_equal(colors[0], colors[3])  # Both 1
+        np.testing.assert_array_equal(colors[1], colors[4])  # Both 2
+
+    def test_map_value_to_colors_with_alpha(self):
+        """Test color mapping with alpha values."""
+        values = np.array(["A", "B", "A"])
+        alpha = np.array([0.5, 0.8, 0.3])
+        colors = plot._map_value_to_colors(values, colormap="Set1", alpha=alpha)
+
+        assert colors.shape == (3, 4)  # Should include alpha channel
+        np.testing.assert_array_equal(colors[:, 3], alpha)
 
     def test_should_invert_y_axis(self):
         """Test y-axis inversion detection."""

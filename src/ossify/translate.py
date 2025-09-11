@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 
 from .base import Cell, Link
-from .utils import get_l2id_column, get_supervoxel_column
+from .utils import get_l2id_column, get_supervoxel_column, suppress_output
 
 __all__ = ["load_cell_from_client"]
 
@@ -23,6 +23,7 @@ def _process_synapse_table(
     columns: dict,
     timestamp: "datetime.datetime",
     reference_tables: Optional[list[str]] = None,
+    reference_suffixs: Optional[dict] = None,
     drop_other_side: bool = True,
     omit_autapses: bool = True,
 ) -> pd.DataFrame:
@@ -34,11 +35,14 @@ def _process_synapse_table(
     side_column = columns[side]
     other_column = columns[other_side]
 
-    syn_df = client.materialize.tables[table_name](**{side_column: root_id}).live_query(
-        desired_resolution=[1, 1, 1],
-        split_positions=True,
-        timestamp=timestamp,
-    )
+    with suppress_output():
+        syn_df = client.materialize.tables[table_name](
+            **{side_column: root_id}
+        ).live_query(
+            desired_resolution=[1, 1, 1],
+            split_positions=True,
+            timestamp=timestamp,
+        )
     if omit_autapses:
         syn_df.query(f"{side_column} != {other_column}", inplace=True)
 
@@ -51,6 +55,20 @@ def _process_synapse_table(
     if drop_other_side:
         syn_df.drop(columns=other_column, inplace=True)
 
+    if reference_tables is not None:
+        for ref_table in reference_tables:
+            with suppress_output():
+                ref_df = client.materialize.tables[ref_table](
+                    id=syn_df["id"]
+                ).live_query(
+                    timestamp=timestamp,
+                )
+            syn_df = syn_df.merge(
+                ref_df,
+                how="left",
+                on="id",
+                suffixes=("", f"_{reference_suffixs.get(ref_table, ref_table)}"),
+            )
     return syn_df
 
 
@@ -59,6 +77,7 @@ def load_cell_from_client(
     client: "CAVEclient",
     *,
     synapses: bool = False,
+    reference_tables: Optional[list[str]] = None,
     restore_graph: bool = False,
     restore_properties: bool = True,
     synapse_spatial_point: str = "ctr_pt_position",
@@ -77,6 +96,9 @@ def load_cell_from_client(
         The CAVE client to use for data retrieval.
     synapses: bool
         Whether to include synapse information in the imported cell. Default is False.
+    reference_tables: Optional[list[str]]
+        A list of table names to include as reference tables for synapse annotation.
+        These will be merged into the synapse DataFrame if synapses=True.
     restore_graph: bool
         Whether to restore the complete spatial graph for the imported cell. Default is False. Setting to True will include all graph edges, but can take longer to process.
     restore_properties: bool
@@ -125,6 +147,7 @@ def load_cell_from_client(
             ts,
             drop_other_side=not include_partner_root_id,
             omit_autapses=omit_self_synapses,
+            reference_tables=reference_tables,
         )
         post_syn_df = _process_synapse_table(
             root_id,
@@ -135,6 +158,7 @@ def load_cell_from_client(
             ts,
             drop_other_side=not include_partner_root_id,
             omit_autapses=omit_self_synapses,
+            reference_tables=reference_tables,
         )
 
     l2ids = sk["lvl2_ids"]

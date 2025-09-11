@@ -1,3 +1,7 @@
+import logging
+import os
+import sys
+from contextlib import contextmanager
 from typing import Callable, Optional, Union
 
 import fastremap
@@ -216,3 +220,33 @@ def get_supervoxel_column(pt_column: str) -> str:
 
 def get_l2id_column(pt_column: str) -> str:
     return pt_column.replace("_root_id", "_l2_id")
+
+
+@contextmanager
+def suppress_output(package: Optional[str] = None):
+    """Context manager to suppress stdout and stderr output.
+
+    Parameters
+    ----------
+    package : Optional[str]
+        Logger name to suppress. If None, suppress root logger output which handles
+        all loggers without their own handler.
+    """
+    # Save original stdout and stderr
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    logger = logging.getLogger(package)
+    old_level = logger.level
+    logger.setLevel(logging.CRITICAL)
+
+    try:
+        # Redirect to devnull or StringIO
+        with open(os.devnull, "w") as devnull:
+            sys.stdout = devnull
+            sys.stderr = devnull
+            yield
+    finally:
+        # Restore original stdout and stderr
+        logger.setLevel(old_level)
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr

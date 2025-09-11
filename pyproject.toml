@@ -55,9 +55,7 @@ profile = [
     "pyinstrument",
 ]
 viz = [
-    "pyvista>=0.46.1",
-    "polyscope>=2.5.0",
-    "octarine3d[all]",
+    "pyvista",
     "cortical-tools>=0.0.4",
 ]
 
