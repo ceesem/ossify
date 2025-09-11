@@ -689,7 +689,7 @@ wheels = [
 
 [[package]]
 name = "cortical-tools"
-version = "0.0.3"
+version = "0.0.4"
 source = { editable = "../cortical_tools" }
 dependencies = [
     { name = "caveclient" },
@@ -2277,7 +2277,7 @@ wheels = [
 [[package]]
 name = "morphsync"
 version = "0.1.0"
-source = { editable = "../morphsync" }
+source = { git = "https://github.com/ceesem/morphsync.git?rev=v0.0.3-csm#70a5685777e271d1420589ceba943d1919d0244c" }
 dependencies = [
     { name = "cachetools" },
     { name = "fastremap" },
@@ -2286,30 +2286,6 @@ dependencies = [
     { name = "pandas" },
     { name = "scikit-learn" },
     { name = "scipy" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "cachetools", specifier = ">=5.5.1" },
-    { name = "fastremap", specifier = ">=1.15.1" },
-    { name = "joblib", specifier = ">=1.5.1" },
-    { name = "numpy", specifier = ">=2.0.1" },
-    { name = "pandas", specifier = ">=2.3.1" },
-    { name = "scikit-learn", specifier = ">=1.5.0" },
-    { name = "scipy", specifier = ">=1.15.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mkdocs-autorefs", specifier = ">=1.2.0" },
-    { name = "mkdocs-include-markdown-plugin", specifier = ">=6.2.2" },
-    { name = "mkdocs-macros-plugin", specifier = ">=1.3.5" },
-    { name = "mkdocs-material", specifier = ">=9.5.41" },
-    { name = "mkdocs-material-extensions", specifier = ">=1.3.1" },
-    { name = "mkdocs-section-index", specifier = ">=0.3.9" },
-    { name = "mkdocstrings", extras = ["crystal", "python"], specifier = ">=0.26.2" },
-    { name = "mknotebooks", specifier = ">=0.8.0" },
-    { name = "pymdown-extensions", specifier = ">=10.11.2" },
 ]
 
 [[package]]
@@ -2691,13 +2667,10 @@ dependencies = [
     { name = "caveclient" },
     { name = "cloud-files" },
     { name = "cloud-volume" },
-    { name = "cortical-tools" },
     { name = "matplotlib" },
-    { name = "meshparty" },
     { name = "morphsync" },
     { name = "numpy" },
     { name = "orjson" },
-    { name = "pcg-skel" },
     { name = "scipy" },
     { name = "trimesh", extra = ["easy"] },
 ]
@@ -2728,6 +2701,7 @@ profile = [
     { name = "scalene" },
 ]
 viz = [
+    { name = "cortical-tools" },
     { name = "octarine3d", extra = ["all"] },
     { name = "polyscope" },
     { name = "pyvista" },
@@ -2738,15 +2712,12 @@ requires-dist = [
     { name = "caveclient", specifier = ">=7.6.0" },
     { name = "cloud-files", specifier = ">=5.8.0" },
     { name = "cloud-volume", specifier = ">=11.1.5" },
-    { name = "cortical-tools", editable = "../cortical_tools" },
     { name = "h5py", marker = "extra == 'legacy'", specifier = ">=3.14.0" },
     { name = "matplotlib", specifier = ">=3.10.6" },
-    { name = "meshparty", specifier = ">=2.0.3" },
-    { name = "morphsync", editable = "../morphsync" },
+    { name = "morphsync", git = "https://github.com/ceesem/morphsync.git?rev=v0.0.3-csm" },
     { name = "numpy", specifier = ">=2.0.2" },
     { name = "orjson", specifier = ">=3.10.15" },
-    { name = "pcg-skel", specifier = ">=1.3.1" },
-    { name = "scipy", specifier = ">=1.13.1" },
+    { name = "scipy", specifier = ">=1.15" },
     { name = "trimesh", extras = ["easy"], specifier = ">=4.6.2" },
 ]
 provides-extras = ["legacy"]
@@ -2770,6 +2741,7 @@ profile = [
     { name = "scalene" },
 ]
 viz = [
+    { name = "cortical-tools", editable = "../cortical_tools" },
     { name = "octarine3d", extras = ["all"] },
     { name = "polyscope", specifier = ">=2.5.0" },
     { name = "pyvista", specifier = ">=0.46.1" },

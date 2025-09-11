@@ -5,6 +5,19 @@ repo_name: ceesem/ossify
 
 nav:
 - About: index.md
+- User Guide:
+    - Getting Started: getting_started.md
+    - The Cell Object: cell_object.md
+    - Shared Layer Features: shared_layer_features.md
+    - Working with Meshes: working_with_meshes.md
+    - Working with Graphs: working_with_graphs.md
+    - Working with Skeletons: working_with_skeletons.md
+    - Working with Annotations: working_with_annotations.md
+    - Masking and Filtering: masking_and_filtering.md
+    - Data Import and Export: data_import_export.md
+    - Algorithms and Analysis: algorithms_and_analysis.md
+    - Visualization and Plotting: visualization_and_plotting.md
+    - FAQ: faq.md
 - API Reference:
     - Overview: reference/index.md
     - Core Classes: reference/core.md
