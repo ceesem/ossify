@@ -819,7 +819,7 @@ def build_cover_paths(
     for ep in end_points:
         path = []
         current = ep
-        while not seen[current]:
+        while not seen[current] and current != -1:
             seen[current] = True
             path.append(int(current))
             current = parent_node_array[current]
