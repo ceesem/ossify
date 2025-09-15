@@ -539,8 +539,9 @@ class PointMixin(ABC):
 
     def add_feature(
         self,
-        feature: Union[list, np.ndarray, dict, pd.DataFrame],
+        feature: Union[list, np.ndarray, dict, pd.DataFrame, pd.Series],
         name: Optional[str] = None,
+        overwrite: bool = False,
     ) -> Self:
         """Add a new vertex feature to the layer.
 
@@ -550,6 +551,8 @@ class PointMixin(ABC):
             The feature data to add. If an array or list, it should follow the vertex order.
         name: Optional[str]
             The name of the feature column (required if feature is a list or np.ndarray).
+        overwrite: bool
+            Whether to overwrite an existing feature with the same name. Default False.
 
         Returns
         -------
@@ -567,6 +570,7 @@ class PointMixin(ABC):
                 )
             if isinstance(feature, pd.Series):
                 if name is not None:
+                    feature = feature.copy()  # avoid modifying original series
                     feature.name = name
                 feature = feature.to_frame()
             feature = feature.loc[self.vertex_index]
@@ -577,8 +581,14 @@ class PointMixin(ABC):
 
         if feature.shape[0] != self.n_vertices:
             raise ValueError("feature must have the same number of rows as vertices.")
+
         if np.any(feature.columns.isin(self.nodes.columns)):
-            raise ValueError('"feature name already exists in the nodes DataFrame.")')
+            if not overwrite:
+                raise ValueError(
+                    '"feature name already exists in the nodes DataFrame.")'
+                )
+            else:
+                self.drop_features(name)
 
         self._morphsync.layers[self.layer_name].nodes = self.nodes.merge(
             feature,
