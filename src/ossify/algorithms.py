@@ -7,9 +7,9 @@ from .base import Cell, SkeletonLayer
 
 __all__ = [
     "strahler_number",
-    "smooth_labels",
-    "label_axon_from_synapse_flow",
-    "label_axon_from_spectral_split",
+    "smooth_features",
+    "feature_axon_from_synapse_flow",
+    "feature_axon_from_spectral_split",
     "synapse_betweenness",
     "segregation_index",
 ]
@@ -49,26 +49,26 @@ def _laplacian_offset(
     return Lmat
 
 
-def smooth_labels(
+def smooth_features(
     cell: Union[Cell, SkeletonLayer],
-    label: np.ndarray,
+    feature: np.ndarray,
     alpha: float = 0.90,
 ) -> np.ndarray:
-    """Computes a smoothed label spreading that is akin to steady-state solutions to the heat equation on the skeleton graph.
+    """Computes a smoothed feature spreading that is akin to steady-state solutions to the heat equation on the skeleton graph.
 
     Parameters
     ----------
     cell : Cell
         Neuron object
-    label : np.ndarray
-        The initial label array. Must be Nxm, where N is the number of skeleton vertices
+    feature : np.ndarray
+        The initial feature array. Must be Nxm, where N is the number of skeleton vertices
     alpha : float, optional
         A neighborhood influence parameter between 0 and 1. Higher values give more influence to neighbors, by default 0.90.
 
     Returns
     -------
     np.ndarray
-        The smoothed label array
+        The smoothed feature array
     """
     if isinstance(cell, SkeletonLayer):
         skel = cell
@@ -77,21 +77,21 @@ def smooth_labels(
     Smat = _laplacian_offset(skel)
     Imat = sparse.eye(Smat.shape[0])
     invertLap = Imat - alpha * Smat
-    label = np.atleast_2d(label).reshape(Smat.shape[0], -1)
-    F = sparse.linalg.spsolve(invertLap, label)
+    feature = np.atleast_2d(feature).reshape(Smat.shape[0], -1)
+    F = sparse.linalg.spsolve(invertLap, feature)
     return np.squeeze((1 - alpha) * F)
 
 
 def strahler_number(cell: Union[Cell, SkeletonLayer]) -> np.ndarray:
     """Compute Strahler number on a skeleton, starting at 1 for each tip.
-    Returns a label suitable for a SkeletonLayer.
+    Returns a feature suitable for a SkeletonLayer.
 
     Parameters
     ----------
     cell : Union[Cell, SkeletonLayer]
         The skeleton to compute the Strahler number on.
         For convenience, you can pass a Cell object, but note
-        that the return label is always for the skeleton.
+        that the return feature is always for the skeleton.
 
     Returns
     -------
@@ -170,11 +170,11 @@ def segregation_index(
     return 1 - observed_ent / (unsplit_ent + 1e-10)
 
 
-def label_axon_from_synapse_flow(
+def feature_axon_from_synapse_flow(
     cell: Union[Cell, SkeletonLayer],
     pre_syn: Union[str, np.ndarray] = "pre_syn",
     post_syn: Union[str, np.ndarray] = "post_syn",
-    extend_label_to_segment: bool = False,
+    extend_feature_to_segment: bool = False,
     ntimes: int = 1,
     return_segregation_index: bool = False,
     segregation_index_threshold: float = 0,
@@ -194,12 +194,12 @@ def label_axon_from_synapse_flow(
         The method to use for splitting.
     n_splits : int, optional
         The number of splits to perform. Only applies to the "synapse_flow" method.
-    extend_label_to_segment : bool, optional
-        Whether to propagate the is_axon label to the whole segment, rather than a specific vertex.
+    extend_feature_to_segment : bool, optional
+        Whether to propagate the is_axon feature to the whole segment, rather than a specific vertex.
         This is likely more biologically accurate, but potentially a less optimal split.
     segregation_index_threshold : float, optional
         The minimum segregation index required to accept a split. If the best split has a segregation index
-        below this threshold, no split is performed and all vertices are labeled as dendrite.
+        below this threshold, no split is performed and all vertices are featureed as dendrite.
     as_positional : bool, optional
         If True, assumes the pre_syn and post_syn arrays are positional indices into the skeleton vertex array.
         If False, assumes they are the vertex indices (i.e. cell.skeleton.vertex_indices).
@@ -239,8 +239,8 @@ def label_axon_from_synapse_flow(
             )
         else:
             post_syn_inds = np.asarray(post_syn)
-    is_axon, Hsplit = _label_axon_synapse_flow(
-        skel, pre_syn_inds, post_syn_inds, extend_label_to_segment
+    is_axon, Hsplit = _feature_axon_synapse_flow(
+        skel, pre_syn_inds, post_syn_inds, extend_feature_to_segment
     )
     if Hsplit < segregation_index_threshold:
         is_axon = np.full(skel.n_vertices, False)
@@ -285,11 +285,11 @@ def label_axon_from_synapse_flow(
                             masked_post_syn_inds.append(masked_idx)
                     masked_post_syn_inds = np.array(masked_post_syn_inds)
 
-                is_axon_sub, Hsplit_sub = _label_axon_synapse_flow(
+                is_axon_sub, Hsplit_sub = _feature_axon_synapse_flow(
                     masked_cell.skeleton,
                     masked_pre_syn_inds,
                     masked_post_syn_inds,
-                    extend_label_to_segment,
+                    extend_feature_to_segment,
                 )
             if Hsplit_sub < segregation_index_threshold:
                 break
@@ -322,17 +322,17 @@ def _split_direction_and_quality(
     return ds_fraction_pre >= us_fraction_pre, seg_index
 
 
-def _label_axon_synapse_flow(
+def _feature_axon_synapse_flow(
     skeleton: SkeletonLayer,
     pre_syn_inds: np.ndarray,
     post_syn_inds: np.ndarray,
-    extend_label_to_segment: bool,
+    extend_feature_to_segment: bool,
 ) -> Tuple[np.ndarray, float]:
-    """Label an axon compartment by synapse betweenness. All parameters are as positional indices."""
+    """feature an axon compartment by synapse betweenness. All parameters are as positional indices."""
     syn_btw = synapse_betweenness(skeleton, pre_syn_inds, post_syn_inds)
     high_vinds = np.flatnonzero(syn_btw == max(syn_btw))
     close_vind = high_vinds[np.argmin(skeleton.distance_to_root(high_vinds))]
-    if extend_label_to_segment:
+    if extend_feature_to_segment:
         relseg = skeleton.segment_map[close_vind]
         min_ind = np.argmin(skeleton.distance_to_root(skeleton.segments[relseg]))
         axon_split_ind = skeleton.segments[relseg][min_ind]
@@ -353,7 +353,7 @@ def _label_axon_synapse_flow(
     return is_axon, Hsplit
 
 
-def label_axon_from_spectral_split(
+def feature_axon_from_spectral_split(
     cell: Union[Cell, SkeletonLayer],
     pre_syn: str = "pre_syn",
     post_syn: str = "post_syn",
@@ -361,7 +361,7 @@ def label_axon_from_spectral_split(
     smoothing_alpha: float = 0.99,
     axon_bias: float = 0,
     raw_split: bool = False,
-    extend_label_to_segment: bool = True,
+    extend_feature_to_segment: bool = True,
     max_times: Optional[int] = None,
     segregation_index_threshold: float = 0.5,
     return_segregation_index: bool = False,
@@ -373,26 +373,26 @@ def label_axon_from_spectral_split(
     if skel is None:
         raise ValueError("Cell is does not have a skeleton.")
     pre_density = (
-        skel.map_annotations_to_label(
+        skel.map_annotations_to_feature(
             pre_syn,
             distance_threshold=aggregation_distance,
             agg="count",
         )
         + axon_bias
     )
-    post_density = skel.map_annotations_to_label(
+    post_density = skel.map_annotations_to_feature(
         post_syn,
         distance_threshold=aggregation_distance,
         agg="count",
     )
     syn_density = np.vstack([pre_density, post_density]).T
-    smoothed_label = smooth_labels(
+    smoothed_feature = smooth_features(
         skel,
-        label=syn_density,
+        feature=syn_density,
         alpha=smoothing_alpha,
     )
 
-    is_axon = smoothed_label[:, 0] > smoothed_label[:, 1]
+    is_axon = smoothed_feature[:, 0] > smoothed_feature[:, 1]
 
     split_edges = np.flatnonzero(
         is_axon[skel.edges_positional[:, 0]] != is_axon[skel.edges_positional[:, 1]]
@@ -402,7 +402,7 @@ def label_axon_from_spectral_split(
     # If not doing a raw split, treat each split edge as a candidate split point, and evaluate the segregation index of each split.
 
     split_parents = skel.edges_positional[split_edges, 1]
-    if extend_label_to_segment:
+    if extend_feature_to_segment:
         split_parent_segments = skel.segment_map[split_parents]
         split_parents = np.array(
             [

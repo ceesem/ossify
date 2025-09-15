@@ -107,11 +107,11 @@ class TestStrahlerNumber:
         np.testing.assert_array_equal(strahler_nums_cell, strahler_nums_skel)
 
 
-class TestSmoothLabels:
-    """Tests for smooth_labels algorithm."""
+class TestSmoothfeatures:
+    """Tests for smooth_features algorithm."""
 
-    def test_smooth_labels_basic(self, simple_skeleton_data, spatial_columns):
-        """Test basic label smoothing functionality."""
+    def test_smooth_features_basic(self, simple_skeleton_data, spatial_columns):
+        """Test basic feature smoothing functionality."""
         vertices, edges, vertex_indices = simple_skeleton_data
         vertex_df = pd.DataFrame(
             vertices, columns=spatial_columns, index=vertex_indices
@@ -135,20 +135,22 @@ class TestSmoothLabels:
             root=vertex_indices[0],
         )
 
-        # Create initial label with sharp boundaries
-        initial_label = np.array([1.0, 1.0, 0.0, 0.0, 0.0])
+        # Create initial feature with sharp boundaries
+        initial_feature = np.array([1.0, 1.0, 0.0, 0.0, 0.0])
 
-        # Smooth the labels
-        smoothed_labels = algorithms.smooth_labels(cell.skeleton, initial_label)
+        # Smooth the features
+        smoothed_features = algorithms.smooth_features(cell.skeleton, initial_feature)
 
         # Should return same length as input
-        assert len(smoothed_labels) == len(initial_label)
+        assert len(smoothed_features) == len(initial_feature)
 
-        # Smoothed labels should be between 0 and 1
-        assert all(0 <= label <= 1 for label in smoothed_labels)
+        # Smoothed features should be between 0 and 1
+        assert all(0 <= feature <= 1 for feature in smoothed_features)
 
-    def test_smooth_labels_with_cell_input(self, simple_skeleton_data, spatial_columns):
-        """Test that smooth_labels works with Cell input."""
+    def test_smooth_features_with_cell_input(
+        self, simple_skeleton_data, spatial_columns
+    ):
+        """Test that smooth_features works with Cell input."""
         vertices, edges, vertex_indices = simple_skeleton_data
         vertex_df = pd.DataFrame(
             vertices, columns=spatial_columns, index=vertex_indices
@@ -172,19 +174,21 @@ class TestSmoothLabels:
             root=vertex_indices[0],
         )
 
-        # Create initial label
-        initial_label = np.array([1.0, 0.0, 0.0, 0.0, 1.0])
+        # Create initial feature
+        initial_feature = np.array([1.0, 0.0, 0.0, 0.0, 1.0])
 
         # Test with Cell input
-        smoothed_cell = algorithms.smooth_labels(cell, initial_label)
+        smoothed_cell = algorithms.smooth_features(cell, initial_feature)
 
         # Test with SkeletonLayer input
-        smoothed_skel = algorithms.smooth_labels(cell.skeleton, initial_label)
+        smoothed_skel = algorithms.smooth_features(cell.skeleton, initial_feature)
 
         # Should give same result
         np.testing.assert_array_almost_equal(smoothed_cell, smoothed_skel)
 
-    def test_smooth_labels_alpha_parameter(self, simple_skeleton_data, spatial_columns):
+    def test_smooth_features_alpha_parameter(
+        self, simple_skeleton_data, spatial_columns
+    ):
         """Test that alpha parameter affects smoothing."""
         vertices, edges, vertex_indices = simple_skeleton_data
         vertex_df = pd.DataFrame(
@@ -209,21 +213,23 @@ class TestSmoothLabels:
             root=vertex_indices[0],
         )
 
-        # Create initial label
-        initial_label = np.array([1.0, 0.0, 0.0, 0.0, 0.0])
+        # Create initial feature
+        initial_feature = np.array([1.0, 0.0, 0.0, 0.0, 0.0])
 
         # Test with different alpha values
-        smoothed_low = algorithms.smooth_labels(cell.skeleton, initial_label, alpha=0.1)
-        smoothed_high = algorithms.smooth_labels(
-            cell.skeleton, initial_label, alpha=0.9
+        smoothed_low = algorithms.smooth_features(
+            cell.skeleton, initial_feature, alpha=0.1
+        )
+        smoothed_high = algorithms.smooth_features(
+            cell.skeleton, initial_feature, alpha=0.9
         )
 
         # Should give different results
         assert not np.array_equal(smoothed_low, smoothed_high)
 
         # Both should have same length as input
-        assert len(smoothed_low) == len(initial_label)
-        assert len(smoothed_high) == len(initial_label)
+        assert len(smoothed_low) == len(initial_feature)
+        assert len(smoothed_high) == len(initial_feature)
 
 
 class TestSegregationIndex:
@@ -305,7 +311,7 @@ class TestAlgorithmIntegration:
         strahler_nums = algorithms.strahler_number(cell.skeleton)
 
         # Use as input to smoothing
-        smoothed_strahler = algorithms.smooth_labels(
+        smoothed_strahler = algorithms.smooth_features(
             cell.skeleton, strahler_nums.astype(float)
         )
 
@@ -328,12 +334,12 @@ class TestAlgorithmIntegration:
         assert all(num >= 1 for num in strahler_nums)  # All should be at least 1
 
         # Test smoothing on real data
-        # Create a simple binary label for testing
+        # Create a simple binary feature for testing
         n_vertices = nrn.skeleton.n_vertices
-        binary_label = np.zeros(n_vertices)
-        binary_label[: min(10, n_vertices)] = 1.0  # Label first 10 vertices
+        binary_feature = np.zeros(n_vertices)
+        binary_feature[: min(10, n_vertices)] = 1.0  # feature first 10 vertices
 
-        smoothed = algorithms.smooth_labels(nrn.skeleton, binary_label)
+        smoothed = algorithms.smooth_features(nrn.skeleton, binary_feature)
 
         assert len(smoothed) == n_vertices
         assert all(0 <= val <= 1 for val in smoothed)

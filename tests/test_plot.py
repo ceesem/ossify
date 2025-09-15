@@ -243,7 +243,7 @@ class TestSkeletonPlotting:
         plt.close(fig)
 
     def test_plot_skeleton_with_colors(
-        self, simple_skeleton_data, spatial_columns, mock_labels
+        self, simple_skeleton_data, spatial_columns, mock_features
     ):
         """Test skeleton plotting with color mapping."""
         vertices, edges, vertex_indices = simple_skeleton_data
@@ -266,10 +266,10 @@ class TestSkeletonPlotting:
             edges=edges_with_indices,
             spatial_columns=spatial_columns,
             root=vertex_indices[0],
-            labels=mock_labels,
+            features=mock_features,
         )
 
-        # Test plotting with colors (basic test - may need label resolution)
+        # Test plotting with colors (basic test - may need feature resolution)
         fig, ax = plt.subplots(1, 1, figsize=(6, 6))
         # Use RGB colors - need one color per vertex (5 vertices)
         colors = np.array(
@@ -563,7 +563,7 @@ class TestFigureUtilities:
         ax.set_ylim(0, 100)
 
         # Add scale bar
-        plot.add_scale_bar(ax, length=10, label="10 μm")
+        plot.add_scale_bar(ax, length=10, feature="10 μm")
 
         # Should have added elements to the plot
         # This is hard to test directly, so we just verify no errors

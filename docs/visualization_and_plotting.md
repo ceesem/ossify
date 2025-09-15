@@ -58,7 +58,7 @@ plt.show()
 # Add algorithmic analysis for visualization
 from ossify.algorithms import strahler_number
 strahler_vals = strahler_number(cell)
-cell.skeleton.add_label(strahler_vals, 'strahler_number')
+cell.skeleton.add_feature(strahler_vals, 'strahler_number')
 
 # Color by Strahler order (branching complexity)
 fig, ax = plt.subplots(figsize=(10, 8))
@@ -334,7 +334,7 @@ ossify.add_scale_bar(
     position=(0.05, 0.05),       # Position as fraction of axes
     color="black",
     linewidth=3,
-    label="50 μm",
+    feature="50 μm",
     fontsize=12
 )
 
@@ -381,7 +381,7 @@ for proj, ax in axes.items():
             ax=ax,
             length=5,
             position=(0.8, 0.05), 
-            label="5 μm",
+            feature="5 μm",
             fontsize=10
         )
 
@@ -411,13 +411,13 @@ if hasattr(cell, 'skeleton') and cell.skeleton is not None:
     )
     
     # Color by compartment if available
-    color_by = "compartment" if "compartment" in display_cell.skeleton.label_names else None
+    color_by = "compartment" if "compartment" in display_cell.skeleton.feature_names else None
     
     ossify.plot_morphology_2d(
         display_cell,
         color=color_by,
         palette={"0": "blue", "1": "red"} if color_by else "black",
-        linewidth="radius" if "radius" in display_cell.skeleton.label_names else 2,
+        linewidth="radius" if "radius" in display_cell.skeleton.feature_names else 2,
         ax=ax
     )
     
@@ -426,7 +426,7 @@ if hasattr(cell, 'skeleton') and cell.skeleton is not None:
         ax=ax,
         length=50,  # 50 μm
         position=(0.1, 0.1),
-        label="50 μm",
+        feature="50 μm",
         color="black"
     )
 ```
@@ -439,7 +439,7 @@ import ossify
 
 # Compute Strahler numbers
 strahler = ossify.strahler_number(cell)
-cell.skeleton.add_label(strahler, name="strahler")
+cell.skeleton.add_feature(strahler, name="strahler")
 
 # Create figure showing Strahler analysis
 fig, axes = plt.subplots(1, 2, figsize=(16, 8))
@@ -491,7 +491,7 @@ ossify.plot_morphology_2d(
 axes[0].set_title("Complete Morphology")
 
 # Dendrite only (compartment == 3)
-with cell.mask_context('skeleton', cell.skeleton.labels['compartment'] == 3) as masked_cell:
+with cell.mask_context('skeleton', cell.skeleton.features['compartment'] == 3) as masked_cell:
     ossify.plot_morphology_2d(
         masked_cell,
         projection="xy",
@@ -502,8 +502,8 @@ with cell.mask_context('skeleton', cell.skeleton.labels['compartment'] == 3) as 
 axes[1].set_title("Dendrite Only (Masked)")
 
 for ax in axes:
-    ax.set_xlabel("X (nm)")
-    ax.set_ylabel("Y (nm)")
+    ax.set_xfeature("X (nm)")
+    ax.set_yfeature("Y (nm)")
 
 plt.tight_layout()
 plt.show()
@@ -549,7 +549,7 @@ def plot_masked_comparison(cell, mask, mask_name="Mask"):
     return fig, axes
 
 # Example usage
-# quality_mask = cell.skeleton.get_label("quality") > 0.8
+# quality_mask = cell.skeleton.get_feature("quality") > 0.8
 # plot_masked_comparison(cell, quality_mask, "High Quality")
 ```
 
@@ -564,16 +564,16 @@ def plot_masked_comparison(cell, mask, mask_name="Mask"):
 - `ossify.multi_panel_figure(data_bounds_min, data_bounds_max, units_per_inch, layout, ...)` - Multi-panel layouts
 
 ### Enhancements
-- `ossify.add_scale_bar(ax, length, position=(0.05, 0.05), label=None, ...)` - Add scale bars
+- `ossify.add_scale_bar(ax, length, position=(0.05, 0.05), feature=None, ...)` - Add scale bars
 
 ### Projection Options
 - Standard projections: `"xy"`, `"xz"`, `"yz"`, `"yx"`, `"zx"`, `"zy"`
 - Custom projection functions that take vertices and return 2D coordinates
 
 ### Styling Parameters
-- `color` - Label name, array, or single color
+- `color` - feature name, array, or single color
 - `palette` - Colormap name or color dictionary
-- `linewidth` - Label name, array, or single value
+- `linewidth` - feature name, array, or single value
 - `alpha` - Transparency (0-1)
 - `root_marker` - Show root vertex marker
 - `invert_y` - Invert y-axis for projections containing 'y'

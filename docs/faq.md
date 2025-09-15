@@ -29,7 +29,7 @@ cell.add_skeleton(vertices, edges, root=0)  # Root required
 cell.add_graph(vertices, edges)  # No root needed
 ```
 
-### When should I use annotations vs layer labels?
+### When should I use annotations vs layer features?
 
 **Use annotations for:**
 - Sparse, discrete features (synapses, spines, markers)
@@ -37,7 +37,7 @@ cell.add_graph(vertices, edges)  # No root needed
 - Data you want to map to multiple layers
 - Features with their own spatial coordinates
 
-**Use layer labels for:**
+**Use layer features for:**
 - Properties of existing vertices (radius, compartment, quality)
 - Dense data where every vertex has a value
 - Computational results (Strahler numbers, distances)
@@ -46,8 +46,8 @@ cell.add_graph(vertices, edges)  # No root needed
 # Annotations: Sparse features with own coordinates
 cell.add_point_annotations("synapses", vertices=synapse_locations)
 
-# Labels: Properties of existing skeleton vertices
-cell.skeleton.add_label([1,2,2,3,3], "compartment")
+# features: Properties of existing skeleton vertices
+cell.skeleton.add_feature([1,2,2,3,3], "compartment")
 ```
 
 ### Should I use meshes or skeletons for surface analysis?
@@ -69,7 +69,7 @@ Many cells have both - use the appropriate layer for each analysis.
 ### How do I add a mesh to a cell with an L2 skeleton?
 
 The [`cortical_tools`](https://www.csdashm.com/cortical-tools/) package has a function to map mesh vertices to L2 IDs, which can then be used to link the mesh to the graph layer in ossify.
-It takes one to several minutes to compute the mapping for large meshes, but can be useful for generating surface mesh visualizations masked by compartment or other labels. The function `compute_vertex_to_l2_mapping` provides an L2 ID for each mesh vertex, which can be aligned with an ossify cell via the "graph" layer.
+It takes one to several minutes to compute the mapping for large meshes, but can be useful for generating surface mesh visualizations masked by compartment or other features. The function `compute_vertex_to_l2_mapping` provides an L2 ID for each mesh vertex, which can be aligned with an ossify cell via the "graph" layer.
 
 ```python
 import ossify as osy
@@ -84,12 +84,12 @@ cell = osy.load_cell_from_client(
 )
 
 mesh = client.mesh.get_mesh(root_id)
-mesh_labels = client.mesh.compute_vertex_to_l2_mapping(root_id=root_id, vertices=mesh.vertices, faces=mesh.faces)
+mesh_features = client.mesh.compute_vertex_to_l2_mapping(root_id=root_id, vertices=mesh.vertices, faces=mesh.faces)
 
 cell.add_mesh(
     vertices=mesh.vertices,
     faces=mesh.faces,
-    linkage=Link(mesh_labels, target='graph')
+    linkage=Link(mesh_features, target='graph')
 )
 ```
 
@@ -143,7 +143,7 @@ cell.describe()  # Explore structure
 with cell.mask_context("skeleton", quality > 0.8) as clean_cell:
     # Add analysis
     strahler = strahler_number(clean_cell.skeleton)
-    clean_cell.skeleton.add_label(strahler, "strahler")
+    clean_cell.skeleton.add_feature(strahler, "strahler")
     
     # Visualize
     fig = ossify.plot_cell_2d(clean_cell, color="strahler")
@@ -169,7 +169,7 @@ for cell in cells_um:
     metrics.append({
         'cable_length': cell.skeleton.cable_length(),
         'branch_points': len(cell.skeleton.branch_points),
-        'max_strahler': cell.skeleton.get_label('strahler').max()
+        'max_strahler': cell.skeleton.get_feature('strahler').max()
     })
 ```
 
@@ -203,8 +203,8 @@ Use boolean logic to combine conditions:
 
 ```python
 # Multiple criteria
-quality = skeleton.get_label("quality")
-compartment = skeleton.get_label("compartment") 
+quality = skeleton.get_feature("quality")
+compartment = skeleton.get_feature("compartment") 
 distance = skeleton.distance_to_root()
 
 # Combine with boolean logic
@@ -294,12 +294,12 @@ if hasattr(cell.annotations, 'pre_syn'):
 cell = ossify.load_cell(large_cell_path)
 
 # Filter early
-quality_mask = cell.skeleton.get_label("quality") > 0.9
+quality_mask = cell.skeleton.get_feature("quality") > 0.9
 with cell.mask_context("skeleton", quality_mask) as clean_cell:
     
     # Process compartments separately
     for compartment_id in [2, 3]:  # axon, dendrite
-        comp_mask = clean_cell.skeleton.get_label("compartment") == compartment_id
+        comp_mask = clean_cell.skeleton.get_feature("compartment") == compartment_id
         with clean_cell.mask_context("skeleton", comp_mask) as comp_cell:
             analyze_compartment(comp_cell, compartment_id)
 ```

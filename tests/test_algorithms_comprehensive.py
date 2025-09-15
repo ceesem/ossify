@@ -12,7 +12,7 @@ from scipy import sparse
 from ossify import Cell, SkeletonLayer, algorithms
 from ossify.algorithms import (
     _distribution_entropy,
-    _label_axon_synapse_flow,
+    _feature_axon_synapse_flow,
     _laplacian_offset,
     _precompute_synapse_inds,
     _split_direction_and_quality,
@@ -178,20 +178,20 @@ class TestSynapseBetweenness:
         assert all(val == 0 for val in betweenness)  # No paths possible
 
 
-class TestLabelAxonFromSynapseFlow:
-    """Tests for label_axon_from_synapse_flow algorithm."""
+class TestfeatureAxonFromSynapseFlow:
+    """Tests for feature_axon_from_synapse_flow algorithm."""
 
-    def test_label_axon_basic_functionality(self, nrn):
-        """Test basic axon labeling from synapse flow."""
+    def test_feature_axon_basic_functionality(self, nrn):
+        """Test basic axon featureing from synapse flow."""
         # Test basic functionality
-        is_axon = algorithms.label_axon_from_synapse_flow(
+        is_axon = algorithms.feature_axon_from_synapse_flow(
             nrn, pre_syn="pre_syn", post_syn="post_syn"
         )
         assert is_axon.sum() == 4181
         assert np.any(is_axon) or np.any(~is_axon)
 
-    def test_label_axon_with_arrays(self, nrn):
-        """Test axon labeling with direct arrays instead of annotation names."""
+    def test_feature_axon_with_arrays(self, nrn):
+        """Test axon featureing with direct arrays instead of annotation names."""
 
         # Test with SkeletonLayer and arrays
         pre_syn_inds = nrn.annotations["pre_syn"].map_index_to_layer(
@@ -201,7 +201,7 @@ class TestLabelAxonFromSynapseFlow:
             "skeleton", as_positional=True
         )
 
-        is_axon = algorithms.label_axon_from_synapse_flow(
+        is_axon = algorithms.feature_axon_from_synapse_flow(
             nrn.skeleton,
             pre_syn=pre_syn_inds,
             post_syn=post_syn_inds,
@@ -212,10 +212,10 @@ class TestLabelAxonFromSynapseFlow:
         assert is_axon.dtype == bool
         assert is_axon.sum() == 4181
 
-    def test_label_axon_return_segregation_index(self, nrn):
-        """Test axon labeling with segregation index return using real data."""
+    def test_feature_axon_return_segregation_index(self, nrn):
+        """Test axon featureing with segregation index return using real data."""
         # Test with return_segregation_index=True using real data
-        result = algorithms.label_axon_from_synapse_flow(
+        result = algorithms.feature_axon_from_synapse_flow(
             nrn, pre_syn="pre_syn", post_syn="post_syn", return_segregation_index=True
         )
 
@@ -229,10 +229,10 @@ class TestLabelAxonFromSynapseFlow:
         assert isinstance(seg_index, (int, float))
         assert 0 <= seg_index <= 1  # Segregation index should be in [0, 1]
 
-    def test_label_axon_multiple_times(self, nrn):
-        """Test axon labeling with multiple splits (ntimes > 1) using real data."""
+    def test_feature_axon_multiple_times(self, nrn):
+        """Test axon featureing with multiple splits (ntimes > 1) using real data."""
         # Test with multiple splits using real data
-        is_axon = algorithms.label_axon_from_synapse_flow(
+        is_axon = algorithms.feature_axon_from_synapse_flow(
             nrn, pre_syn="pre_syn", post_syn="post_syn", ntimes=2
         )
 
@@ -240,7 +240,7 @@ class TestLabelAxonFromSynapseFlow:
         assert is_axon.dtype == bool
 
         # Compare with single split to ensure different results
-        is_axon_single = algorithms.label_axon_from_synapse_flow(
+        is_axon_single = algorithms.feature_axon_from_synapse_flow(
             nrn, pre_syn="pre_syn", post_syn="post_syn", ntimes=1
         )
 
@@ -248,13 +248,13 @@ class TestLabelAxonFromSynapseFlow:
         assert len(is_axon_single) == len(is_axon)
 
 
-class TestLabelAxonFromSpectralSplit:
-    """Tests for label_axon_from_spectral_split algorithm."""
+class TestfeatureAxonFromSpectralSplit:
+    """Tests for feature_axon_from_spectral_split algorithm."""
 
     def test_spectral_split_basic(self, nrn):
         """Test basic spectral split functionality using real data."""
         # Test spectral split with real data
-        is_axon = algorithms.label_axon_from_spectral_split(
+        is_axon = algorithms.feature_axon_from_spectral_split(
             nrn, pre_syn="pre_syn", post_syn="post_syn"
         )
 
@@ -269,7 +269,7 @@ class TestLabelAxonFromSpectralSplit:
         # It should raise an error when trying to use SkeletonLayer with string annotation names
         # since SkeletonLayer doesn't have annotations
         with pytest.raises((TypeError, AttributeError, KeyError)):
-            algorithms.label_axon_from_spectral_split(
+            algorithms.feature_axon_from_spectral_split(
                 nrn.skeleton,  # SkeletonLayer input
                 pre_syn="pre_syn",  # String annotation name
                 post_syn="post_syn",
@@ -278,17 +278,17 @@ class TestLabelAxonFromSpectralSplit:
     def test_spectral_split_parameters(self, nrn):
         """Test spectral split with different parameters using real data."""
         # Test with raw_split=True
-        is_axon_raw = algorithms.label_axon_from_spectral_split(
+        is_axon_raw = algorithms.feature_axon_from_spectral_split(
             nrn, pre_syn="pre_syn", post_syn="post_syn", raw_split=True
         )
 
         # Test with different smoothing_alpha
-        is_axon_smooth = algorithms.label_axon_from_spectral_split(
+        is_axon_smooth = algorithms.feature_axon_from_spectral_split(
             nrn, pre_syn="pre_syn", post_syn="post_syn", smoothing_alpha=0.5
         )
 
         # Test with very low smoothing
-        is_axon_low_smooth = algorithms.label_axon_from_spectral_split(
+        is_axon_low_smooth = algorithms.feature_axon_from_spectral_split(
             nrn, pre_syn="pre_syn", post_syn="post_syn", smoothing_alpha=0.1
         )
 
@@ -436,17 +436,17 @@ class TestAlgorithmIntegration:
         assert np.sum(betweenness) >= 0  # Should have non-negative values
 
         # Step 2: Use synapse flow method for axon detection
-        is_axon_flow = algorithms.label_axon_from_synapse_flow(
+        is_axon_flow = algorithms.feature_axon_from_synapse_flow(
             nrn, "pre_syn", "post_syn", return_segregation_index=True
         )
-        axon_labels_flow, seg_index_flow = is_axon_flow
+        axon_features_flow, seg_index_flow = is_axon_flow
 
-        assert len(axon_labels_flow) == n_vertices
+        assert len(axon_features_flow) == n_vertices
         assert 0 <= seg_index_flow <= 1
-        assert axon_labels_flow.dtype == bool
+        assert axon_features_flow.dtype == bool
 
         # Step 3: Use spectral method for comparison
-        is_axon_spectral = algorithms.label_axon_from_spectral_split(
+        is_axon_spectral = algorithms.feature_axon_from_spectral_split(
             nrn, "pre_syn", "post_syn"
         )
 
@@ -454,7 +454,7 @@ class TestAlgorithmIntegration:
         assert is_axon_spectral.dtype == bool
 
         # Both methods should give meaningful results
-        assert np.any(axon_labels_flow) or np.any(~axon_labels_flow)
+        assert np.any(axon_features_flow) or np.any(~axon_features_flow)
         assert np.any(is_axon_spectral) or np.any(~is_axon_spectral)
 
     def test_algorithm_chain_with_strahler_smoothing(
@@ -489,12 +489,12 @@ class TestAlgorithmIntegration:
         assert all(num >= 1 for num in strahler_nums)
 
         # Step 2: Smooth Strahler numbers
-        smoothed_strahler = algorithms.smooth_labels(
+        smoothed_strahler = algorithms.smooth_features(
             cell.skeleton, strahler_nums.astype(float), alpha=0.8
         )
         assert len(smoothed_strahler) == 5
 
-        # Step 3: Use smoothed labels as basis for further analysis
+        # Step 3: Use smoothed features as basis for further analysis
         # Create synthetic synapse data based on Strahler structure
         high_strahler_vertices = np.where(strahler_nums > 1)[0]
         low_strahler_vertices = np.where(strahler_nums == 1)[0]
@@ -559,7 +559,7 @@ class TestAlgorithmIntegration:
         assert len(strahler_nums) == 5  # Should work on skeleton despite having mesh
 
         # Test smoothing
-        smoothed = algorithms.smooth_labels(cell, strahler_nums.astype(float))
+        smoothed = algorithms.smooth_features(cell, strahler_nums.astype(float))
         assert len(smoothed) == 5
 
     def test_algorithms_with_real_data(self, nrn):
@@ -580,7 +580,7 @@ class TestAlgorithmIntegration:
         assert strahler_nums.dtype in [np.int32, np.int64]
 
         # Test smoothing with Strahler numbers
-        smoothed = algorithms.smooth_labels(nrn.skeleton, strahler_nums.astype(float))
+        smoothed = algorithms.smooth_features(nrn.skeleton, strahler_nums.astype(float))
         assert len(smoothed) == n_vertices
         assert all(val >= 0 for val in smoothed)
 
@@ -647,10 +647,10 @@ class TestErrorHandling:
             root=vertex_indices[0],
         )
 
-        # Test smooth_labels with wrong size label
-        wrong_size_label = np.array([1.0, 0.0])  # Too short
+        # Test smooth_features with wrong size feature
+        wrong_size_feature = np.array([1.0, 0.0])  # Too short
         with pytest.raises((ValueError, IndexError)):
-            algorithms.smooth_labels(cell.skeleton, wrong_size_label)
+            algorithms.smooth_features(cell.skeleton, wrong_size_feature)
 
         # Test synapse_betweenness with out-of-bounds indices
         invalid_pre = np.array([100])  # Out of bounds positional index

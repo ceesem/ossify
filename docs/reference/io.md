@@ -106,7 +106,7 @@ ossify.save_cell(cell, "existing_file.osy", allow_overwrite=True)
 
 The `.osy` format uses efficient compression:
 
-- **Vertices/Labels**: Feather format with Zstandard compression
+- **Vertices/features**: Feather format with Zstandard compression
 - **Connectivity**: Sparse matrix compression for edges/faces  
 - **Metadata**: JSON with numpy array serialization
 - **Archive**: TAR format for multiple file organization
@@ -236,18 +236,18 @@ def process_neuron_batch(input_path, output_path, processing_func):
     return results
 
 # Example processing function
-def add_analysis_labels(cell):
-    \"\"\"Add standard analysis labels to cell\"\"\"
+def add_analysis_features(cell):
+    \"\"\"Add standard analysis features to cell\"\"\"
     
     # Add Strahler numbers
     strahler = ossify.strahler_number(cell)
-    cell.skeleton.add_label(strahler, "strahler_order")
+    cell.skeleton.add_feature(strahler, "strahler_order")
     
-    # Add compartment labels if synapses available
+    # Add compartment features if synapses available
     if "pre_syn" in cell.annotations.names:
-        is_axon = ossify.label_axon_from_synapse_flow(cell)
+        is_axon = ossify.feature_axon_from_synapse_flow(cell)
         compartment = np.where(is_axon, "axon", "dendrite")
-        cell.skeleton.add_label(compartment, "compartment")
+        cell.skeleton.add_feature(compartment, "compartment")
     
     return cell
 
@@ -255,7 +255,7 @@ def add_analysis_labels(cell):
 results = process_neuron_batch(
     input_path="s3://raw-data/neurons/",
     output_path="s3://processed-data/analyzed/", 
-    processing_func=add_analysis_labels
+    processing_func=add_analysis_features
 )
 
 # Summary

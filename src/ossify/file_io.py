@@ -694,8 +694,8 @@ def import_legacy_meshwork(
     l2_skeleton : bool
         Whether to import the skeleton as a level 2 skeleton (True, puts "mesh" data into cell.graph) or as a mesh (False, puts "mesh" data into cell.mesh).
     as_pcg_skel : bool
-        Whether to process the skeleton to remap typical pcg-skel built skeleton annotations like segment properties and volume properties into labels.
-        Volume properties are mapped to graph labels (since they are associated with L2 graph vertices) while segment properties are mapped to skeleton labels.
+        Whether to process the skeleton to remap typical pcg-skel built skeleton annotations like segment properties and volume properties into features.
+        Volume properties are mapped to graph features (since they are associated with L2 graph vertices) while segment properties are mapped to skeleton features.
 
     Returns
     -------
@@ -711,8 +711,8 @@ def import_legacy_meshwork(
 
 def _process_pcg_skel_import(cell: Cell) -> Cell:
     if "compartment" in cell.annotations:
-        cell.skeleton.add_label(
-            cell.skeleton.map_annotations_to_label(
+        cell.skeleton.add_feature(
+            cell.skeleton.map_annotations_to_feature(
                 "compartment",
                 distance_threshold=0,
                 agg={"compartment": ("compartment", "mean")},
@@ -720,7 +720,7 @@ def _process_pcg_skel_import(cell: Cell) -> Cell:
             "compartment",
         )
     if "segment_properties" in cell.annotations:
-        labels = cell.skeleton.map_annotations_to_label(
+        features = cell.skeleton.map_annotations_to_feature(
             "segment_properties",
             distance_threshold=0,
             agg={
@@ -732,14 +732,14 @@ def _process_pcg_skel_import(cell: Cell) -> Cell:
                 "vol": ("vol", "mean"),
             },
         )
-        cell.skeleton.add_label(labels)
+        cell.skeleton.add_feature(features)
     if "lvl2_ids" in cell.annotations:
-        cell.graph.add_label(cell.annotations.lvl2_ids.labels[["lvl2_id"]])
+        cell.graph.add_feature(cell.annotations.lvl2_ids.features[["lvl2_id"]])
     if "is_axon" in cell.annotations:
         is_axon = cell.skeleton.nodes.index.isin(cell.annotations.is_axon.vertex_index)
-        cell.skeleton.add_label(is_axon, "is_axon")
+        cell.skeleton.add_feature(is_axon, "is_axon")
     if "vol_prop" in cell.annotations:
-        cell.graph.add_label(cell.annotations.vol_prop.labels)
+        cell.graph.add_feature(cell.annotations.vol_prop.features)
     for anno in [
         "compartment",
         "segment_properties",
@@ -883,7 +883,7 @@ class MeshworkImporter:
             vertices=verts,
             edges=edges,
             root=root,
-            labels={"radius": radius} if radius is not None else None,
+            features={"radius": radius} if radius is not None else None,
             linkage=Link(
                 mesh_to_skel_map, source=source_layer, map_value_is_index=False
             ),

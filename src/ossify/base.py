@@ -133,7 +133,7 @@ class LayerManager:
     def describe(self) -> None:
         """Generate a detailed description of all managed layers.
 
-        Shows each layer with its metrics, labels, and links - same level of
+        Shows each layer with its metrics, features, and links - same level of
         detail as individual layer describe() methods.
 
         Returns
@@ -170,13 +170,13 @@ class LayerManager:
             metrics = layer._get_layer_metrics()
             lines.append(f"{continuation}├── {metrics}")
 
-            # Labels
-            if len(layer.label_names) > 0:
-                label_list = ", ".join(layer.label_names)
-                label_line = f"{continuation}├── Labels: [{label_list}]"
-                lines.extend(self._wrap_line(label_line))
+            # features
+            if len(layer.feature_names) > 0:
+                feature_list = ", ".join(layer.feature_names)
+                feature_line = f"{continuation}├── features: [{feature_list}]"
+                lines.extend(self._wrap_line(feature_line))
             else:
-                lines.append(f"{continuation}├── Labels: []")
+                lines.append(f"{continuation}├── features: []")
 
             # Links
             link_display = layer._get_link_display()
@@ -395,7 +395,7 @@ class Cell:
         self,
         vertices: Union[np.ndarray, pd.DataFrame, MeshLayer],
         faces: Optional[Union[np.ndarray, pd.DataFrame]] = None,
-        labels: Optional[Union[dict, pd.DataFrame]] = None,
+        features: Optional[Union[dict, pd.DataFrame]] = None,
         *,
         vertex_index: Optional[Union[str, np.ndarray]] = None,
         linkage: Optional[Link] = None,
@@ -409,8 +409,8 @@ class Cell:
             The vertices of the mesh, or a MeshLayer object.
         faces : Union[np.ndarray, pd.DataFrame]
             The faces of the mesh. If faces are provided as a dataframe, faces should be in dataframe indices.
-        labels : Optional[Union[dict, pd.DataFrame]]
-            Additional labels for the mesh. If passed as dictionary, the key is the label name and the values are an array of label values.
+        features : Optional[Union[dict, pd.DataFrame]]
+            Additional features for the mesh. If passed as dictionary, the key is the feature name and the values are an array of feature values.
         vertex_index : Optional[Union[str, np.ndarray]]
             The column to use as a vertex index for the mesh, if vertices are a dataframe.
         linkage : Optional[Link]
@@ -435,7 +435,7 @@ class Cell:
                     name=self.MESH_LN,
                     vertices=vertices,
                     faces=faces,
-                    labels=labels,
+                    features=features,
                     morphsync=self._morphsync,
                     spatial_columns=spatial_columns,
                     linkage=linkage,
@@ -449,7 +449,7 @@ class Cell:
         self,
         vertices: Union[np.ndarray, pd.DataFrame, SkeletonLayer],
         edges: Optional[Union[np.ndarray, pd.DataFrame]] = None,
-        labels: Optional[Union[dict, pd.DataFrame]] = None,
+        features: Optional[Union[dict, pd.DataFrame]] = None,
         root: Optional[int] = None,
         *,
         vertex_index: Optional[Union[str, np.ndarray]] = None,
@@ -466,8 +466,8 @@ class Cell:
             The vertices of the skeleton, or a SkeletonLayer object.
         edges : Union[np.ndarray, pd.DataFrame]
             The edges of the skeleton.
-        labels : Optional[Union[dict, pd.DataFrame]]
-            The labels for the skeleton.
+        features : Optional[Union[dict, pd.DataFrame]]
+            The features for the skeleton.
         root : Optional[int]
             The root vertex for the skeleton, required of the edges are not already consistent with a single root.
         vertex_index : Optional[Union[str, np.ndarray]]
@@ -495,7 +495,7 @@ class Cell:
                     name=self.SKEL_LN,
                     vertices=vertices,
                     edges=edges,
-                    labels=labels,
+                    features=features,
                     root=root,
                     morphsync=self._morphsync,
                     spatial_columns=spatial_columns,
@@ -511,7 +511,7 @@ class Cell:
         self,
         vertices: Union[np.ndarray, pd.DataFrame, SkeletonLayer],
         edges: Optional[Union[np.ndarray, pd.DataFrame]] = None,
-        labels: Optional[Union[dict, pd.DataFrame]] = None,
+        features: Optional[Union[dict, pd.DataFrame]] = None,
         *,
         vertex_index: Optional[Union[str, np.ndarray]] = None,
         spatial_columns: Optional[list] = None,
@@ -527,8 +527,8 @@ class Cell:
             The vertices of the graph.
         edges : Union[np.ndarray, pd.DataFrame]
             The edges of the graph.
-        labels : Optional[Union[dict, pd.DataFrame]]
-            The labels for the graph.
+        features : Optional[Union[dict, pd.DataFrame]]
+            The features for the graph.
         vertex_index : Optional[Union[str, np.ndarray]]
             The vertex index for the graph.
         spatial_columns: Optional[list] = None
@@ -552,7 +552,7 @@ class Cell:
                     name=self.GRAPH_LN,
                     vertices=vertices,
                     edges=edges,
-                    labels=labels,
+                    features=features,
                     morphsync=self._morphsync,
                     spatial_columns=spatial_columns,
                     linkage=linkage,
@@ -569,7 +569,7 @@ class Cell:
         spatial_columns: Optional[list] = None,
         *,
         vertex_index: Optional[Union[str, np.ndarray]] = None,
-        labels: Optional[Union[dict, pd.DataFrame]] = None,
+        features: Optional[Union[dict, pd.DataFrame]] = None,
         linkage: Optional[Link] = None,
         vertices_from_linkage: bool = False,
     ) -> Self:
@@ -586,8 +586,8 @@ class Cell:
             The spatial columns for the annotation layer.
         vertex_index : Optional[Union[str, np.ndarray]]
             The vertex index for the annotation layer.
-        labels : Optional[Union[dict, pd.DataFrame]]
-            The labels for the annotation layer.
+        features : Optional[Union[dict, pd.DataFrame]]
+            The features for the annotation layer.
         linkage : Optional[Link]
             The linkage information for the annotation layer. Typically, you will define the target vertices for annotations.
         vertices_from_linkage : bool
@@ -640,7 +640,7 @@ class Cell:
                 vertices=vertices,
                 spatial_columns=spatial_columns,
                 vertex_index=vertex_index,
-                labels=labels,
+                features=features,
                 morphsync=self._morphsync,
                 linkage=linkage,
             )
@@ -655,7 +655,7 @@ class Cell:
         spatial_columns: Optional[list] = None,
         *,
         vertex_index: Optional[Union[str, np.ndarray]] = None,
-        labels: Optional[Union[dict, pd.DataFrame]] = None,
+        features: Optional[Union[dict, pd.DataFrame]] = None,
         linkage: Optional[Link] = None,
     ) -> Self:
         """
@@ -671,8 +671,8 @@ class Cell:
             The spatial columns for the point layer.
         vertex_index : Optional[Union[str, np.ndarray]]
             The vertex index for the annotation layer.
-        labels : Optional[Union[dict, pd.DataFrame]]
-            The labels for the annotation layer.
+        features : Optional[Union[dict, pd.DataFrame]]
+            The features for the annotation layer.
         linkage : Optional[Link]
             The linkage information for the annotation layer. Typically, you will define the target vertices for annotations.
 
@@ -701,7 +701,7 @@ class Cell:
                 vertices=vertices,
                 spatial_columns=spatial_columns,
                 vertex_index=vertex_index,
-                labels=labels,
+                features=features,
                 morphsync=self._morphsync,
                 linkage=linkage,
             )
@@ -787,66 +787,66 @@ class Cell:
         return target
 
     @property
-    def labels(self) -> pd.DataFrame:
-        """Return a DataFrame listing all label columns across all layers. Each label is a row, with the layer name and label name as columns."""
-        all_labels = []
+    def features(self) -> pd.DataFrame:
+        """Return a DataFrame listing all feature columns across all layers. Each feature is a row, with the layer name and feature name as columns."""
+        all_features = []
         for layer in self.layers:
-            all_labels.append(
-                pd.DataFrame({"layer": layer.name, "labels": layer.labels.columns})
+            all_features.append(
+                pd.DataFrame({"layer": layer.name, "features": layer.features.columns})
             )
-        return pd.concat(all_labels)
+        return pd.concat(all_features)
 
-    def get_labels(
+    def get_features(
         self,
-        labels: Union[str, list],
+        features: Union[str, list],
         target_layer: str,
         source_layers: Optional[Union[str, list]] = None,
         agg: Union[str, dict] = "median",
     ) -> pd.DataFrame:
-        """Map label columns from various sources to a target layer.
+        """Map feature columns from various sources to a target layer.
 
         Parameters
         ----------
-        labels : Union[str, list]
-            The labels to map from the source layer.
+        features : Union[str, list]
+            The features to map from the source layer.
         target_layer : str
-            The target layer to map all labels to.
+            The target layer to map all features to.
         source_layers : Optional[Union[str, list]]
-            The source layers to map the labels from. Unnecessary if labels are unique.
+            The source layers to map the features from. Unnecessary if features are unique.
         agg : Union[str, dict]
-            The aggregation method to use when mapping the labels.
+            The aggregation method to use when mapping the features.
             Anything pandas `groupby.agg` takes, as well as "majority" which will is a majority vote across the mapped indices via the stats.mode function.
 
         Returns
         -------
         pd.DataFrame
-            The mapped labels for the target layer.
+            The mapped features for the target layer.
         """
-        if isinstance(labels, str):
-            labels = [labels]
+        if isinstance(features, str):
+            features = [features]
         if isinstance(source_layers, str):
             source_layers = [source_layers]
         elif source_layers is None:
-            source_layers = [None] * len(labels)
-        remap_labels = []
-        for label, source_layer in zip(labels, source_layers):
-            label_row = self.labels.query("labels == @label")
-            if label_row.shape[0] == 0:
-                raise ValueError(f'Label "{label}" not found in any layer.')
-            if label_row.shape[0] > 1 and source_layer is None:
+            source_layers = [None] * len(features)
+        remap_features = []
+        for feature, source_layer in zip(features, source_layers):
+            feature_row = self.features.query("features == @feature")
+            if feature_row.shape[0] == 0:
+                raise ValueError(f'feature "{feature}" not found in any layer.')
+            if feature_row.shape[0] > 1 and source_layer is None:
                 raise ValueError(
-                    f'Label "{label}" found in multiple layers, please specify a source layer.'
+                    f'feature "{feature}" found in multiple layers, please specify a source layer.'
                 )
             if source_layer is None:
-                source_layer = label_row.iloc[0]["layer"]
-            remap_labels.append(
-                self.layers[source_layer].map_labels_to_layer(
-                    labels=label,
+                source_layer = feature_row.iloc[0]["layer"]
+            remap_features.append(
+                self.layers[source_layer].map_features_to_layer(
+                    features=feature,
                     layer=target_layer,
                     agg=agg,
                 )
             )
-        return pd.concat(remap_labels, axis=1)
+        return pd.concat(remap_features, axis=1)
 
     @contextlib.contextmanager
     def mask_context(
@@ -1356,12 +1356,15 @@ class Cell:
                 else:
                     details = f"vertices: {vertex_count:,}"
 
-                # Add labels info
-                if hasattr(layer_obj, "label_names") and len(layer_obj.label_names) > 0:
-                    labels_str = ", ".join(layer_obj.label_names)
-                    details += f" | labels: [{labels_str}]"
+                # Add features info
+                if (
+                    hasattr(layer_obj, "feature_names")
+                    and len(layer_obj.feature_names) > 0
+                ):
+                    features_str = ", ".join(layer_obj.feature_names)
+                    details += f" | features: [{features_str}]"
                 else:
-                    details += " | labels: []"
+                    details += " | features: []"
 
                 html_parts.append(f"""
                 <div class="layer-item">
@@ -1392,12 +1395,12 @@ class Cell:
                 else:
                     details = f"vertices: {vertex_count:,}"
 
-                # Add labels info
-                if hasattr(layer, "label_names") and len(layer.label_names) > 0:
-                    labels_str = ", ".join(layer.label_names)
-                    details += f" | labels: [{labels_str}]"
+                # Add features info
+                if hasattr(layer, "feature_names") and len(layer.feature_names) > 0:
+                    features_str = ", ".join(layer.feature_names)
+                    details += f" | features: [{features_str}]"
                 else:
-                    details += " | labels: []"
+                    details += " | features: []"
 
                 html_parts.append(f"""
                 <div class="layer-item">
@@ -1422,12 +1425,15 @@ class Cell:
             vertex_count = len(annotation.vertices)
             details = f"vertices: {vertex_count:,}"
 
-            # Add labels info
-            if hasattr(annotation, "label_names") and len(annotation.label_names) > 0:
-                labels_str = ", ".join(annotation.label_names)
-                details += f" | labels: [{labels_str}]"
+            # Add features info
+            if (
+                hasattr(annotation, "feature_names")
+                and len(annotation.feature_names) > 0
+            ):
+                features_str = ", ".join(annotation.feature_names)
+                details += f" | features: [{features_str}]"
             else:
-                details += " | labels: []"
+                details += " | features: []"
 
             html_parts.append(f"""
             <div class="annotation-item">

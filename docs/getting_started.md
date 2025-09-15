@@ -153,7 +153,7 @@ cell = ossify.load_cell('https://github.com/ceesem/ossify/raw/refs/heads/main/86
 
 print("Cable length:", cell.skeleton.cable_length(), "nm")
 print("Number of presynaptic sites:", len(cell.annotations.pre_syn))
-print("Available skeleton labels:", cell.skeleton.label_names)
+print("Available skeleton features:", cell.skeleton.feature_names)
 
 # From CAVEclient (requires caveclient)
 # cell = ossify.load_cell_from_client(root_id=12345, client=cave_client)
@@ -167,7 +167,7 @@ print("Available skeleton labels:", cell.skeleton.label_names)
 Now that you have a basic cell, you can:
 
 1. **Explore layer properties** - Learn about meshes, graphs, and skeletons
-2. **Work with annotations** - Add labels and sparse features  
+2. **Work with annotations** - Add features and sparse features  
 3. **Apply masks** - Filter your data for analysis
 4. **Use algorithms** - Compute Strahler numbers, classify compartments
 5. **Create visualizations** - Make publication-ready plots

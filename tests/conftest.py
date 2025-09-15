@@ -151,7 +151,7 @@ def simple_graph_data():
 
 @pytest.fixture
 def mock_point_annotations():
-    """Small point cloud with labels."""
+    """Small point cloud with features."""
     vertices = np.array(
         [[0.5, 0.2, 0.1], [1.5, 0.1, 0.2], [2.5, 0.3, 0.0], [3.2, 0.1, 0.1]]
     )
@@ -177,8 +177,8 @@ def spatial_columns():
 
 
 @pytest.fixture
-def mock_labels():
-    """Sample label data for testing."""
+def mock_features():
+    """Sample feature data for testing."""
     return {
         "radius": [0.5, 0.6, 0.4, 0.7, 0.3],
         "compartment": ["soma", "dendrite", "dendrite", "dendrite", "axon"],

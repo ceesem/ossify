@@ -6,16 +6,16 @@
 Annotations are sparse point cloud layers that represent specific features or events in cellular morphology. Unlike the main morphological layers (mesh, graph, skeleton), annotations are designed for discrete features like synapses, spines, or markers that occur at specific locations.
 
 !!! note "Shared Features"
-    Annotations inherit many common features from the `PointMixin` class. For information about labels, masking, transformations, spatial queries, and cross-layer mapping, see [Shared Layer Features](shared_layer_features.md).
+    Annotations inherit many common features from the `PointMixin` class. For information about features, masking, transformations, spatial queries, and cross-layer mapping, see [Shared Layer Features](shared_layer_features.md).
 
-!!! info "Annotations vs Layer Labels"
-    **Annotations** are sparse point clouds representing discrete features. **Layer labels** are arrays of values attached to every vertex in a layer. Use annotations for sparse features (synapses, spines) and labels for properties of existing vertices (radius, compartment).
+!!! info "Annotations vs Layer features"
+    **Annotations** are sparse point clouds representing discrete features. **Layer features** are arrays of values attached to every vertex in a layer. Use annotations for sparse features (synapses, spines) and features for properties of existing vertices (radius, compartment).
 
 ## What are Annotations?
 
 Annotations (`PointCloudLayer` in annotation context) contain:
 - **Vertices**: 3D coordinates of feature locations
-- **Labels**: Metadata about each annotation (confidence, type, size, etc.)
+- **features**: Metadata about each annotation (confidence, type, size, etc.)
 - **Linkage**: Optional connections to morphological layers
 - **Sparse nature**: Represent discrete events, not continuous morphology
 
@@ -23,7 +23,7 @@ Annotations (`PointCloudLayer` in annotation context) contain:
 
 ### Quick Overview with `describe()`
 
-The `describe()` method provides a comprehensive summary of annotation layers, showing vertex counts, labels, and connections to other layers:
+The `describe()` method provides a comprehensive summary of annotation layers, showing vertex counts, features, and connections to other layers:
 
 ```python
 # Individual annotation layer
@@ -35,7 +35,7 @@ cell.annotations.synapses.describe()
 # Cell: my_neuron
 # Layer: synapses (PointCloudLayer)
 ├── 23 vertices
-├── Labels: [synapse_type, confidence, size]
+├── features: [synapse_type, confidence, size]
 └── Links: skeleton → synapses
 ```
 
@@ -43,7 +43,7 @@ The output shows:
 - **Cell context**: Which cell these annotations belong to
 - **Layer type**: Confirms this is a PointCloudLayer (annotation)
 - **Metrics**: Vertex count (number of annotation points)
-- **Labels**: Available metadata columns for each annotation
+- **features**: Available metadata columns for each annotation
 - **Links**: Connections to morphological layers (`<->` = bidirectional, `→` = unidirectional)
 
 ### Annotation Manager Overview
@@ -60,11 +60,11 @@ cell.annotations.describe()
 # Annotations (2)
 ├── synapses (PointCloudLayer)
 │   ├── 23 vertices
-│   ├── Labels: [synapse_type, confidence]
+│   ├── features: [synapse_type, confidence]
 │   └── Links: skeleton → synapses
 └── spines (PointCloudLayer)
     ├── 47 vertices
-    ├── Labels: [spine_type, head_diameter]
+    ├── features: [spine_type, head_diameter]
     └── Links: skeleton → spines
 ```
 
@@ -125,8 +125,8 @@ cell.add_point_annotations(
 
 # Access annotation metadata
 synapses = cell.annotations.synapses_detailed
-print(f"Confidence values: {synapses.get_label('confidence')}")
-print(f"Synapse types: {synapses.get_label('synapse_type')}")
+print(f"Confidence values: {synapses.get_feature('confidence')}")
+print(f"Synapse types: {synapses.get_feature('synapse_type')}")
 ```
 
 ### Multiple Annotation Types
@@ -138,7 +138,7 @@ pre_syn_locations = np.array([[0.2, 0.1, 0.0], [1.8, -0.1, 0.0]])
 cell.add_point_annotations(
     name="pre_syn",
     vertices=pre_syn_locations,
-    labels={"strength": [0.8, 0.6]}
+    features={"strength": [0.8, 0.6]}
 )
 
 # Postsynaptic sites  
@@ -146,7 +146,7 @@ post_syn_locations = np.array([[0.7, 0.2, 0.0], [1.3, 0.1, 0.0]])
 cell.add_point_annotations(
     name="post_syn", 
     vertices=post_syn_locations,
-    labels={"receptor_type": ["AMPA", "GABA"]}
+    features={"receptor_type": ["AMPA", "GABA"]}
 )
 
 # Dendritic spines
@@ -154,7 +154,7 @@ spine_locations = np.array([[0.3, 0.3, 0.0], [0.9, -0.2, 0.0], [1.7, 0.3, 0.0]])
 cell.add_point_annotations(
     name="spines",
     vertices=spine_locations,
-    labels={
+    features={
         "spine_type": ["mushroom", "thin", "stubby"],
         "volume": [0.05, 0.02, 0.03]
     }
@@ -182,7 +182,7 @@ cell.add_point_annotations(
         target="skeleton",           # Target layer
         map_value_is_index=True     # Values are vertex indices
     ),
-    labels={"confidence": [0.9, 0.8, 0.7]}
+    features={"confidence": [0.9, 0.8, 0.7]}
 )
 ```
 
@@ -215,29 +215,29 @@ synapses = cell.annotations.synapses_detailed
 # Basic properties
 print(f"Number of annotations: {synapses.n_vertices}")
 print(f"Spatial columns: {synapses.spatial_columns}")
-print(f"Available labels: {synapses.label_names}")
+print(f"Available features: {synapses.feature_names}")
 
 # Coordinates and data
 coordinates = synapses.vertices           # Nx3 coordinate array
-full_data = synapses.nodes               # DataFrame with coordinates + labels
-labels_only = synapses.labels            # DataFrame with just labels
+full_data = synapses.nodes               # DataFrame with coordinates + features
+features_only = synapses.features            # DataFrame with just features
 
-# Individual label access
-confidence = synapses.get_label('confidence')
-types = synapses.get_label('synapse_type')
+# Individual feature access
+confidence = synapses.get_feature('confidence')
+types = synapses.get_feature('synapse_type')
 ```
 
 ### Filtering and Queries
 
 ```python
-# Filter by label values
-high_confidence = synapses.get_label('confidence') > 0.9
+# Filter by feature values
+high_confidence = synapses.get_feature('confidence') > 0.9
 high_conf_annotations = synapses.apply_mask(high_confidence, as_positional=True)
 
 print(f"High confidence annotations: {high_conf_annotations.n_vertices}")
 
 # Filter by type
-excitatory_mask = synapses.get_label('synapse_type') == 'excitatory'
+excitatory_mask = synapses.get_feature('synapse_type') == 'excitatory'
 excitatory_synapses = synapses.apply_mask(excitatory_mask, as_positional=True)
 
 # Spatial filtering using KDTree
@@ -254,8 +254,8 @@ nearby_annotations = synapses.apply_mask(nearby_indices, as_positional=True)
 
 ```python
 # Summary statistics by type
-types = synapses.get_label('synapse_type')
-confidence = synapses.get_label('confidence')
+types = synapses.get_feature('synapse_type')
+confidence = synapses.get_feature('confidence')
 
 for syn_type in np.unique(types):
     type_mask = types == syn_type
@@ -263,7 +263,7 @@ for syn_type in np.unique(types):
     print(f"{syn_type}: count={sum(type_mask)}, mean_confidence={np.mean(type_confidence):.3f}")
 
 # Size distribution
-sizes = synapses.get_label('size')
+sizes = synapses.get_feature('size')
 print(f"Size range: {np.min(sizes):.2f} - {np.max(sizes):.2f}")
 print(f"Mean size: {np.mean(sizes):.2f}")
 ```
@@ -275,7 +275,7 @@ print(f"Mean size: {np.mean(sizes):.2f}")
 ```python
 # Count annotations near each skeleton vertex
 if cell.skeleton is not None:
-    synapse_counts = cell.skeleton.map_annotations_to_label(
+    synapse_counts = cell.skeleton.map_annotations_to_feature(
         annotation="synapses_detailed",
         distance_threshold=0.3,     # Search radius
         agg="count",                # Count annotations
@@ -283,11 +283,11 @@ if cell.skeleton is not None:
         validate=False
     )
     
-    # Add as skeleton label
-    cell.skeleton.add_label(synapse_counts, name="synapse_count")
+    # Add as skeleton feature
+    cell.skeleton.add_feature(synapse_counts, name="synapse_count")
     
     # Aggregate by type
-    type_counts = cell.skeleton.map_annotations_to_label(
+    type_counts = cell.skeleton.map_annotations_to_feature(
         annotation="synapses_detailed",
         distance_threshold=0.3,
         agg={
@@ -298,8 +298,8 @@ if cell.skeleton is not None:
         }
     )
     
-    cell.skeleton.add_label(type_counts)
-    print(f"Skeleton now has labels: {cell.skeleton.label_names}")
+    cell.skeleton.add_feature(type_counts)
+    print(f"Skeleton now has features: {cell.skeleton.feature_names}")
 ```
 
 ### Finding Annotations Linked to Specific Vertices
@@ -335,7 +335,7 @@ additional_spines = np.array([[0.4, 0.4, 0.0], [1.6, -0.3, 0.0]])
 cell.add_point_annotations(
     name="additional_spines",
     vertices=additional_spines,
-    labels={"spine_type": ["thin", "mushroom"]}
+    features={"spine_type": ["thin", "mushroom"]}
 )
 
 # Remove annotation layer
@@ -381,14 +381,14 @@ cell.add_point_annotations("synapses", vertices=synapse_data)
 # Calculate annotation density along skeleton
 if cell.skeleton is not None:
     # Density per unit length
-    synapse_density = cell.skeleton.map_annotations_to_label(
+    synapse_density = cell.skeleton.map_annotations_to_feature(
         annotation="synapses",
         distance_threshold=0.5,
         agg="density",              # Annotations per unit cable length
         chunk_size=1000
     )
     
-    cell.skeleton.add_label(synapse_density, name="synapse_density")
+    cell.skeleton.add_feature(synapse_density, name="synapse_density")
     
     # Total density
     total_cable = cell.skeleton.cable_length()
@@ -405,14 +405,14 @@ from sklearn.cluster import DBSCAN
 
 coordinates = cell.annotations.synapses.vertices
 clustering = DBSCAN(eps=0.3, min_samples=2).fit(coordinates)
-cluster_labels = clustering.labels_
+cluster_features = clustering.features_
 
 # Add cluster information
-cell.annotations.synapses.add_label(cluster_labels, name="cluster")
+cell.annotations.synapses.add_feature(cluster_features, name="cluster")
 
 # Analyze clusters
-n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
-n_noise = list(cluster_labels).count(-1)
+n_clusters = len(set(cluster_features)) - (1 if -1 in cluster_features else 0)
+n_noise = list(cluster_features).count(-1)
 print(f"Number of clusters: {n_clusters}")
 print(f"Number of noise points: {n_noise}")
 ```
@@ -432,8 +432,8 @@ if "pre_syn" in cell.annotations.names and "post_syn" in cell.annotations.names:
     min_distances = np.min(distances, axis=1)
     
     # Add co-localization info
-    cell.annotations.pre_syn.add_label(nearest_post, name="nearest_post_idx")
-    cell.annotations.pre_syn.add_label(min_distances, name="distance_to_post")
+    cell.annotations.pre_syn.add_feature(nearest_post, name="nearest_post_idx")
+    cell.annotations.pre_syn.add_feature(min_distances, name="distance_to_post")
     
     print(f"Mean pre-post distance: {np.mean(min_distances):.3f}")
 ```
@@ -441,7 +441,7 @@ if "pre_syn" in cell.annotations.names and "post_syn" in cell.annotations.names:
 ## Key Annotation Methods
 
 ### Annotation Creation
-- `cell.add_point_annotations(name, vertices, spatial_columns=None, labels=None, linkage=None, vertices_from_linkage=False)` - Add annotation layer
+- `cell.add_point_annotations(name, vertices, spatial_columns=None, features=None, linkage=None, vertices_from_linkage=False)` - Add annotation layer
 
 ### Annotation Management
 - `cell.remove_annotation(name)` - Remove annotation layer
@@ -451,18 +451,18 @@ if "pre_syn" in cell.annotations.names and "post_syn" in cell.annotations.names:
 ### Annotation Properties
 - `annotation.n_vertices` - Number of annotations
 - `annotation.vertices` - Coordinate array
-- `annotation.nodes` - DataFrame with coordinates and labels
-- `annotation.labels` - DataFrame with just labels
-- `annotation.label_names` - Available label names
+- `annotation.nodes` - DataFrame with coordinates and features
+- `annotation.features` - DataFrame with just features
+- `annotation.feature_names` - Available feature names
 
 ### Data Access and Analysis
-- `annotation.get_label(key)` - Get label values
-- `annotation.add_label(label, name=None)` - Add new labels
+- `annotation.get_feature(key)` - Get feature values
+- `annotation.add_feature(feature, name=None)` - Add new features
 - `annotation.apply_mask(mask, as_positional=False)` - Filter annotations
 - `annotation.kdtree` - Spatial queries
 
 ### Cross-layer Integration
-- `layer.map_annotations_to_label(annotation, distance_threshold, agg="count"/"density", ...)` - Aggregate to layer vertices
+- `layer.map_annotations_to_feature(annotation, distance_threshold, agg="count"/"density", ...)` - Aggregate to layer vertices
 - `annotation.map_index_to_layer(layer, source_index=None, as_positional=False)` - Find layer mappings
 
 ### Linkage

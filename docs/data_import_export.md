@@ -125,7 +125,7 @@ print(f"Post-synaptic sites: {len(cell.annotations.post_syn.vertices)}")
 
 # Access synapse metadata
 pre_synapses = cell.annotations.pre_syn
-partner_ids = pre_synapses.get_label("post_pt_root_id") if "post_pt_root_id" in pre_synapses.label_names else None
+partner_ids = pre_synapses.get_feature("post_pt_root_id") if "post_pt_root_id" in pre_synapses.feature_names else None
 ```
 
 ### CAVEclient Import Options
@@ -149,8 +149,8 @@ cell = ossify.load_cell_from_client(
 
 # Check what was loaded
 print(f"L2 graph edges: {len(cell.graph.edges) if cell.graph else 0}")
-print(f"L2 vertex properties: {cell.graph.label_names if cell.graph else []}")
-print(f"Skeleton labels: {cell.skeleton.label_names if cell.skeleton else []}")
+print(f"L2 vertex properties: {cell.graph.feature_names if cell.graph else []}")
+print(f"Skeleton features: {cell.skeleton.feature_names if cell.skeleton else []}")
 ```
 
 ### Working with CAVEclient Data
@@ -158,7 +158,7 @@ print(f"Skeleton labels: {cell.skeleton.label_names if cell.skeleton else []}")
 ```python
 # CAVEclient loads create specific structure:
 # - cell.graph: L2 spatial graph with coordinates in nanometers
-# - cell.skeleton: Skeleton with radius and compartment labels
+# - cell.skeleton: Skeleton with radius and compartment features
 # - cell.annotations.pre_syn/post_syn: Synaptic sites (if synapses=True)
 
 # L2 graph coordinates are in nanometers
@@ -172,12 +172,12 @@ if cell.skeleton:
     print(f"Skeleton coordinate range (nm): {skel_coords.min(axis=0)} to {skel_coords.max(axis=0)}")
     
     # Check for radius and compartment info
-    if "radius" in cell.skeleton.label_names:
-        radius = cell.skeleton.get_label("radius")
+    if "radius" in cell.skeleton.feature_names:
+        radius = cell.skeleton.get_feature("radius")
         print(f"Radius range: {radius.min():.2f} - {radius.max():.2f}")
     
-    if "compartment" in cell.skeleton.label_names:
-        compartment = cell.skeleton.get_label("compartment")
+    if "compartment" in cell.skeleton.feature_names:
+        compartment = cell.skeleton.get_feature("compartment")
         print(f"Compartments: {np.unique(compartment)}")
 ```
 
@@ -229,9 +229,9 @@ cell, node_mask = ossify.import_legacy_meshwork(
     as_pcg_skel=True        # Automatically process segment properties, etc.
 )
 
-# PCG processing moves annotation data to layer labels
-print(f"Skeleton labels after PCG processing: {cell.skeleton.label_names}")
-print(f"Graph labels after PCG processing: {cell.graph.label_names if cell.graph else []}")
+# PCG processing moves annotation data to layer features
+print(f"Skeleton features after PCG processing: {cell.skeleton.feature_names}")
+print(f"Graph features after PCG processing: {cell.graph.feature_names if cell.graph else []}")
 ```
 
 ### Understanding MeshWork Structure
@@ -282,7 +282,7 @@ if cell.skeleton:
     nx.write_graphml(G, "skeleton.graphml")
 
 # Export to pandas/CSV
-skeleton_data = cell.skeleton.nodes  # DataFrame with coordinates + labels
+skeleton_data = cell.skeleton.nodes  # DataFrame with coordinates + features
 skeleton_data.to_csv("skeleton_data.csv")
 
 annotation_data = cell.annotations.synapses.nodes if "synapses" in cell.annotations.names else None
@@ -310,7 +310,7 @@ cell.add_skeleton(
     root=vertex_data.iloc[0]["vertex_id"],  # First vertex as root
     spatial_columns=["x", "y", "z"],
     vertex_index="vertex_id",
-    labels={
+    features={
         "radius": "radius_um", 
         "compartment": "compartment_type"
     }
@@ -322,7 +322,7 @@ cell.add_point_annotations(
     name="synapses",
     vertices=synapse_data,
     spatial_columns=["pos_x", "pos_y", "pos_z"],
-    labels={"confidence": "conf_score", "type": "synapse_type"}
+    features={"confidence": "conf_score", "type": "synapse_type"}
 )
 ```
 

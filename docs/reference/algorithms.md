@@ -7,8 +7,8 @@ Ossify provides computational methods for analyzing neuromorphological structure
 | Algorithm Category | Functions | Purpose |
 |--------------------|-----------|---------|
 | **[Morphological Analysis](#morphological-analysis)** | `strahler_number` | Tree structure characterization |
-| **[Synapse Analysis](#synapse-analysis)** | `synapse_betweenness`, `label_axon_from_*`, `segregation_index` | Connectivity and compartmentalization |
-| **[Smoothing & Filtering](#smoothing-and-filtering)** | `smooth_labels` | Signal processing on graphs |
+| **[Synapse Analysis](#synapse-analysis)** | `synapse_betweenness`, `feature_axon_from_*`, `segregation_index` | Connectivity and compartmentalization |
+| **[Smoothing & Filtering](#smoothing-and-filtering)** | `smooth_features` | Signal processing on graphs |
 
 ---
 
@@ -38,8 +38,8 @@ cell = osy.load_cell("neuron.osy")
 # Calculate morphological properties
 strahler = osy.algorithms.strahler_number(cell)
 
-# Add as label to skeleton
-cell.skeleton.add_label(strahler, "strahler_order")
+# Add as feature to skeleton
+cell.skeleton.add_feature(strahler, "strahler_order")
 
 # Visualize with color coding
 fig, ax = osy.plot.plot_morphology_2d(
@@ -92,16 +92,16 @@ betweenness = ossify.synapse_betweenness(
     post_syn_ids
 )
 
-# Add as skeleton label
-cell.skeleton.add_label(betweenness, "syn_betweenness")
+# Add as skeleton feature
+cell.skeleton.add_feature(betweenness, "syn_betweenness")
 
 # Find vertices with highest betweenness (potential branch points)
 high_betweenness = betweenness > np.percentile(betweenness, 95)
 ```
 
-### label_axon_from_synapse_flow
+### feature_axon_from_synapse_flow
 
-::: ossify.algorithms.label_axon_from_synapse_flow
+::: ossify.algorithms.feature_axon_from_synapse_flow
     options:
         heading_level: 4
         show_root_heading: true
@@ -116,11 +116,11 @@ high_betweenness = betweenness > np.percentile(betweenness, 95)
 
 ```python
 # Basic axon identification
-is_axon = ossify.label_axon_from_synapse_flow(
+is_axon = ossify.feature_axon_from_synapse_flow(
     cell,
     pre_syn="pre_syn",      # Annotation layer with presynaptic sites
     post_syn="post_syn",    # Annotation layer with postsynaptic sites
-    extend_label_to_segment=True,  # Extend to full segments
+    extend_feature_to_segment=True,  # Extend to full segments
     return_segregation_index=True  # Return quality metric
 )
 
@@ -130,12 +130,12 @@ if isinstance(is_axon, tuple):
 else:
     axon_mask = is_axon
 
-# Add compartment labels
+# Add compartment features
 compartment = np.where(axon_mask, "axon", "dendrite")
-cell.skeleton.add_label(compartment, "compartment")
+cell.skeleton.add_feature(compartment, "compartment")
 
 # Iterative refinement for complex morphologies
-is_axon_refined = ossify.label_axon_from_synapse_flow(
+is_axon_refined = ossify.feature_axon_from_synapse_flow(
     cell,
     pre_syn="pre_syn",
     post_syn="post_syn", 
@@ -144,9 +144,9 @@ is_axon_refined = ossify.label_axon_from_synapse_flow(
 )
 ```
 
-### label_axon_from_spectral_split
+### feature_axon_from_spectral_split
 
-::: ossify.algorithms.label_axon_from_spectral_split
+::: ossify.algorithms.feature_axon_from_spectral_split
     options:
         heading_level: 4
         show_root_heading: true
@@ -161,7 +161,7 @@ is_axon_refined = ossify.label_axon_from_synapse_flow(
 
 ```python
 # Spectral method with density smoothing
-is_axon_spectral = ossify.label_axon_from_spectral_split(
+is_axon_spectral = ossify.feature_axon_from_spectral_split(
     cell,
     pre_syn="pre_syn",
     post_syn="post_syn",
@@ -226,9 +226,9 @@ print(f"Pre/post ratio (dendrite): {pre_dendrite/(post_dendrite+1):.2f}")
 
 ## Smoothing & Filtering {: .doc-heading}
 
-### smooth_labels
+### smooth_features
 
-::: ossify.algorithms.smooth_labels
+::: ossify.algorithms.smooth_features
     options:
         heading_level: 4
         show_root_heading: true
@@ -237,31 +237,31 @@ print(f"Pre/post ratio (dendrite): {pre_dendrite/(post_dendrite+1):.2f}")
         separate_signature: true
         show_source: false
 
-**Applies graph-based smoothing to labels using a heat equation approach.**
+**Applies graph-based smoothing to features using a heat equation approach.**
 
 #### Usage Example
 
 ```python
-# Create noisy label data
+# Create noisy feature data
 np.random.seed(42)
 noisy_signal = np.random.randn(cell.skeleton.n_vertices)
 
 # Apply different levels of smoothing
-smoothed_light = ossify.smooth_labels(cell.skeleton, noisy_signal, alpha=0.5)
-smoothed_heavy = ossify.smooth_labels(cell.skeleton, noisy_signal, alpha=0.95)
+smoothed_light = ossify.smooth_features(cell.skeleton, noisy_signal, alpha=0.5)
+smoothed_heavy = ossify.smooth_features(cell.skeleton, noisy_signal, alpha=0.95)
 
 # Add to skeleton for comparison
-cell.skeleton.add_label(noisy_signal, "original")
-cell.skeleton.add_label(smoothed_light, "smoothed_light") 
-cell.skeleton.add_label(smoothed_heavy, "smoothed_heavy")
+cell.skeleton.add_feature(noisy_signal, "original")
+cell.skeleton.add_feature(smoothed_light, "smoothed_light") 
+cell.skeleton.add_feature(smoothed_heavy, "smoothed_heavy")
 
 # Multi-channel smoothing
 synapse_density = np.column_stack([
-    cell.skeleton.map_annotations_to_label("pre_syn", distance_threshold=1000, agg="count"),
-    cell.skeleton.map_annotations_to_label("post_syn", distance_threshold=1000, agg="count")
+    cell.skeleton.map_annotations_to_feature("pre_syn", distance_threshold=1000, agg="count"),
+    cell.skeleton.map_annotations_to_feature("post_syn", distance_threshold=1000, agg="count")
 ])
 
-smoothed_density = ossify.smooth_labels(
+smoothed_density = ossify.smooth_features(
     cell.skeleton, 
     synapse_density, 
     alpha=0.9
@@ -275,7 +275,7 @@ post_density_smooth = smoothed_density[:, 1]
 #### Parameters
 
 - **`alpha`**: Smoothing strength (0=no smoothing, 1=maximum smoothing)
-- **Input shape**: Can be 1D (single label) or 2D (multiple labels)
+- **Input shape**: Can be 1D (single feature) or 2D (multiple features)
 - **Output**: Same shape as input with smoothed values
 
 ---
@@ -295,14 +295,14 @@ def analyze_compartmentalization(cell, min_segregation=0.5):
     betweenness = ossify.synapse_betweenness(cell.skeleton, pre_ids, post_ids)
     
     # 2. Flow-based compartmentalization
-    axon_flow, seg_flow = ossify.label_axon_from_synapse_flow(
+    axon_flow, seg_flow = ossify.feature_axon_from_synapse_flow(
         cell, 
         return_segregation_index=True,
         segregation_index_threshold=min_segregation
     )
     
     # 3. Spectral alternative
-    axon_spectral = ossify.label_axon_from_spectral_split(
+    axon_spectral = ossify.feature_axon_from_spectral_split(
         cell,
         segregation_index_threshold=min_segregation
     )
@@ -310,10 +310,10 @@ def analyze_compartmentalization(cell, min_segregation=0.5):
     # 4. Method comparison
     agreement = (axon_flow == axon_spectral).mean()
     
-    # 5. Add all results as labels
-    cell.skeleton.add_label(betweenness, "syn_betweenness")
-    cell.skeleton.add_label(axon_flow.astype(str), "axon_flow")
-    cell.skeleton.add_label(axon_spectral.astype(str), "axon_spectral")
+    # 5. Add all results as features
+    cell.skeleton.add_feature(betweenness, "syn_betweenness")
+    cell.skeleton.add_feature(axon_flow.astype(str), "axon_flow")
+    cell.skeleton.add_feature(axon_spectral.astype(str), "axon_spectral")
     
     results = {
         'segregation_flow': seg_flow,
@@ -350,7 +350,7 @@ def extract_morphology_features(cell):
     
     # Compartment analysis (if synapses available)
     if "pre_syn" in cell.annotations.names:
-        axon_mask, segregation = ossify.label_axon_from_synapse_flow(
+        axon_mask, segregation = ossify.feature_axon_from_synapse_flow(
             cell, return_segregation_index=True
         )
         axon_length = skeleton.cable_length(skeleton.vertex_index[axon_mask])
@@ -399,7 +399,7 @@ for name, value in features.items():
 
 !!! tip "Performance & Usage Tips"
     
-    - **Preprocessing**: Use `smooth_labels()` to reduce noise in raw synapse data
+    - **Preprocessing**: Use `smooth_features()` to reduce noise in raw synapse data
     - **Parameter Tuning**: Adjust `segregation_index_threshold` based on data quality
     - **Method Comparison**: Use multiple algorithms and compare results for robustness
     - **Batch Processing**: Process multiple cells using the same parameters for consistency

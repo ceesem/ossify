@@ -206,7 +206,7 @@ def load_cell_from_client(
         .add_skeleton(
             vertices=np.array(sk["vertices"]),
             edges=np.array(sk["edges"]),
-            labels={"radius": sk["radius"], "compartment": sk["compartment"]},
+            features={"radius": sk["radius"], "compartment": sk["compartment"]},
             linkage=Link(
                 mapping=sk["mesh_to_skel_map"], source="graph", map_value_is_index=False
             ),

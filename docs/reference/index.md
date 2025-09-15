@@ -16,7 +16,7 @@ cell = ossify.load_cell_from_client(root_id=12345, client=cave_client)
 
 # Analyze morphology
 strahler = ossify.strahler_number(cell)
-is_axon = ossify.label_axon_from_synapse_flow(cell)
+is_axon = ossify.feature_axon_from_synapse_flow(cell)
 
 # Create visualizations
 fig, ax = ossify.plot_cell_2d(cell, color="compartment")
@@ -82,7 +82,7 @@ Load and save data from local files, cloud storage (S3, GCS) via `cloud-files`, 
 |--------|-------------|-------------|
 | **[Core Classes](core.md)** | Foundation classes and containers | `Cell`, `Link` |
 | **[Data Layers](layers.md)** | Spatial and graph representation classes | `SkeletonLayer`, `GraphLayer`, `MeshLayer`, `PointCloudLayer` |
-| **[Algorithms](algorithms.md)** | Analysis and computation functions | `strahler_number`, `label_axon_*`, `smooth_labels` |
+| **[Algorithms](algorithms.md)** | Analysis and computation functions | `strahler_number`, `feature_axon_*`, `smooth_features` |
 | **[Plotting](plotting.md)** | Visualization and figure creation | `plot_cell_*`, `plot_morphology_*` |
 | **[File I/O](io.md)** | Data loading and saving | `load_cell`, `save_cell`, `CellFiles` |
 | **[External](external.md)** | Third-party integrations | `cell_from_client` |
@@ -90,6 +90,6 @@ Load and save data from local files, cloud storage (S3, GCS) via `cloud-files`, 
 !!! tip "Best Practices"
     - Use `Cell.apply_mask()` for non-destructive filtering
     - Use `mask_context()` for temporary operations
-    - Use annotations for sparse point-like data and labels for dense data where every vertex has a value.
+    - Use annotations for sparse point-like data and features for dense data where every vertex has a value.
     - Leverage `Link` objects for complex data relationships  
     - Take advantage of method chaining for concise workflows

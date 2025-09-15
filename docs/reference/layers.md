@@ -213,10 +213,10 @@ tree = layer.kdtree
 ### **Data Management** {: .text-primary }
 
 ```python
-# Label management
-layer.add_label(values, name="new_label")
-label_data = layer.get_label("existing_label") 
-all_labels = layer.labels  # DataFrame with all labels
+# feature management
+layer.add_feature(values, name="new_feature")
+feature_data = layer.get_feature("existing_feature") 
+all_features = layer.features  # DataFrame with all features
 
 # Masking and filtering
 masked_layer = layer.apply_mask(boolean_mask)
@@ -246,9 +246,9 @@ vertex_ids = layer.vertex_index[positional_idx]
 target_values = layer.map_index_to_layer("target_layer_name")
 region_mapping = layer.map_region_to_layer("target_layer_name")
 
-# Label propagation with aggregation
-aggregated = layer.map_labels_to_layer(
-    labels=["synapse_count", "activity"],
+# feature propagation with aggregation
+aggregated = layer.map_features_to_layer(
+    features=["synapse_count", "activity"],
     layer="skeleton", 
     agg={"synapse_count": "sum", "activity": "mean"}
 )
@@ -268,7 +268,7 @@ skeleton_mask = graph_layer.map_mask_to_layer("skeleton", boolean_mask)
 cell = ossify.load_cell("neuron.osy")
 
 # 1. Filter skeleton by compartment  
-axon_mask = cell.skeleton.get_label("is_axon")
+axon_mask = cell.skeleton.get_feature("is_axon")
 axon_cell = cell.apply_mask("skeleton", axon_mask)
 
 # 2. Map synapses to axon skeleton
@@ -276,7 +276,7 @@ with axon_cell.mask_context("skeleton", axon_mask) as masked:
     synapse_mapping = masked.annotations["pre_syn"].map_index_to_layer("skeleton")
     
 # 3. Analyze synapse density along axon
-density = masked.skeleton.map_annotations_to_label(
+density = masked.skeleton.map_annotations_to_feature(
     "pre_syn", 
     distance_threshold=500,
     agg="count"
@@ -321,7 +321,7 @@ tortuous_segments = analysis.tortuosity > 1.5
 
 !!! info "Layer Design Principles"
     
-    **Consistent Interface**: All layers implement the same core methods for transformations, masking, and label management.
+    **Consistent Interface**: All layers implement the same core methods for transformations, masking, and feature management.
     
     **Efficient Storage**: Layers use appropriate data structures (sparse matrices, KDTrees) optimized for their specific use cases.
     

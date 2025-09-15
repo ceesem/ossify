@@ -6,7 +6,7 @@
 Graph layers represent general network structures with vertices and edges. Unlike skeletons, graphs can have cycles, multiple connected components, and any connectivity pattern. They're commonly used for level-2 graph data from connectomics pipelines.
 
 !!! note "Shared Features"
-    Graphs inherit many common features from the `PointMixin` class. For information about labels, masking, transformations, spatial queries, and cross-layer mapping, see [Shared Layer Features](shared_layer_features.md).
+    Graphs inherit many common features from the `PointMixin` class. For information about features, masking, transformations, spatial queries, and cross-layer mapping, see [Shared Layer Features](shared_layer_features.md).
 
 !!! info "Graphs vs Skeletons"
     **Graphs** are general network structures that can have cycles and multiple components. **Skeletons** are specialized tree structures (no cycles, single component, with a defined root). See [Working with Skeletons](working_with_skeletons.md) for tree-specific analysis.
@@ -22,7 +22,7 @@ A `GraphLayer` contains:
 
 ### Quick Overview with `describe()`
 
-The `describe()` method provides a comprehensive summary of graph layers, showing vertex/edge counts, labels, and connections to other layers:
+The `describe()` method provides a comprehensive summary of graph layers, showing vertex/edge counts, features, and connections to other layers:
 
 ```python
 # Individual graph layer
@@ -34,7 +34,7 @@ cell.graph.describe()
 # Cell: my_neuron
 # Layer: graph (GraphLayer)  
 ├── 45 vertices, 67 edges
-├── Labels: [node_type, confidence]
+├── features: [node_type, confidence]
 └── Links: []
 ```
 
@@ -42,7 +42,7 @@ The output shows:
 - **Cell context**: Which cell this graph belongs to
 - **Layer type**: Confirms this is a GraphLayer
 - **Metrics**: Vertex and edge counts  
-- **Labels**: Available data columns beyond spatial coordinates
+- **features**: Available data columns beyond spatial coordinates
 - **Links**: Connections to other layers (`<->` = bidirectional, `→` = unidirectional)
 
 ### Layer Manager Overview
@@ -79,16 +79,16 @@ cell.add_graph(vertices=vertices, edges=edges)
 print(f"Graph has {cell.graph.n_vertices} vertices and {len(cell.graph.edges)} edges")
 ```
 
-### Graph with Labels
+### Graph with features
 
 ```python
-# Add vertex labels during creation
-compartment_labels = np.array([0, 1, 1, 0])  # Different compartments
+# Add vertex features during creation
+compartment_features = np.array([0, 1, 1, 0])  # Different compartments
 
 cell.add_graph(
     vertices=vertices,
     edges=edges,
-    labels={"compartment": compartment_labels}
+    features={"compartment": compartment_features}
 )
 ```
 
@@ -136,7 +136,7 @@ csgraph_binary_undirected = graph.csgraph_binary_undirected  # Binary (undirecte
 
 # Use with scipy.sparse.csgraph functions
 from scipy.sparse.csgraph import connected_components
-n_components, labels = connected_components(graph.csgraph_undirected)
+n_components, features = connected_components(graph.csgraph_undirected)
 print(f"Number of connected components: {n_components}")
 ```
 
@@ -184,9 +184,9 @@ print(f"Average clustering: {nx.average_clustering(G)}")
 betweenness = nx.betweenness_centrality(G)
 degree_centrality = nx.degree_centrality(G)
 
-# Add centralities as labels
-graph.add_label(list(betweenness.values()), name="betweenness")
-graph.add_label(list(degree_centrality.values()), name="degree_centrality")
+# Add centralities as features
+graph.add_feature(list(betweenness.values()), name="betweenness")
+graph.add_feature(list(degree_centrality.values()), name="degree_centrality")
 ```
 
 ### Annotation Aggregation
@@ -195,7 +195,7 @@ graph.add_label(list(degree_centrality.values()), name="degree_centrality")
 # Aggregate point annotations to graph vertices
 # (requires annotations in the cell)
 if "synapses" in cell.annotations.names:
-    synapse_counts = graph.map_annotations_to_label(
+    synapse_counts = graph.map_annotations_to_feature(
         annotation="synapses",
         distance_threshold=1.0,     # Distance threshold for aggregation
         agg="count",                # Count synapses near each vertex
@@ -204,11 +204,11 @@ if "synapses" in cell.annotations.names:
         agg_direction="undirected"  # Consider all nearby edges
     )
     
-    # Add as label
-    graph.add_label(synapse_counts, name="synapse_count")
+    # Add as feature
+    graph.add_feature(synapse_counts, name="synapse_count")
 
     # Custom aggregation functions
-    synapse_stats = graph.map_annotations_to_label(
+    synapse_stats = graph.map_annotations_to_feature(
         annotation="synapses",
         distance_threshold=2.0,
         agg={
@@ -250,7 +250,7 @@ cell.add_graph(
     edges=l2_edges,
     spatial_columns=['rep_coord_nm_x', 'rep_coord_nm_y', 'rep_coord_nm_z'],
     vertex_index='l2_id',
-    labels={'volume': 'size_nm3'}
+    features={'volume': 'size_nm3'}
 )
 
 print(f"L2 graph vertex indices: {cell.graph.vertex_index}")
@@ -314,7 +314,7 @@ print(f"Vertices within distance {max_distance}: {nearby_vertices}")
 ## Key Graph-Specific Methods
 
 ### Graph Creation
-- `cell.add_graph(vertices, edges, labels=None, spatial_columns=None, vertex_index=None)` - Add graph to cell
+- `cell.add_graph(vertices, edges, features=None, spatial_columns=None, vertex_index=None)` - Add graph to cell
 
 ### Graph-Specific Properties
 - `graph.edges` - Edge indices with vertex indices
@@ -328,14 +328,14 @@ print(f"Vertices within distance {max_distance}: {nearby_vertices}")
 ### Network Analysis
 - `graph.distance_between(sources, targets, as_positional=False, limit=None)` - Calculate shortest path distances
 - `graph.path_between(source, target, as_positional=False, as_vertices=False)` - Find shortest path
-- `graph.map_annotations_to_label(annotation, distance_threshold, agg="count", agg_direction="undirected", ...)` - Aggregate annotations
+- `graph.map_annotations_to_feature(annotation, distance_threshold, agg="count", agg_direction="undirected", ...)` - Aggregate annotations
 
 ### Integration with External Libraries
 - Convert edges to NetworkX: `nx.from_edgelist(graph.edges)`
 - Use with scipy.sparse.csgraph functions: `connected_components(graph.csgraph_undirected)`
 
 !!! note "Additional Features"
-    For comprehensive information about vertex access, labels, masking, transformations, spatial queries, and cross-layer mapping, see [Shared Layer Features](shared_layer_features.md).
+    For comprehensive information about vertex access, features, masking, transformations, spatial queries, and cross-layer mapping, see [Shared Layer Features](shared_layer_features.md).
 
 !!! tip "When to Use Graphs"
     - Level-2 connectomics data with spatial connectivity

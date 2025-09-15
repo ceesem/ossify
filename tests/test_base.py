@@ -35,7 +35,7 @@ def test_create_meshwork(
         .add_skeleton(
             vertices=np.array(skel_dict["vertices"]),
             edges=np.array(skel_dict["edges"]),
-            labels={
+            features={
                 "radius": skel_dict["radius"],
                 "compartment": skel_dict["compartment"],
             },
@@ -91,7 +91,7 @@ def test_cell_creation_with_name():
     assert len(cell.layers.names) == 0
 
 
-def test_cell_add_skeleton_basic(simple_skeleton_data, spatial_columns, mock_labels):
+def test_cell_add_skeleton_basic(simple_skeleton_data, spatial_columns, mock_features):
     """Test adding a basic skeleton to a cell."""
     vertices, edges, vertex_indices = simple_skeleton_data
 
@@ -115,7 +115,7 @@ def test_cell_add_skeleton_basic(simple_skeleton_data, spatial_columns, mock_lab
         edges=edges_with_indices,
         spatial_columns=spatial_columns,
         root=vertex_indices[0],  # First vertex as root
-        labels=mock_labels,
+        features=mock_features,
     )
 
     assert "skeleton" in cell.layers.names
@@ -191,9 +191,9 @@ def test_cell_add_point_annotations_basic(mock_point_annotations, spatial_column
     assert "synapses" in [layer.name for layer in cell.annotations]
     assert cell.annotations["synapses"].n_vertices == 4
 
-    # Check that annotation labels are preserved in the point cloud
-    assert "annotation_type" in cell.annotations["synapses"].label_names
-    assert "confidence" in cell.annotations["synapses"].label_names
+    # Check that annotation features are preserved in the point cloud
+    assert "annotation_type" in cell.annotations["synapses"].feature_names
+    assert "confidence" in cell.annotations["synapses"].feature_names
 
 
 def test_cell_layer_management(simple_skeleton_data, simple_mesh_data, spatial_columns):

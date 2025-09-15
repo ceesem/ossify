@@ -120,8 +120,8 @@ synapse_locations = cell.annotations.synapses  # Alternative syntax
 # List all available layers
 print("Morphological layers:", cell.layers.names)
 print("Annotation layers:", cell.annotations.names)
-print("All labels across layers:")
-print(cell.labels)
+print("All features across layers:")
+print(cell.features)
 ```
 
 ### Data Linking and Mapping
@@ -143,9 +143,9 @@ cell.add_point_annotations(
     linkage=link
 )
 
-# Map labels between layers
-compartment_labels = cell.get_labels(
-    labels=["compartment"], 
+# Map features between layers
+compartment_features = cell.get_features(
+    features=["compartment"], 
     target_layer="skeleton",
     source_layers=["mesh"],
     agg="majority"  # Use majority vote for mapping
@@ -156,7 +156,7 @@ compartment_labels = cell.get_labels(
 
 ```python
 # Apply a mask to create a subset
-axon_mask = skeleton.get_label("is_axon") == True
+axon_mask = skeleton.get_feature("is_axon") == True
 axon_cell = cell.apply_mask("skeleton", axon_mask)
 
 # Temporary masking with context manager
@@ -199,7 +199,7 @@ rotated_cell = cell.transform(rotate_90_degrees)
 
 !!! info "Key Design Principles"
     
-    **Consistent Interface**: All layer types share common methods for transformations, masking, and label management.
+    **Consistent Interface**: All layer types share common methods for transformations, masking, and feature management.
     
     **Method Chaining**: Most methods return `self` to enable fluent interfaces: `cell.add_skeleton(...).add_mesh(...)`
     

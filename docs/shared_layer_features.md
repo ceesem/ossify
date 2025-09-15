@@ -18,7 +18,7 @@ print(f"Layer name: {layer.name}")
 print(f"Number of vertices: {layer.n_vertices}")
 print(f"Bounding box: {layer.bbox}")
 print(f"Spatial columns: {layer.spatial_columns}")
-print(f"Available labels: {layer.label_names}")
+print(f"Available features: {layer.feature_names}")
 ```
 
 ## Vertex Data Access
@@ -32,31 +32,31 @@ vertices_df = layer.vertex_df           # Pandas DataFrame with index
 vertex_indices = layer.vertex_index     # Array of vertex indices
 vertex_index_map = layer.vertex_index_map  # Dict mapping indices to positions
 
-# Complete node data (coordinates + labels)
+# Complete node data (coordinates + features)
 full_data = layer.nodes                 # DataFrame with all data
-labels_only = layer.labels              # DataFrame with just labels
+features_only = layer.features              # DataFrame with just features
 ```
 
-## Working with Labels
+## Working with features
 
-All layers support adding and accessing vertex labels:
+All layers support adding and accessing vertex features:
 
 ```python
-# Add labels using arrays
+# Add features using arrays
 quality_values = np.array([0.9, 0.8, 0.7, 0.6])
-layer.add_label(quality_values, name="quality")
+layer.add_feature(quality_values, name="quality")
 
-# Add multiple labels at once
-new_labels = {
+# Add multiple features at once
+new_features = {
     "region": [0, 0, 1, 1],
     "processed": [True, True, False, False]
 }
-layer.add_label(new_labels)
+layer.add_feature(new_features)
 
-# Access label data
-quality = layer.get_label("quality")
-all_labels = layer.labels
-print(f"Available labels: {layer.label_names}")
+# Access feature data
+quality = layer.get_feature("quality")
+all_features = layer.features
+print(f"Available features: {layer.feature_names}")
 ```
 
 ## Spatial Queries
@@ -109,7 +109,7 @@ All layers support masking to create filtered subsets:
 
 ```python
 # Create boolean mask
-mask = layer.get_label("quality") > 0.7
+mask = layer.get_feature("quality") > 0.7
 
 # Apply mask (creates new layer)
 filtered_layer = layer.apply_mask(mask, as_positional=False)
@@ -160,19 +160,19 @@ mapping_dict = layer.map_index_to_layer_region(
 print(f"Vertex mappings: {mapping_dict}")
 ```
 
-### Label Mapping
+### feature Mapping
 
 ```python
-# Map labels from one layer to another
-mapped_labels = layer.map_labels_to_layer(
-    labels="quality",           # Label to map
+# Map features from one layer to another
+mapped_features = layer.map_features_to_layer(
+    features="quality",           # feature to map
     layer="skeleton",           # Target layer
     agg="mean"                  # Aggregation method
 )
 
-# Map multiple labels with different aggregations
-mapped_labels = layer.map_labels_to_layer(
-    labels=["quality", "region"],
+# Map multiple features with different aggregations
+mapped_features = layer.map_features_to_layer(
+    features=["quality", "region"],
     layer="mesh",
     agg={
         "quality": "mean",
@@ -182,14 +182,14 @@ mapped_labels = layer.map_labels_to_layer(
 
 # Use the mapping
 target_layer = cell.layers["skeleton"]
-target_layer.add_label(mapped_labels)
+target_layer.add_feature(mapped_features)
 ```
 
 ### Mask Mapping
 
 ```python
 # Map a boolean mask to another layer
-source_mask = layer.get_label("processed") == True
+source_mask = layer.get_feature("processed") == True
 target_mask = layer.map_mask_to_layer("mesh", source_mask)
 
 # Apply the mapped mask to target layer
@@ -202,7 +202,7 @@ filtered_target = target_layer.apply_mask(target_mask, as_positional=True)
 Understanding the difference between vertex indices and positional indices is crucial:
 
 ```python
-# Vertex indices: The actual IDs/labels of vertices
+# Vertex indices: The actual IDs/features of vertices
 vertex_ids = layer.vertex_index  # e.g., [100, 205, 350, 401]
 
 # Positional indices: Array positions (0, 1, 2, 3...)  
@@ -251,19 +251,19 @@ fully_clean = layer.mask_out_unmapped()  # Checks all other layers
 - `layer.n_vertices` - Number of vertices
 - `layer.bbox` - Bounding box
 - `layer.spatial_columns` - List of coordinate column names
-- `layer.label_names` - List of available labels
+- `layer.feature_names` - List of available features
 
 ### Data Access
 - `layer.vertices` - Vertex coordinates as numpy array
 - `layer.vertex_df` - Vertices as indexed DataFrame
 - `layer.vertex_index` - Array of vertex indices  
 - `layer.vertex_index_map` - Dict mapping indices to positions
-- `layer.nodes` - Complete DataFrame with coordinates and labels
-- `layer.labels` - DataFrame of all labels
+- `layer.nodes` - Complete DataFrame with coordinates and features
+- `layer.features` - DataFrame of all features
 
-### Labels
-- `layer.add_label(label, name=None)` - Add vertex labels
-- `layer.get_label(key)` - Get label array
+### features
+- `layer.add_feature(feature, name=None)` - Add vertex features
+- `layer.get_feature(key)` - Get feature array
 
 ### Spatial Operations
 - `layer.kdtree` - KDTree for spatial queries
@@ -280,5 +280,5 @@ fully_clean = layer.mask_out_unmapped()  # Checks all other layers
 - `layer.map_index_to_layer(layer, source_index=None, as_positional=False, validate=False)` - Map indices 1:1
 - `layer.map_region_to_layer(layer, source_index=None, as_positional=False)` - Map region to region  
 - `layer.map_index_to_layer_region(layer, source_index=None, as_positional=False)` - Map to lists
-- `layer.map_labels_to_layer(labels, layer, agg="mean")` - Map labels between layers
+- `layer.map_features_to_layer(features, layer, agg="mean")` - Map features between layers
 - `layer.map_mask_to_layer(layer, mask)` - Map boolean mask
