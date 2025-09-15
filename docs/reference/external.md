@@ -78,7 +78,7 @@ print(f"Graph vertices: {cell.graph.n_vertices}")
 print(f"Skeleton vertices: {cell.skeleton.n_vertices}")
 print(f"Presynaptic sites: {len(cell.annotations['pre_syn'])}")
 print(f"Postsynaptic sites: {len(cell.annotations['post_syn'])}")
-print(f"Available labels: {cell.skeleton.labels.columns.tolist()}")
+print(f"Available features: {cell.skeleton.features.columns.tolist()}")
 ```
 
 #### Synapse Analysis Workflow
@@ -93,13 +93,13 @@ cell = ossify.load_cell_from_client(
 )
 
 # Analyze compartmentalization
-is_axon, segregation = ossify.label_axon_from_synapse_flow(
+is_axon, segregation = ossify.feature_axon_from_synapse_flow(
     cell, 
     return_segregation_index=True
 )
 
 compartment = ["dendrite" if not ax else "axon" for ax in is_axon]
-cell.skeleton.add_label(compartment, "compartment")
+cell.skeleton.add_feature(compartment, "compartment")
 
 print(f"Segregation index: {segregation:.3f}")
 print(f"Axon fraction: {is_axon.mean():.2%}")
@@ -137,14 +137,14 @@ def cave_to_analysis_pipeline(root_ids, client, output_format="both"):
         
         # Morphological analysis
         strahler = ossify.strahler_number(cell)
-        cell.skeleton.add_label(strahler, "strahler_order")
+        cell.skeleton.add_feature(strahler, "strahler_order")
         
         # Compartment analysis
-        is_axon, segregation = ossify.label_axon_from_synapse_flow(
+        is_axon, segregation = ossify.feature_axon_from_synapse_flow(
             cell, return_segregation_index=True
         )
         compartment = ["dendrite" if not ax else "axon" for ax in is_axon]
-        cell.skeleton.add_label(compartment, "compartment")
+        cell.skeleton.add_feature(compartment, "compartment")
         
         # Generate visualization
         fig, axes = ossify.plot_cell_multiview(

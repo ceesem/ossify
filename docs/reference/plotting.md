@@ -274,7 +274,7 @@ skeleton = cell.skeleton
 # Prepare styling arrays
 colors = ossify.strahler_number(skeleton)  # Color values
 alphas = np.ones(skeleton.n_vertices) * 0.8  # Uniform transparency  
-widths = skeleton.get_label("radius") * 2    # Width by radius
+widths = skeleton.get_feature("radius") * 2    # Width by radius
 
 # Plot with explicit arrays
 ax = ossify.plot_skeleton(
@@ -410,7 +410,7 @@ ossify.add_scale_bar(
     ax,
     length=50000,                      # 50 μm in nm
     position=(0.05, 0.05),            # Fractional position
-    label="50 μm",                    # Text label
+    feature="50 μm",                    # Text feature
     color="black",
     linewidth=8,
     fontsize=12
@@ -422,8 +422,8 @@ ossify.add_scale_bar(
     length=25000,                     # 25 μm 
     position=(0.9, 0.7),
     orientation="vertical",           # or "v"
-    label="25 μm",
-    label_offset=0.02,               # Label spacing
+    feature="25 μm",
+    feature_offset=0.02,               # feature spacing
     color="white",                   # For dark backgrounds
     linewidth=6
 )
@@ -440,9 +440,9 @@ def create_publication_figure(cell, output_path="figure.pdf"):
     \"\"\"Create a publication-ready multi-panel figure\"\"\"
     
     # Calculate compartmentalization
-    is_axon = ossify.label_axon_from_synapse_flow(cell)
+    is_axon = ossify.feature_axon_from_synapse_flow(cell)
     compartment = np.where(is_axon, "Axon", "Dendrite")
-    cell.skeleton.add_label(compartment, "compartment")
+    cell.skeleton.add_feature(compartment, "compartment")
     
     # Create multi-panel layout
     fig, axes = ossify.plot_cell_multiview(
@@ -471,7 +471,7 @@ def create_publication_figure(cell, output_path="figure.pdf"):
         elif proj == "zy":
             ossify.add_scale_bar(ax, 75000, (0.05, 0.05), "75 μm", fontsize=12)
     
-    # Add panel labels
+    # Add panel features
     axes["xy"].text(0.02, 0.98, "A", transform=axes["xy"].transAxes, 
                    fontsize=20, fontweight='bold', va='top')
     axes["xz"].text(0.02, 0.98, "B", transform=axes["xz"].transAxes,
@@ -500,10 +500,10 @@ def plot_analysis_comparison(cell, algorithms=['flow', 'spectral']):
     
     # Run different algorithms
     if 'flow' in algorithms:
-        results['flow'] = ossify.label_axon_from_synapse_flow(cell)
+        results['flow'] = ossify.feature_axon_from_synapse_flow(cell)
         
     if 'spectral' in algorithms:
-        results['spectral'] = ossify.label_axon_from_spectral_split(cell)
+        results['spectral'] = ossify.feature_axon_from_spectral_split(cell)
     
     # Create comparison plot
     n_methods = len(results)

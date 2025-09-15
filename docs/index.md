@@ -1,7 +1,7 @@
 # Ossify
 
 Ossify is a library to work with neuronal morphology, with a focus high resolution synaptic level reconstructions.
-Importantly, it aims to solve the challenge of working with objects that have multiple representations, such as meshes and skeletons, decorated with annotations like synapses and allows users to easily convert labels and metadata between them.
+Importantly, it aims to solve the challenge of working with objects that have multiple representations, such as meshes and skeletons, decorated with annotations like synapses and allows users to easily convert features and metadata between them.
 In addition, it provides tools to load, manipulate, visualize, and analyze neuron morphologies.
 
 Ossify is built around the concept of a `Cell`, which is a container for multiple `Layer` objects that represent different aspects of the morphology. Surface meshes capture detailed geometry, skeletons provide a rooted tree structure, and point cloud annotations like synapses can decorate different parts of the morphology. It's aim is to be flexible, but with a focus on datasets like [MICrONS](https://www.microns-explorer.org/) or FlyWire that are hosted in [CAVE](https://www.caveconnecto.me/).
@@ -31,24 +31,24 @@ print("Cable length:", cell.skeleton.cable_length(), "nm")
 print("Number of presynaptic sites across cell:", len(cell.annotations.pre_syn))
 
 # Map data from one representation to another:
-volume = cell.graph.map_labels_to_layer("size_nm3", layer='skeleton', agg='sum')
-cell.skeleton.add_label(volume)
+volume = cell.graph.map_features_to_layer("size_nm3", layer='skeleton', agg='sum')
+cell.skeleton.add_feature(volume)
 
-# Apply object-wide filters based on vertex labels
+# Apply object-wide filters based on vertex features
 print('\n')
-with cell.skeleton.mask_context(cell.skeleton.labels['compartment'] == 3) as masked_cell:
+with cell.skeleton.mask_context(cell.skeleton.features['compartment'] == 3) as masked_cell:
     print("Cable length in dendrite only:", masked_cell.skeleton.cable_length(), "nm")
     print("Number of presynaptic sites in dendrite only:", len(masked_cell.annotations.pre_syn))
     
-# Apply algorithmic metrics and attach new data labels
+# Apply algorithmic metrics and attach new data features
 strahler_number = osy.algorithms.strahler_number(cell)
-cell.skeleton.add_label(strahler_number, 'strahler_number')
+cell.skeleton.add_feature(strahler_number, 'strahler_number')
 ```
 
-You can also map these labels to visualization:
+You can also map these features to visualization:
 
 ```
-# plot the cell with some labels
+# plot the cell with some features
 fig = osy.plot.plot_cell_2d(
     cell,
     color='compartment',

@@ -63,10 +63,10 @@ def process_spatial_columns(
 def process_vertices(
     vertices: Union[np.ndarray, pd.DataFrame],
     spatial_columns: Optional[list] = None,
-    labels: Optional[Union[dict, pd.DataFrame]] = None,
+    features: Optional[Union[dict, pd.DataFrame]] = None,
     vertex_index: Optional[Union[str, np.ndarray]] = None,
 ) -> tuple[pd.DataFrame, list[str], list[str]]:
-    "Process vertices and labels into a DataFrame and column labels."
+    "Process vertices and features into a DataFrame and column features."
     if isinstance(vertices, np.ndarray) or isinstance(vertices, list):
         spatial_columns = ["x", "y", "z"]
         vertices = pd.DataFrame(np.array(vertices), columns=spatial_columns)
@@ -79,34 +79,34 @@ def process_vertices(
         spatial_columns = vertices.columns
     else:
         if vertex_index:
-            implicit_label_columns = list(
+            implicit_feature_columns = list(
                 vertices.columns[
                     ~vertices.columns.isin(spatial_columns + [vertex_index])
                 ]
             )
         else:
-            implicit_label_columns = list(
+            implicit_feature_columns = list(
                 vertices.columns[~vertices.columns.isin(spatial_columns)]
             )
 
-    if isinstance(labels, dict):
-        labels = pd.DataFrame(labels, index=vertices.index)
-        if labels.shape[0] != vertices.shape[0]:
-            raise ValueError("Labels must have the same number of rows as vertices.")
-    elif labels is None:
-        labels = pd.DataFrame(index=vertices.index)
+    if isinstance(features, dict):
+        features = pd.DataFrame(features, index=vertices.index)
+        if features.shape[0] != vertices.shape[0]:
+            raise ValueError("features must have the same number of rows as vertices.")
+    elif features is None:
+        features = pd.DataFrame(index=vertices.index)
 
-    label_columns = list(labels.columns) + implicit_label_columns
+    feature_columns = list(features.columns) + implicit_feature_columns
 
     vertices = vertices.merge(
-        labels,
+        features,
         left_index=True,
         right_index=True,
         how="left",
     )
     if vertex_index is not None:
         vertices = vertices.set_index(vertex_index)
-    return vertices, spatial_columns, label_columns
+    return vertices, spatial_columns, feature_columns
 
 
 def build_csgraph(
@@ -155,18 +155,18 @@ def connected_component_slice(
     given index. If no index is specified, the slice is of the largest
     connected component.
     """
-    _, labels = sparse.csgraph.connected_components(G)
+    _, features = sparse.csgraph.connected_components(G)
     if ind is None:
-        label_vals, cnt = np.unique(labels, return_counts=True)
+        feature_vals, cnt = np.unique(features, return_counts=True)
         ind = np.argmax(cnt)
-        label = label_vals[ind]
+        feature = feature_vals[ind]
     else:
-        label = labels[ind]
+        feature = features[ind]
 
     if return_boolean:
-        return labels == label
+        return features == feature
     else:
-        return np.flatnonzero(labels == label)
+        return np.flatnonzero(features == feature)
 
 
 def find_far_points_graph(

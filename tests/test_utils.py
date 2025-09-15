@@ -29,43 +29,43 @@ class TestProcessVertices:
                 "x": [0, 1, 2],
                 "y": [0, 0, 0],
                 "z": [0, 0, 0],
-                "label1": ["a", "b", "c"],
-                "label2": [1, 2, 3],
+                "feature1": ["a", "b", "c"],
+                "feature2": [1, 2, 3],
             }
         )
 
-        labels = {"extra_label": [10, 20, 30]}
+        features = {"extra_feature": [10, 20, 30]}
 
-        result_df, spatial_cols, label_cols = utils.process_vertices(
+        result_df, spatial_cols, feature_cols = utils.process_vertices(
             vertices=vertices_df,
             spatial_columns=spatial_columns,
-            labels=labels,
+            features=features,
             vertex_index=None,
         )
 
         assert isinstance(result_df, pd.DataFrame)
         assert spatial_cols == spatial_columns
-        assert "label1" in label_cols
-        assert "label2" in label_cols
-        assert "extra_label" in label_cols
+        assert "feature1" in feature_cols
+        assert "feature2" in feature_cols
+        assert "extra_feature" in feature_cols
         assert len(result_df) == 3
 
     def test_process_vertices_with_numpy_array(self, spatial_columns):
         """Test processing vertices when input is numpy array."""
         vertices_array = np.array([[0, 0, 0], [1, 0, 0], [2, 0, 0]])
 
-        labels = {"compartment": ["soma", "dendrite", "axon"]}
+        features = {"compartment": ["soma", "dendrite", "axon"]}
 
-        result_df, spatial_cols, label_cols = utils.process_vertices(
+        result_df, spatial_cols, feature_cols = utils.process_vertices(
             vertices=vertices_array,
             spatial_columns=spatial_columns,
-            labels=labels,
+            features=features,
             vertex_index=None,
         )
 
         assert isinstance(result_df, pd.DataFrame)
         assert spatial_cols == spatial_columns
-        assert "compartment" in label_cols
+        assert "compartment" in feature_cols
         assert len(result_df) == 3
         assert result_df[spatial_columns[0]].tolist() == [0, 1, 2]
 

@@ -25,8 +25,8 @@ cell = ossify.load_cell('https://github.com/ceesem/ossify/raw/refs/heads/main/86
 from ossify.algorithms import strahler_number
 strahler_values = strahler_number(cell.skeleton)
 
-# Add as skeleton label
-cell.skeleton.add_label(strahler_values, name="strahler")
+# Add as skeleton feature
+cell.skeleton.add_feature(strahler_values, name="strahler")
 
 print(f"Strahler order range: {np.min(strahler_values)} - {np.max(strahler_values)}")
 print(f"Max Strahler order: {np.max(strahler_values)}")
@@ -42,7 +42,7 @@ print(f"Unique Strahler orders: {len(np.unique(strahler_values))}")
 
 ```python
 # Analyze branching complexity
-strahler = cell.skeleton.get_label("strahler")
+strahler = cell.skeleton.get_feature("strahler")
 
 # Find vertices by Strahler order
 for order in range(1, np.max(strahler) + 1):
@@ -84,19 +84,19 @@ cell.add_point_annotations("pre_syn", vertices=pre_syn_locations)
 cell.add_point_annotations("post_syn", vertices=post_syn_locations)
 
 # Classify compartments using synapse flow
-is_axon = ossify.label_axon_from_synapse_flow(
+is_axon = ossify.feature_axon_from_synapse_flow(
     cell=cell,
     pre_syn="pre_syn",           # Presynaptic annotation name
     post_syn="post_syn",         # Postsynaptic annotation name
-    extend_label_to_segment=True,  # Extend labels to full segments
+    extend_feature_to_segment=True,  # Extend features to full segments
     ntimes=1,                    # Number of split iterations
     return_segregation_index=False,
     segregation_index_threshold=0.0,  # Minimum segregation to accept split
     as_postitional=False         # Use vertex indices
 )
 
-# Add classification as label
-cell.skeleton.add_label(is_axon, name="is_axon")
+# Add classification as feature
+cell.skeleton.add_feature(is_axon, name="is_axon")
 
 # Analyze results
 axon_vertices = cell.skeleton.vertex_index[is_axon]
@@ -105,20 +105,20 @@ dendrite_vertices = cell.skeleton.vertex_index[~is_axon]
 print(f"Axon vertices: {len(axon_vertices)}")
 print(f"Dendrite vertices: {len(dendrite_vertices)}")
 
-# Convert to compartment labels (0=dendrite, 1=axon)
-compartment_labels = is_axon.astype(int)
-cell.skeleton.add_label(compartment_labels, name="compartment")
+# Convert to compartment features (0=dendrite, 1=axon)
+compartment_features = is_axon.astype(int)
+cell.skeleton.add_feature(compartment_features, name="compartment")
 ```
 
 ### Advanced Synapse Flow Classification
 
 ```python
 # Multiple iterations for better classification
-is_axon_multi, segregation_idx = ossify.label_axon_from_synapse_flow(
+is_axon_multi, segregation_idx = ossify.feature_axon_from_synapse_flow(
     cell=cell,
     pre_syn="pre_syn",
     post_syn="post_syn",
-    extend_label_to_segment=True,
+    extend_feature_to_segment=True,
     ntimes=3,                    # Multiple iterations
     return_segregation_index=True,  # Return quality metric
     segregation_index_threshold=0.1,  # Require minimum segregation
@@ -138,7 +138,7 @@ Alternative classification method using spectral analysis:
 
 ```python
 # Spectral split method (smoother boundaries)
-is_axon_spectral = ossify.label_axon_from_spectral_split(
+is_axon_spectral = ossify.feature_axon_from_spectral_split(
     cell=cell,
     pre_syn="pre_syn",
     post_syn="post_syn",
@@ -146,17 +146,17 @@ is_axon_spectral = ossify.label_axon_from_spectral_split(
     smoothing_alpha=0.99,        # Smoothing strength (0-1)
     axon_bias=0,                 # Bias toward axon classification
     raw_split=False,             # Apply refinement
-    extend_label_to_segment=True,
+    extend_feature_to_segment=True,
     max_times=None,              # Maximum iterations
     segregation_index_threshold=0.5,
     return_segregation_index=False
 )
 
-cell.skeleton.add_label(is_axon_spectral, name="is_axon_spectral")
+cell.skeleton.add_feature(is_axon_spectral, name="is_axon_spectral")
 
 # Compare methods
-flow_axon = cell.skeleton.get_label("is_axon")
-spectral_axon = cell.skeleton.get_label("is_axon_spectral")
+flow_axon = cell.skeleton.get_feature("is_axon")
+spectral_axon = cell.skeleton.get_feature("is_axon_spectral")
 
 agreement = np.sum(flow_axon == spectral_axon) / len(flow_axon)
 print(f"Method agreement: {agreement:.2%}")
@@ -184,7 +184,7 @@ syn_betweenness = ossify.synapse_betweenness(
     post_inds=post_syn_indices
 )
 
-cell.skeleton.add_label(syn_betweenness, name="synapse_betweenness")
+cell.skeleton.add_feature(syn_betweenness, name="synapse_betweenness")
 
 # Find vertices with high synapse traffic
 high_traffic_threshold = np.percentile(syn_betweenness, 90)
@@ -200,7 +200,7 @@ Quantify how well pre- and post-synaptic sites are segregated:
 
 ```python
 # Count synapses by compartment
-axon_mask = cell.skeleton.get_label("is_axon")
+axon_mask = cell.skeleton.get_feature("is_axon")
 
 # Count pre/post synapses in each compartment
 axon_pre = len(cell.annotations.pre_syn.map_index_to_layer("skeleton")[
@@ -230,33 +230,33 @@ print(f"Axon: {axon_pre} pre, {axon_post} post")
 print(f"Dendrite: {dendrite_pre} pre, {dendrite_post} post")
 ```
 
-## Label Smoothing
+## feature Smoothing
 
-Smooth discrete labels along the skeleton topology:
+Smooth discrete features along the skeleton topology:
 
 ```python
-# Create noisy compartment labels
+# Create noisy compartment features
 np.random.seed(42)
-noisy_labels = cell.skeleton.get_label("compartment").copy()
+noisy_features = cell.skeleton.get_feature("compartment").copy()
 # Add some noise
-noise_indices = np.random.choice(len(noisy_labels), size=2, replace=False)
-noisy_labels[noise_indices] = 1 - noisy_labels[noise_indices]
+noise_indices = np.random.choice(len(noisy_features), size=2, replace=False)
+noisy_features[noise_indices] = 1 - noisy_features[noise_indices]
 
-cell.skeleton.add_label(noisy_labels, name="noisy_compartment")
+cell.skeleton.add_feature(noisy_features, name="noisy_compartment")
 
-# Smooth the labels
-smoothed_labels = ossify.smooth_labels(
+# Smooth the features
+smoothed_features = ossify.smooth_features(
     cell=cell.skeleton,
-    label=noisy_labels,
+    feature=noisy_features,
     alpha=0.90  # Smoothing strength (0-1, higher = more smoothing)
 )
 
-cell.skeleton.add_label(smoothed_labels, name="smoothed_compartment")
+cell.skeleton.add_feature(smoothed_features, name="smoothed_compartment")
 
 # Compare original, noisy, and smoothed
-original = cell.skeleton.get_label("compartment")
-print(f"Original vs noisy differences: {np.sum(original != noisy_labels)}")
-print(f"Original vs smoothed differences: {np.sum(original != (smoothed_labels > 0.5))}")
+original = cell.skeleton.get_feature("compartment")
+print(f"Original vs noisy differences: {np.sum(original != noisy_features)}")
+print(f"Original vs smoothed differences: {np.sum(original != (smoothed_features > 0.5))}")
 ```
 
 ## Morphological Measurements
@@ -283,7 +283,7 @@ print(f"Dendrite cable length: {dendrite_length:.2f}")
 print(f"Axon/Dendrite ratio: {axon_length/dendrite_length:.2f}")
 
 # Cable length by Strahler order
-strahler = cell.skeleton.get_label("strahler")
+strahler = cell.skeleton.get_feature("strahler")
 for order in range(1, np.max(strahler) + 1):
     order_vertices = cell.skeleton.vertex_index[strahler == order]
     order_length = cell.skeleton.cable_length(order_vertices, as_positional=False)
@@ -338,7 +338,7 @@ if len(branch_angles) > 0:
 ```python
 # Distance from root
 distances_to_root = cell.skeleton.distance_to_root()
-cell.skeleton.add_label(distances_to_root, name="distance_to_root")
+cell.skeleton.add_feature(distances_to_root, name="distance_to_root")
 
 print(f"Max distance from root: {np.max(distances_to_root):.2f}")
 print(f"Mean distance from root: {np.mean(distances_to_root):.2f}")
@@ -438,10 +438,10 @@ def analyze_synapse_distribution(cell):
         return
     
     # Map synapses to skeleton
-    pre_counts = cell.skeleton.map_annotations_to_label(
+    pre_counts = cell.skeleton.map_annotations_to_feature(
         "pre_syn", distance_threshold=0.5, agg="count"
     )
-    post_counts = cell.skeleton.map_annotations_to_label(
+    post_counts = cell.skeleton.map_annotations_to_feature(
         "post_syn", distance_threshold=0.5, agg="count"
     )
     
@@ -450,8 +450,8 @@ def analyze_synapse_distribution(cell):
     pre_density = pre_counts / (cable_lengths + 1e-10)  # Avoid division by zero
     post_density = post_counts / (cable_lengths + 1e-10)
     
-    cell.skeleton.add_label(pre_density, name="pre_synapse_density")
-    cell.skeleton.add_label(post_density, name="post_synapse_density")
+    cell.skeleton.add_feature(pre_density, name="pre_synapse_density")
+    cell.skeleton.add_feature(post_density, name="post_synapse_density")
     
     print(f"Total pre-synapses: {np.sum(pre_counts)}")
     print(f"Total post-synapses: {np.sum(post_counts)}")
@@ -472,11 +472,11 @@ analyze_synapse_distribution(cell)
 
 ### Tree Analysis
 - `ossify.strahler_number(cell)` - Compute Strahler numbers for branching complexity
-- `ossify.smooth_labels(cell, label, alpha=0.90)` - Smooth labels along skeleton topology
+- `ossify.smooth_features(cell, feature, alpha=0.90)` - Smooth features along skeleton topology
 
 ### Compartment Classification
-- `ossify.label_axon_from_synapse_flow(cell, pre_syn, post_syn, extend_label_to_segment=False, ntimes=1, ...)` - Classify using synapse flow
-- `ossify.label_axon_from_spectral_split(cell, pre_syn, post_syn, aggregation_distance=1, smoothing_alpha=0.99, ...)` - Classify using spectral method
+- `ossify.feature_axon_from_synapse_flow(cell, pre_syn, post_syn, extend_feature_to_segment=False, ntimes=1, ...)` - Classify using synapse flow
+- `ossify.feature_axon_from_spectral_split(cell, pre_syn, post_syn, aggregation_distance=1, smoothing_alpha=0.99, ...)` - Classify using spectral method
 
 ### Synapse Analysis
 - `ossify.synapse_betweenness(skel, pre_inds, post_inds)` - Compute synapse traffic through vertices
@@ -489,7 +489,7 @@ analyze_synapse_distribution(cell)
 
 !!! tip "Algorithm Best Practices"
     - Ensure synapses are properly linked to skeleton before classification
-    - Use `extend_label_to_segment=True` for biologically meaningful compartments
+    - Use `extend_feature_to_segment=True` for biologically meaningful compartments
     - Validate classification results with `segregation_index`
     - Combine multiple metrics for robust morphological characterization
-    - Consider smoothing noisy labels with `smooth_labels()`
+    - Consider smoothing noisy features with `smooth_features()`

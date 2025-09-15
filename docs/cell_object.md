@@ -70,7 +70,7 @@ cell.add_skeleton(
     vertices=vertices,
     edges=edges,
     root=0,  # Index of root vertex
-    labels={"radius": [0.5, 0.3, 0.2]}  # Optional labels
+    features={"radius": [0.5, 0.3, 0.2]}  # Optional features
 )
 
 # Access skeleton properties
@@ -151,25 +151,25 @@ cell.remove_layer("sampling_points")
 cell.remove_annotation("pre_synapses")
 ```
 
-## Working with Labels
+## Working with features
 
-Both layers and annotations can have associated label data:
+Both layers and annotations can have associated feature data:
 
 ```python
-# Add labels to skeleton
+# Add features to skeleton
 import pandas as pd
 
 # Using arrays
 radius_values = np.array([0.5, 0.3, 0.2])
-cell.skeleton.add_label(radius_values, name="radius")
+cell.skeleton.add_feature(radius_values, name="radius")
 
 # Using dictionaries
-labels_dict = {"compartment": [0, 1, 1]}  # 0=dendrite, 1=axon
-cell.skeleton.add_label(labels_dict)
+features_dict = {"compartment": [0, 1, 1]}  # 0=dendrite, 1=axon
+cell.skeleton.add_feature(features_dict)
 
-# Access labels
-print(f"Available labels: {cell.skeleton.label_names}")
-radius = cell.skeleton.get_label("radius")
+# Access features
+print(f"Available features: {cell.skeleton.feature_names}")
+radius = cell.skeleton.get_feature("radius")
 ```
 
 ## Cell Information and Inspection
@@ -223,15 +223,15 @@ cell.layers.describe()
 # Layers (3)
 # ├── skeleton (SkeletonLayer)
 # │   ├── 150 vertices, 149 edges
-# │   ├── Labels: [radius, branch_type]
+# │   ├── features: [radius, branch_type]
 # │   └── Links: mesh <-> skeleton, synapses → skeleton
 # ├── mesh (MeshLayer)
 # │   ├── 2847 vertices, 5691 faces
-# │   ├── Labels: [compartment]
+# │   ├── features: [compartment]
 # │   └── Links: skeleton <-> mesh
 # └── graph (GraphLayer)
 #     ├── 45 vertices, 67 edges
-#     ├── Labels: []
+#     ├── features: []
 #     └── Links: []
 
 # 3. All annotations (detailed)
@@ -240,11 +240,11 @@ cell.annotations.describe()
 # Annotations (2)
 # ├── synapses (PointCloudLayer)
 # │   ├── 23 vertices
-# │   ├── Labels: [synapse_type, confidence]
+# │   ├── features: [synapse_type, confidence]
 # │   └── Links: skeleton → synapses
 # └── spines (PointCloudLayer)
 #     ├── 47 vertices
-#     ├── Labels: [spine_type]
+#     ├── features: [spine_type]
 #     └── Links: skeleton → spines
 
 # 4. Individual layers (with cell context)
@@ -253,7 +253,7 @@ cell.skeleton.describe()
 # Cell: my_neuron
 # Layer: skeleton (SkeletonLayer)
 # ├── 150 vertices, 149 edges
-# ├── Labels: [radius, branch_type]
+# ├── features: [radius, branch_type]
 # └── Links: mesh <-> skeleton, synapses → skeleton
 
 cell.annotations.synapses.describe()
@@ -261,7 +261,7 @@ cell.annotations.synapses.describe()
 # Cell: my_neuron
 # Layer: synapses (PointCloudLayer)
 # ├── 23 vertices
-# ├── Labels: [synapse_type, confidence]
+# ├── features: [synapse_type, confidence]
 # └── Links: skeleton → synapses
 ```
 
@@ -271,16 +271,16 @@ This hierarchical inspection system lets you:
 - **Drill down** to individual layers for detailed analysis
 - **Maintain context** with cell name shown in individual layer descriptions
 
-### Accessing All Labels
+### Accessing All features
 
 ```python
-# Get DataFrame of all labels across layers
-all_labels = cell.labels
-print(all_labels)
+# Get DataFrame of all features across layers
+all_features = cell.features
+print(all_features)
 
-# Map labels from one layer to another
-mapped_labels = cell.get_labels(
-    labels="radius",
+# Map features from one layer to another
+mapped_features = cell.get_features(
+    features="radius",
     target_layer="mesh",
     source_layers="skeleton",
     agg="mean"  # How to aggregate when mapping
@@ -351,11 +351,11 @@ with cell.mask_context("skeleton", mask) as masked_cell:
 - `cell.transform(transform, inplace=False)` - Apply spatial transformation
 
 ### Adding Layers
-- `cell.add_skeleton(vertices, edges, root=None, labels=None)` - Add skeleton
-- `cell.add_mesh(vertices, faces, labels=None)` - Add mesh  
-- `cell.add_graph(vertices, edges, labels=None)` - Add graph
-- `cell.add_point_layer(name, vertices, labels=None)` - Add point cloud
-- `cell.add_point_annotations(name, vertices, labels=None)` - Add annotations
+- `cell.add_skeleton(vertices, edges, root=None, features=None)` - Add skeleton
+- `cell.add_mesh(vertices, faces, features=None)` - Add mesh  
+- `cell.add_graph(vertices, edges, features=None)` - Add graph
+- `cell.add_point_layer(name, vertices, features=None)` - Add point cloud
+- `cell.add_point_annotations(name, vertices, features=None)` - Add annotations
 
 ### Layer Management  
 - `cell.remove_layer(name)` - Remove morphological layer
@@ -364,8 +364,8 @@ with cell.mask_context("skeleton", mask) as masked_cell:
 ### Data Access
 - `cell.layers` - Access to layer manager
 - `cell.annotations` - Access to annotation manager  
-- `cell.labels` - DataFrame of all labels
-- `cell.get_labels(labels, target_layer, source_layers=None, agg="median")` - Map labels between layers
+- `cell.features` - DataFrame of all features
+- `cell.get_features(features, target_layer, source_layers=None, agg="median")` - Map features between layers
 
 ### Masking and Filtering
 - `cell.apply_mask(layer, mask, as_positional=False)` - Apply mask to create new cell

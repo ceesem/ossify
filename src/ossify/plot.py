@@ -532,24 +532,24 @@ def plot_skeleton(
 def _resolve_color_parameter(
     color_param: Union[str, np.ndarray, tuple, Any], skel: SkeletonLayer
 ) -> Union[np.ndarray, str, tuple, None]:
-    """Resolve color parameter - try labels first, then matplotlib colors.
+    """Resolve color parameter - try features first, then matplotlib colors.
 
     Parameters
     ----------
     color_param : str, np.ndarray, tuple, or Any
         Color specification to resolve
     skel : SkeletonLayer
-        Skeleton layer to look up labels from
+        Skeleton layer to look up features from
 
     Returns
     -------
     np.ndarray, str, tuple, or None
-        Resolved color parameter - array if label found, original value otherwise
+        Resolved color parameter - array if feature found, original value otherwise
     """
     if isinstance(color_param, str):
-        # Try to get as label first
+        # Try to get as feature first
         try:
-            return skel.get_label(color_param)
+            return skel.get_feature(color_param)
         except (KeyError, AttributeError):
             # Fall back to matplotlib color
             return color_param
@@ -592,7 +592,7 @@ def plot_points(
         if color_norm is not None:
             scatter_kws["vmin"], scatter_kws["vmax"] = color_norm
     elif isinstance(palette, dict) and colors:
-        colors = [palette[label] for label in colors]
+        colors = [palette[feature] for feature in colors]
     if colors is not None:
         if isinstance(colors, str):
             # Single color string
@@ -663,9 +663,9 @@ def plot_annotations_2d(
     if isinstance(annotation, PointCloudLayer):
         vertices = annotation.vertices
         if isinstance(color, str):
-            color = color or annotation.get_label(color)
+            color = color or annotation.get_feature(color)
         if isinstance(size, str):
-            size = annotation.get_label(size)
+            size = annotation.get_feature(size)
     else:
         vertices = np.asarray(annotation)
 
@@ -720,17 +720,17 @@ def plot_morphology_2d(
     projection : str or Callable, default "xy"
         Projection function or string mapping 3d points to a 2d projection.
     color : str, np.ndarray, or tuple, optional
-        Color specification - can be label name, array of values, or matplotlib color
+        Color specification - can be feature name, array of values, or matplotlib color
     palette : str or dict, default "coolwarm"
         Colormap for mapping array values to colors
     color_norm : tuple of float, optional
         (min, max) tuple for color normalization
     alpha : str, np.ndarray, or float, default 1.0
-        Alpha specification - can be label name, array, or single value
+        Alpha specification - can be feature name, array, or single value
     alpha_norm : tuple of float, optional
         (min, max) tuple for alpha normalization
     linewidth : str, np.ndarray, or float, default 1.0
-        Linewidth specification - can be label name, array, or single value
+        Linewidth specification - can be feature name, array, or single value
     linewidth_norm : tuple of float, optional
         (min, max) tuple for linewidth normalization
     widths : tuple, optional
@@ -771,7 +771,7 @@ def plot_morphology_2d(
     if alpha_extent is None:
         alpha_extent = (0.1, 1.0)
     if isinstance(alpha, str):
-        alpha_values = skel.get_label(alpha)
+        alpha_values = skel.get_feature(alpha)
         if alpha_norm is None:
             alpha_norm = (np.min(alpha_values), np.max(alpha_values))
         alpha_array = np.asarray(Normalize(*alpha_norm, clip=True)(alpha_values))
@@ -790,7 +790,7 @@ def plot_morphology_2d(
     # Process linewidth (similar to existing logic)
     linewidth_array = None
     if isinstance(linewidth, str):
-        linewidth_values = skel.get_label(linewidth)
+        linewidth_values = skel.get_feature(linewidth)
         if linewidth_norm is None:
             linewidth_norm = (np.min(linewidth_values), np.max(linewidth_values))
         normalized = Normalize(*linewidth_norm, clip=True)(linewidth_values)
@@ -1332,8 +1332,8 @@ def add_scale_bar(
     color: str = "black",
     linewidth: float = 10.0,
     orientation: Literal["h", "v", "horizontal", "vertical"] = "h",
-    label: Optional[str] = None,
-    label_offset: float = 0.01,
+    feature: Optional[str] = None,
+    feature_offset: float = 0.01,
     fontsize: float = 10,
 ) -> None:
     """Add a scale bar to an axis with precise positioning.
@@ -1351,23 +1351,23 @@ def add_scale_bar(
         Color of the scale bar line
     linewidth : float, default 3.0
         Width of the scale bar line in points
-    label : str, optional
-        Text label for the scale bar (e.g., "100 μm")
-    label_offset : float, default 0.01
-        Vertical offset for label as fraction of axis height
+    feature : str, optional
+        Text feature for the scale bar (e.g., "100 μm")
+    feature_offset : float, default 0.01
+        Vertical offset for feature as fraction of axis height
     fontsize : float, default 10
-        Font size for scale bar label
+        Font size for scale bar feature
 
     Examples
     --------
     >>> fig, ax = plt.subplots()
     >>> ax.plot([0, 100], [0, 50])
-    >>> add_scale_bar(ax, length=20, position=(0.1, 0.1), label="20 units")
+    >>> add_scale_bar(ax, length=20, position=(0.1, 0.1), feature="20 units")
 
     >>> # Add scale bar to morphology plot
     >>> fig, ax = single_panel_figure(bounds_min, bounds_max, 10)
     >>> plot_skeleton(skeleton, ax=ax)
-    >>> add_scale_bar(ax, length=50, position=(0.8, 0.05), label="50 μm")
+    >>> add_scale_bar(ax, length=50, position=(0.8, 0.05), feature="50 μm")
     """
     # Get axis data limits
     xlim = ax.get_xlim()
@@ -1402,25 +1402,25 @@ def add_scale_bar(
         solid_capstyle="butt",
     )
 
-    # Add label if provided
-    if label is not None:
-        # Position label above the center of the scale bar
+    # Add feature if provided
+    if feature is not None:
+        # Position feature above the center of the scale bar
         match orientation:
             case "h" | "horizontal":
-                label_x = x_start + length / 2
-                label_y = y_start + label_offset * y_range
+                feature_x = x_start + length / 2
+                feature_y = y_start + feature_offset * y_range
             case "v" | "vertical":
                 if ax.yaxis_inverted():
-                    label_x = x_start + label_offset * x_range
-                    label_y = y_start - length / 2
+                    feature_x = x_start + feature_offset * x_range
+                    feature_y = y_start - length / 2
                 else:
-                    label_x = x_start + label_offset * x_range
-                    label_y = y_start + length / 2
+                    feature_x = x_start + feature_offset * x_range
+                    feature_y = y_start + length / 2
 
         ax.text(
-            label_x,
-            label_y,
-            label,
+            feature_x,
+            feature_y,
+            feature,
             ha="center",
             va="bottom",
             color=color,

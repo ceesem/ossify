@@ -30,14 +30,14 @@ import ossify
 # Create a sample cell with skeleton
 vertices = np.array([[0,0,0], [1,0,0], [2,0,0], [3,0,0], [4,0,0]])
 edges = np.array([[0,1], [1,2], [2,3], [3,4]])
-labels = {"quality": [0.9, 0.7, 0.8, 0.6, 0.9]}
+features = {"quality": [0.9, 0.7, 0.8, 0.6, 0.9]}
 
 cell = ossify.Cell(name="mask_example")
-cell.add_skeleton(vertices=vertices, edges=edges, root=0, labels=labels)
+cell.add_skeleton(vertices=vertices, edges=edges, root=0, features=features)
 
 # Create boolean mask - high quality vertices
 skeleton = cell.skeleton
-quality_mask = skeleton.get_label("quality") > 0.8
+quality_mask = skeleton.get_feature("quality") > 0.8
 
 print(f"Original vertices: {skeleton.n_vertices}")
 print(f"High quality vertices: {sum(quality_mask)}")
@@ -198,10 +198,10 @@ cell = ossify.load_cell('https://github.com/ceesem/ossify/raw/refs/heads/main/86
 
 from ossify.algorithms import strahler_number
 strahler_values = strahler_number(cell.skeleton)
-cell.skeleton.add_label(strahler_values, 'strahler_number')
+cell.skeleton.add_feature(strahler_values, 'strahler_number')
 
 # Mask to axon compartment (compartment == 2) and visualize
-with cell.skeleton.mask_context(cell.skeleton.labels['compartment'] == 2) as masked_cell:
+with cell.skeleton.mask_context(cell.skeleton.features['compartment'] == 2) as masked_cell:
     fig = ossify.plot_cell_2d(
         masked_cell,
         color='strahler_number',    # Color by branching complexity
@@ -219,10 +219,10 @@ with cell.skeleton.mask_context(cell.skeleton.labels['compartment'] == 2) as mas
     # Print analysis of masked data
     print(f"Axon cable length: {masked_cell.skeleton.cable_length():.0f} nm")
     print(f"Axon branch points: {len(masked_cell.skeleton.branch_points)}")
-    print(f"Axon Strahler range: {masked_cell.skeleton.get_label('strahler_number').min()}-{masked_cell.skeleton.get_label('strahler_number').max()}")
+    print(f"Axon Strahler range: {masked_cell.skeleton.get_feature('strahler_number').min()}-{masked_cell.skeleton.get_feature('strahler_number').max()}")
 
 # Original cell unchanged - can analyze other compartments
-with cell.skeleton.mask_context(cell.skeleton.labels['compartment'] == 3) as dendrite_cell:
+with cell.skeleton.mask_context(cell.skeleton.features['compartment'] == 3) as dendrite_cell:
     print(f"Dendrite cable length: {dendrite_cell.skeleton.cable_length():.0f} nm")
 ```
 
@@ -238,7 +238,7 @@ This example demonstrates:
 
 ```python
 # Combine multiple conditions
-quality = skeleton.get_label("quality")
+quality = skeleton.get_feature("quality")
 distances = skeleton.distance_to_root()
 
 # Complex boolean logic
@@ -352,11 +352,11 @@ print(f"Edge preservation: {original_edges} → {filtered_edges}")
 ```python
 # Compare properties before and after masking
 print("Before masking:")
-print(f"  Quality range: {np.min(skeleton.get_label('quality')):.2f} - {np.max(skeleton.get_label('quality')):.2f}")
+print(f"  Quality range: {np.min(skeleton.get_feature('quality')):.2f} - {np.max(skeleton.get_feature('quality')):.2f}")
 print(f"  Cable length: {skeleton.cable_length():.2f}")
 
 print("After masking:")
-filtered_quality = filtered_skeleton.get_label('quality')
+filtered_quality = filtered_skeleton.get_feature('quality')
 print(f"  Quality range: {np.min(filtered_quality):.2f} - {np.max(filtered_quality):.2f}")
 print(f"  Cable length: {filtered_skeleton.cable_length():.2f}")
 ```
@@ -367,9 +367,9 @@ print(f"  Cable length: {filtered_skeleton.cable_length():.2f}")
 
 ```python
 # Common pattern: filter by confidence/quality
-def filter_by_quality(layer, quality_label="quality", threshold=0.8):
+def filter_by_quality(layer, quality_feature="quality", threshold=0.8):
     """Filter layer to high-quality vertices."""
-    quality_values = layer.get_label(quality_label)
+    quality_values = layer.get_feature(quality_feature)
     quality_mask = quality_values >= threshold
     return layer.apply_mask(quality_mask, as_positional=True)
 
@@ -422,7 +422,7 @@ def filter_large_components(cell, min_vertices=10):
 - `cell.mask_context(layer, mask)` - Temporary cell masking context manager
 
 ### Mask Creation
-- Boolean arrays: `layer.get_label("quality") > threshold`
+- Boolean arrays: `layer.get_feature("quality") > threshold`
 - Index arrays: `layer.vertex_index[selection]` 
 - Spatial conditions: `(vertices[:, 0] > x_min) & (vertices[:, 0] < x_max)`
 - Tree-based: `skeleton.downstream_vertices(vertex, as_positional=False)`

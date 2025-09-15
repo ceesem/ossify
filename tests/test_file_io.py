@@ -54,10 +54,10 @@ class TestSaveAndLoadCell:
             loaded_cell.skeleton.vertices, original_cell.skeleton.vertices
         )
 
-    def test_save_and_load_with_labels(
-        self, simple_skeleton_data, spatial_columns, mock_labels
+    def test_save_and_load_with_features(
+        self, simple_skeleton_data, spatial_columns, mock_features
     ):
-        """Test saving and loading a cell with labels."""
+        """Test saving and loading a cell with features."""
         vertices, edges, vertex_indices = simple_skeleton_data
         vertex_df = pd.DataFrame(
             vertices, columns=spatial_columns, index=vertex_indices
@@ -73,14 +73,14 @@ class TestSaveAndLoadCell:
             ]
         )
 
-        # Create cell with labels
-        original_cell = Cell(name="labeled_cell")
+        # Create cell with features
+        original_cell = Cell(name="featureed_cell")
         original_cell.add_skeleton(
             vertices=vertex_df,
             edges=edges_with_indices,
             spatial_columns=spatial_columns,
             root=vertex_indices[0],
-            labels=mock_labels,
+            features=mock_features,
         )
 
         # Save and load
@@ -89,12 +89,14 @@ class TestSaveAndLoadCell:
 
             loaded_cell = file_io.load_cell(tmp_file.name)
 
-        # Verify labels are preserved
-        assert loaded_cell.skeleton.label_names == original_cell.skeleton.label_names
-        for label_name in original_cell.skeleton.label_names:
+        # Verify features are preserved
+        assert (
+            loaded_cell.skeleton.feature_names == original_cell.skeleton.feature_names
+        )
+        for feature_name in original_cell.skeleton.feature_names:
             np.testing.assert_array_equal(
-                loaded_cell.skeleton.get_label(label_name),
-                original_cell.skeleton.get_label(label_name),
+                loaded_cell.skeleton.get_feature(feature_name),
+                original_cell.skeleton.get_feature(feature_name),
             )
 
     def test_save_and_load_multi_layer_cell(

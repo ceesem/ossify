@@ -6,7 +6,7 @@
 Mesh layers in ossify represent surface data as collections of vertices and triangular faces. They're ideal for representing the 3D surface of cellular structures like neuron soma, dendrites, or entire cell bodies.
 
 !!! note "Shared Features"
-    Meshes inherit many common features from the `PointMixin` class. For information about labels, masking, transformations, spatial queries, and cross-layer mapping, see [Shared Layer Features](shared_layer_features.md).
+    Meshes inherit many common features from the `PointMixin` class. For information about features, masking, transformations, spatial queries, and cross-layer mapping, see [Shared Layer Features](shared_layer_features.md).
 
 ## What is a Mesh Layer?
 
@@ -19,7 +19,7 @@ A `MeshLayer` contains:
 
 ### Quick Overview with `describe()`
 
-The `describe()` method provides a comprehensive summary of mesh layers, showing vertex/face counts, labels, and connections to other layers:
+The `describe()` method provides a comprehensive summary of mesh layers, showing vertex/face counts, features, and connections to other layers:
 
 ```python
 # Individual mesh layer
@@ -31,7 +31,7 @@ cell.mesh.describe()
 # Cell: my_neuron  
 # Layer: mesh (MeshLayer)
 ├── 2847 vertices, 5691 faces
-├── Labels: [compartment, surface_area]
+├── features: [compartment, surface_area]
 └── Links: skeleton <-> mesh
 ```
 
@@ -39,7 +39,7 @@ The output shows:
 - **Cell context**: Which cell this mesh belongs to
 - **Layer type**: Confirms this is a MeshLayer  
 - **Metrics**: Vertex and face counts
-- **Labels**: Available data columns beyond spatial coordinates
+- **features**: Available data columns beyond spatial coordinates
 - **Links**: Connections to other layers (`<->` = bidirectional, `→` = unidirectional)
 
 ### Layer Manager Overview
@@ -77,16 +77,16 @@ cell.add_mesh(vertices=vertices, faces=faces)
 print(f"Mesh has {cell.mesh.n_vertices} vertices and {len(cell.mesh.faces)} faces")
 ```
 
-### Mesh with Labels
+### Mesh with features
 
 ```python
-# Add vertex labels during creation
-region_labels = np.array([0, 0, 1, 1])  # Two regions
+# Add vertex features during creation
+region_features = np.array([0, 0, 1, 1])  # Two regions
 
 cell.add_mesh(
     vertices=vertices,
     faces=faces,
-    labels={"region": region_labels}
+    features={"region": region_features}
 )
 ```
 
@@ -160,7 +160,7 @@ edge_positions = mesh.edges_positional  # With positional indices
 ## Key Mesh-Specific Methods
 
 ### Mesh Creation
-- `cell.add_mesh(vertices, faces, labels=None, spatial_columns=None, vertex_index=None)` - Add mesh to cell
+- `cell.add_mesh(vertices, faces, features=None, spatial_columns=None, vertex_index=None)` - Add mesh to cell
 
 ### Mesh-Specific Properties
 - `mesh.faces` - Face indices using vertex indices
@@ -173,4 +173,4 @@ edge_positions = mesh.edges_positional  # With positional indices
 - `mesh.csgraph` - Sparse graph representation for connectivity analysis
 
 !!! note "Additional Features"
-    For comprehensive information about vertex access, labels, masking, transformations, spatial queries, and cross-layer mapping, see [Shared Layer Features](shared_layer_features.md).
+    For comprehensive information about vertex access, features, masking, transformations, spatial queries, and cross-layer mapping, see [Shared Layer Features](shared_layer_features.md).

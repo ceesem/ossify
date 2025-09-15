@@ -6,7 +6,7 @@
 Skeleton layers represent tree-structured morphologies with a defined root and no cycles. They're specialized for analyzing branching structures like neuronal arbors, providing tree-specific properties and measurements not available in general graphs.
 
 !!! note "Shared Features"
-    Skeletons inherit many common features from the `PointMixin` class. For information about labels, masking, transformations, spatial queries, and cross-layer mapping, see [Shared Layer Features](shared_layer_features.md).
+    Skeletons inherit many common features from the `PointMixin` class. For information about features, masking, transformations, spatial queries, and cross-layer mapping, see [Shared Layer Features](shared_layer_features.md).
 
 !!! info "Skeletons vs Graphs"
     **Skeletons** are rooted tree structures (no cycles, single component) with specialized tree analysis capabilities. **Graphs** are general networks that can have cycles and multiple components. See [Working with Graphs](working_with_graphs.md) for general network analysis.
@@ -23,7 +23,7 @@ A `SkeletonLayer` contains:
 
 ### Quick Overview with `describe()`
 
-The `describe()` method provides a comprehensive summary of skeleton layers, showing vertex/edge counts, labels, and connections to other layers:
+The `describe()` method provides a comprehensive summary of skeleton layers, showing vertex/edge counts, features, and connections to other layers:
 
 ```python
 # Individual skeleton layer
@@ -35,7 +35,7 @@ cell.skeleton.describe()
 # Cell: my_neuron
 # Layer: skeleton (SkeletonLayer)
 ├── 150 vertices, 149 edges
-├── Labels: [radius, branch_type, distance_to_root]
+├── features: [radius, branch_type, distance_to_root]
 └── Links: mesh <-> skeleton, synapses → skeleton
 ```
 
@@ -43,7 +43,7 @@ The output shows:
 - **Cell context**: Which cell this skeleton belongs to
 - **Layer type**: Confirms this is a SkeletonLayer
 - **Metrics**: Vertex and edge counts
-- **Labels**: Available data columns beyond spatial coordinates
+- **features**: Available data columns beyond spatial coordinates
 - **Links**: Connections to other layers (`<->` = bidirectional, `→` = unidirectional)
 
 ### Layer Manager Overview
@@ -60,15 +60,15 @@ cell.layers.describe()
 # Layers (3)
 ├── skeleton (SkeletonLayer)
 │   ├── 150 vertices, 149 edges
-│   ├── Labels: [radius, branch_type]
+│   ├── features: [radius, branch_type]
 │   └── Links: mesh <-> skeleton, synapses → skeleton
 ├── mesh (MeshLayer)
 │   ├── 2847 vertices, 5691 faces
-│   ├── Labels: [compartment]
+│   ├── features: [compartment]
 │   └── Links: skeleton <-> mesh
 └── graph (GraphLayer)
     ├── 45 vertices, 67 edges
-    ├── Labels: []
+    ├── features: []
     └── Links: []
 ```
 
@@ -109,7 +109,7 @@ print(f"Skeleton has {cell.skeleton.n_vertices} vertices")
 print(f"Root location: {cell.skeleton.root_location}")
 ```
 
-### Skeleton with Morphological Labels
+### Skeleton with Morphological features
 
 ```python
 # Add radius and compartment information
@@ -120,7 +120,7 @@ cell.add_skeleton(
     vertices=vertices,
     edges=edges,
     root=0,
-    labels={
+    features={
         "radius": radius_values,
         "compartment": compartments
     }
@@ -327,7 +327,7 @@ print(f"Half-edge lengths: {half_edge_lengths}")
 
 ```python
 # If skeleton has radius information
-if "radius" in skeleton.label_names:
+if "radius" in skeleton.feature_names:
     # Calculate surface area treating skeleton as cylinders
     surface_area = skeleton.surface_area()
     print(f"Surface area: {surface_area}")
@@ -375,7 +375,7 @@ base_csgraph_binary = skeleton.base_csgraph_binary
 # Aggregate annotations with tree direction awareness
 if "synapses" in cell.annotations.names:
     # Count synapses considering tree direction
-    synapse_density = skeleton.map_annotations_to_label(
+    synapse_density = skeleton.map_annotations_to_feature(
         annotation="synapses",
         distance_threshold=2.0,
         agg="density",              # Density per unit cable length
@@ -385,7 +385,7 @@ if "synapses" in cell.annotations.names:
     )
     
     # Custom aggregation with tree context
-    synapse_stats = skeleton.map_annotations_to_label(
+    synapse_stats = skeleton.map_annotations_to_feature(
         annotation="synapses",
         distance_threshold=2.0,
         agg={
@@ -395,7 +395,7 @@ if "synapses" in cell.annotations.names:
         }
     )
     
-    skeleton.add_label(synapse_stats)
+    skeleton.add_feature(synapse_stats)
 ```
 
 ## Advanced Skeleton Analysis
@@ -404,8 +404,8 @@ if "synapses" in cell.annotations.names:
 
 ```python
 # Analyze different compartments
-if "compartment" in skeleton.label_names:
-    compartments = skeleton.get_label("compartment")
+if "compartment" in skeleton.feature_names:
+    compartments = skeleton.get_feature("compartment")
     
     # Axon vs dendrite analysis
     axon_mask = compartments == 1
@@ -452,7 +452,7 @@ if len(branch_points) >= 2:
 ## Key Skeleton-Specific Methods
 
 ### Skeleton Creation
-- `cell.add_skeleton(vertices, edges, root=None, labels=None, spatial_columns=None, vertex_index=None)` - Add skeleton to cell
+- `cell.add_skeleton(vertices, edges, root=None, features=None, spatial_columns=None, vertex_index=None)` - Add skeleton to cell
 
 ### Tree Structure Properties
 - `skeleton.root` / `skeleton.root_positional` - Root vertex
@@ -493,10 +493,10 @@ if len(branch_points) >= 2:
 - `skeleton.base_csgraph` / `skeleton.base_csgraph_binary` - Original matrices
 
 ### Tree-Aware Analysis
-- `skeleton.map_annotations_to_label(annotation, distance_threshold, agg="count"/"density", agg_direction="directed", ...)` - Aggregate with tree direction
+- `skeleton.map_annotations_to_feature(annotation, distance_threshold, agg="count"/"density", agg_direction="directed", ...)` - Aggregate with tree direction
 
 !!! note "Additional Features"
-    For comprehensive information about vertex access, labels, masking, transformations, spatial queries, and cross-layer mapping, see [Shared Layer Features](shared_layer_features.md).
+    For comprehensive information about vertex access, features, masking, transformations, spatial queries, and cross-layer mapping, see [Shared Layer Features](shared_layer_features.md).
 
 !!! tip "When to Use Skeletons"
     - Neuronal morphology analysis requiring tree structure

@@ -14,6 +14,7 @@ from typing import (
     Tuple,
     Union,
 )
+from warnings import warn
 
 import fastremap
 import numpy as np
@@ -341,10 +342,10 @@ class PointMixin(ABC):
         morphsync: Optional[PointSync] = None,
         vertices: Union[np.ndarray, pd.DataFrame] = None,
         spatial_columns: Optional[list] = None,
-        labels: Optional[Union[dict, pd.DataFrame]] = None,
+        features: Optional[Union[dict, pd.DataFrame]] = None,
         vertex_index: Optional[Union[str, np.ndarray]] = None,
     ) -> Tuple[pd.DataFrame, List[str], List[str]]:
-        """Process basic label data when building the layer.
+        """Process basic feature data when building the layer.
 
         Parameters
         ----------
@@ -356,15 +357,15 @@ class PointMixin(ABC):
             Vertex data as array or DataFrame.
         spatial_columns : Optional[list], optional
             List of column names for spatial coordinates.
-        labels : Optional[Union[dict, pd.DataFrame]], optional
-            Additional label data to attach to vertices.
+        features : Optional[Union[dict, pd.DataFrame]], optional
+            Additional feature data to attach to vertices.
         vertex_index : Optional[Union[str, np.ndarray]], optional
             Vertex index column name or array.
 
         Returns
         -------
         Tuple[pd.DataFrame, List[str], List[str]]
-            Processed vertices DataFrame, spatial column names, and label column names.
+            Processed vertices DataFrame, spatial column names, and feature column names.
         """
         self._name = name
         self._kdtree = None
@@ -372,15 +373,15 @@ class PointMixin(ABC):
             self._morphsync = MorphSync()
         else:
             self._morphsync = morphsync
-        vertices, spatial_columns, label_columns = utils.process_vertices(
+        vertices, spatial_columns, feature_columns = utils.process_vertices(
             vertices=vertices,
             spatial_columns=spatial_columns,
-            labels=labels,
+            features=features,
             vertex_index=vertex_index,
         )
         self._spatial_columns = spatial_columns
-        self._label_columns = label_columns
-        return vertices, spatial_columns, label_columns
+        self._feature_columns = feature_columns
+        return vertices, spatial_columns, feature_columns
 
     def _setup_linkage(
         self,
@@ -486,7 +487,7 @@ class PointMixin(ABC):
 
     @property
     def nodes(self) -> pd.DataFrame:
-        """Get the complete DataFrame of vertices and all associated data, including both spatial columns and labels."""
+        """Get the complete DataFrame of vertices and all associated data, including both spatial columns and features."""
         return self.layer.nodes
 
     @property
@@ -495,14 +496,14 @@ class PointMixin(ABC):
         return self._spatial_columns
 
     @property
-    def label_names(self) -> list:
-        """Get the list of column names associated with labels (non-spatial columns)."""
+    def feature_names(self) -> list:
+        """Get the list of column names associated with features (non-spatial columns)."""
         return self.nodes.columns.difference(self.spatial_columns).tolist()
 
     @property
-    def labels(self) -> pd.DataFrame:
-        """Get the labels DataFrame."""
-        return self.nodes[self.label_names]
+    def features(self) -> pd.DataFrame:
+        """Get the features DataFrame."""
+        return self.nodes[self.feature_names]
 
     @property
     def n_vertices(self) -> int:
@@ -521,58 +522,66 @@ class PointMixin(ABC):
             self._kdtree = spatial.KDTree(self.vertices)
         return self._kdtree
 
-    def get_label(self, key: str) -> np.ndarray:
-        """Get a label array from the labels DataFrame.
+    def get_feature(self, key: str) -> np.ndarray:
+        """Get a feature array from the features DataFrame.
 
         Parameters
         ----------
         key : str
-            Column name of the label to retrieve.
+            Column name of the feature to retrieve.
 
         Returns
         -------
         np.ndarray
-            Array of label values for all vertices.
+            Array of feature values for all vertices.
         """
-        return self.labels[key].values
+        return self.features[key].values
 
-    def add_label(
+    def add_feature(
         self,
-        label: Union[list, np.ndarray, dict, pd.DataFrame],
+        feature: Union[list, np.ndarray, dict, pd.DataFrame],
         name: Optional[str] = None,
     ) -> Self:
-        """Add a new layer to the DataFrame.
+        """Add a new vertex feature to the layer.
 
         Parameters
         ----------
-        label: Union[list, np.ndarray, dict, pd.Series, pd.DataFrame]
-            The label data to add. If an array or list, it should follow the vertex order.
+        feature: Union[list, np.ndarray, dict, pd.Series, pd.DataFrame]
+            The feature data to add. If an array or list, it should follow the vertex order.
         name: Optional[str]
-            The name of the label column (required if label is a list or np.ndarray).
+            The name of the feature column (required if feature is a list or np.ndarray).
 
         Returns
         -------
         Self
             The updated DataLayer instance.
         """
-        if isinstance(label, list) or isinstance(label, np.ndarray):
-            label = pd.DataFrame(label, index=self.vertex_index, columns=[name])
-        elif isinstance(label, dict):
-            label = pd.DataFrame(label, index=self.vertex_index)
-        elif isinstance(label, pd.DataFrame) or isinstance(label, pd.Series):
-            if isinstance(label, pd.Series):
-                label = label.to_frame()
-            label = label.loc[self.vertex_index]
+        if isinstance(feature, list) or isinstance(feature, np.ndarray):
+            feature = pd.DataFrame(feature, index=self.vertex_index, columns=[name])
+        elif isinstance(feature, dict):
+            feature = pd.DataFrame(feature, index=self.vertex_index)
+        elif isinstance(feature, pd.DataFrame) or isinstance(feature, pd.Series):
+            if isinstance(feature, pd.DataFrame) and name is not None:
+                warn(
+                    '"If `feature` is a DataFrame, `name` is ignored. Please rename columns before adding."'
+                )
+            if isinstance(feature, pd.Series):
+                if name is not None:
+                    feature.name = name
+                feature = feature.to_frame()
+            feature = feature.loc[self.vertex_index]
         else:
-            raise ValueError("Label must be a list, np.ndarray, dict or pd.DataFrame.")
+            raise ValueError(
+                "feature must be a list, np.ndarray, dict, pd.Series or pd.DataFrame."
+            )
 
-        if label.shape[0] != self.n_vertices:
-            raise ValueError("Label must have the same number of rows as vertices.")
-        if np.any(label.columns.isin(self.nodes.columns)):
-            raise ValueError('"Label name already exists in the nodes DataFrame.")')
+        if feature.shape[0] != self.n_vertices:
+            raise ValueError("feature must have the same number of rows as vertices.")
+        if np.any(feature.columns.isin(self.nodes.columns)):
+            raise ValueError('"feature name already exists in the nodes DataFrame.")')
 
         self._morphsync.layers[self.layer_name].nodes = self.nodes.merge(
-            label,
+            feature,
             left_index=True,
             right_index=True,
             how="left",
@@ -580,23 +589,23 @@ class PointMixin(ABC):
         )
         return self
 
-    def drop_labels(self, labels: Union[str, list]) -> Self:
-        """Drop labels from the DataFrame.
+    def drop_features(self, features: Union[str, list]) -> Self:
+        """Drop features from the DataFrame.
 
         Parameters
         ----------
-        labels: Union[str, list]
-            The label column name or list of names to drop.
+        features: Union[str, list]
+            The feature column name or list of names to drop.
 
         Returns
         -------
         Self
             The updated DataLayer instance.
         """
-        if isinstance(labels, str):
-            labels = [labels]
+        if isinstance(features, str):
+            features = [features]
         self._morphsync.layers[self.layer_name].nodes.drop(
-            columns=labels, inplace=True, errors="ignore"
+            columns=features, inplace=True, errors="ignore"
         )
         return self
 
@@ -687,22 +696,22 @@ class PointMixin(ABC):
         mapping_dict = mapping.groupby(by=mapping.index).agg(list).to_dict()
         return {k: np.array(v) for k, v in mapping_dict.items()}
 
-    def map_labels_to_layer(
+    def map_features_to_layer(
         self,
-        labels: Union[str, list],
+        features: Union[str, list],
         layer: str,
         agg: Union[str, dict] = "mean",
     ) -> pd.DataFrame:
-        """Map labels from one layer to another.
+        """Map features from one layer to another.
 
         Parameters
         ----------
-        labels: Union[str, list]
-            The labels to map from the source layer.
+        features: Union[str, list]
+            The features to map from the source layer.
         layer: str
-            The target layer to map the labels to.
+            The target layer to map the features to.
         agg: Union[str, dict]
-            The aggregation method to use when mapping the labels.
+            The aggregation method to use when mapping the features.
             This can take anything pandas `groupby.agg` takes, as well as
             "majority" which will is a majority vote across the mapped indices
             via the stats.mode function.
@@ -710,12 +719,12 @@ class PointMixin(ABC):
         Returns
         -------
         pd.DataFrame
-            The mapped labels for the target layer. Vertices with no mapping will have NaN values.
+            The mapped features for the target layer. Vertices with no mapping will have NaN values.
         """
         if layer == self.layer_name:
-            return self.nodes[labels]
-        if isinstance(labels, str):
-            labels = [labels]
+            return self.nodes[features]
+        if isinstance(features, str):
+            features = [features]
         mapping = self._morphsync.get_mapping(
             source=self.layer_name,
             target=layer,
@@ -723,7 +732,7 @@ class PointMixin(ABC):
             null_strategy="keep",
         )
         mapping_merged = mapping.to_frame().merge(
-            self.nodes[labels],
+            self.nodes[features],
             left_index=True,
             right_index=True,
             how="left",
@@ -1218,12 +1227,12 @@ class PointMixin(ABC):
         )
 
     def describe(self) -> None:
-        """Generate a compact description of the layer including vertices, labels, and links.
+        """Generate a compact description of the layer including vertices, features, and links.
 
         Provides information about:
         - Layer name and type
         - Vertex count (and edges/faces for applicable layer types)
-        - Label names
+        - feature names
         - Links to other layers
 
         Returns
@@ -1251,13 +1260,13 @@ class PointMixin(ABC):
         metrics = self._get_layer_metrics()
         lines.append(f"├── {metrics}")
 
-        # Labels section
-        if len(self.label_names) > 0:
-            label_list = ", ".join(self.label_names)
-            label_line = f"├── Labels: [{label_list}]"
-            lines.extend(self._wrap_line(label_line))
+        # features section
+        if len(self.feature_names) > 0:
+            feature_list = ", ".join(self.feature_names)
+            feature_line = f"├── features: [{feature_list}]"
+            lines.extend(self._wrap_line(feature_line))
         else:
-            lines.append("├── Labels: []")
+            lines.append("├── features: []")
 
         # Links section
         link_display = self._get_link_display()
@@ -1383,17 +1392,17 @@ class GraphLayer(PointMixin, EdgeMixin):
         spatial_columns: Optional[list] = None,
         *,
         vertex_index: Optional[Union[str, np.ndarray]] = None,
-        labels: Optional[Union[dict, pd.DataFrame]] = None,
+        features: Optional[Union[dict, pd.DataFrame]] = None,
         morphsync: MorphSync = None,
         linkage: Optional[Link] = None,
         existing: bool = False,
     ):
-        vertices, spatial_columns, labels = self._setup_properties(
+        vertices, spatial_columns, features = self._setup_properties(
             name=name,
             morphsync=morphsync,
             vertices=vertices,
             spatial_columns=spatial_columns,
-            labels=labels,
+            features=features,
             vertex_index=vertex_index,
         )
 
@@ -1485,7 +1494,7 @@ class GraphLayer(PointMixin, EdgeMixin):
         )
         return prox_df
 
-    def _map_annotations_to_label(
+    def _map_annotations_to_feature(
         self,
         annotation: str,
         distance_threshold: float,
@@ -1545,7 +1554,7 @@ class GraphLayer(PointMixin, EdgeMixin):
                 f"Unknown aggregation type: {agg}. Must be 'count' or a dict."
             )
 
-    def map_annotations_to_label(
+    def map_annotations_to_feature(
         self,
         annotation: str,
         distance_threshold: float,
@@ -1553,7 +1562,7 @@ class GraphLayer(PointMixin, EdgeMixin):
         chunk_size: int = 1000,
         validate: bool = False,
     ) -> Union[pd.Series, pd.DataFrame]:
-        """Aggregate a point annotation to a label on the layer.
+        """Aggregate a point annotation to a feature on the layer.
 
         Parameters
         ----------
@@ -1579,7 +1588,7 @@ class GraphLayer(PointMixin, EdgeMixin):
         Union[pd.Series, pd.DataFrame]
             Aggregated annotation values. Series for 'count', DataFrame for dict aggregations.
         """
-        return self._map_annotations_to_label(
+        return self._map_annotations_to_feature(
             annotation=annotation,
             distance_threshold=distance_threshold,
             agg=agg,
@@ -1611,17 +1620,17 @@ class SkeletonLayer(GraphLayer):
         root: Optional[int] = None,
         *,
         vertex_index: Optional[Union[str, np.ndarray]] = None,
-        labels: Optional[Union[dict, pd.DataFrame]] = None,
+        features: Optional[Union[dict, pd.DataFrame]] = None,
         morphsync: MorphSync = None,
         linkage: Optional[dict] = None,
         inherited_properties: Optional[dict] = None,
     ):
-        vertices, spatial_columns, labels = self._setup_properties(
+        vertices, spatial_columns, features = self._setup_properties(
             name=name,
             morphsync=morphsync,
             vertices=vertices,
             spatial_columns=spatial_columns,
-            labels=labels,
+            features=features,
             vertex_index=vertex_index,
         )
 
@@ -2025,7 +2034,7 @@ class SkeletonLayer(GraphLayer):
         new_root : int
             The new root index to set.
         as_positional: bool, optional
-            Whether the new root is a positional index. If False, the new root is treated as a vertex label.
+            Whether the new root is a positional index. If False, the new root is treated as a vertex feature.
 
         Returns
         -------
@@ -2062,7 +2071,7 @@ class SkeletonLayer(GraphLayer):
         vertices : Optional[np.ndarray]
             The vertices to get the distance from the root for. If None, all vertices are used.
         as_positional : bool
-            If True, the vertices are treated as positional indices. If False, they are treated as vertex labels.
+            If True, the vertices are treated as positional indices. If False, they are treated as vertex features.
 
         Returns
         -------
@@ -2102,7 +2111,7 @@ class SkeletonLayer(GraphLayer):
         vertices : Optional[np.ndarray]
             The vertices to get the distance from the root for. If None, all vertices are used.
         as_positional : bool
-            If True, the vertices are treated as positional indices. If False, they are treated as vertex labels.
+            If True, the vertices are treated as positional indices. If False, they are treated as vertex features.
 
         Returns
         -------
@@ -2129,7 +2138,7 @@ class SkeletonLayer(GraphLayer):
         vertices : Union[np.ndarray, List[int]]
             The vertices to get the child nodes for.
         as_positional : bool, optional
-            Whether the vertices are positional indices. If False, they are treated as vertex labels.
+            Whether the vertices are positional indices. If False, they are treated as vertex features.
 
         Returns
         -------
@@ -2160,7 +2169,7 @@ class SkeletonLayer(GraphLayer):
         inclusive: bool, optional
             Whether to include the specified vertex in the downstream vertices.
         as_positional : bool, optional
-            Whether the vertex is a positional index. If False, it is treated as a vertex label.
+            Whether the vertex is a positional index. If False, it is treated as a vertex feature.
 
         Returns
         -------
@@ -2188,7 +2197,7 @@ class SkeletonLayer(GraphLayer):
         vertices : Optional[Union[list, np.ndarray]]
             The vertices to include in the subgraph. If None, the entire graph is used.
         as_positional : bool, optional
-            Whether the vertices are positional indices. If False, they are treated as vertex labels.
+            Whether the vertices are positional indices. If False, they are treated as vertex features.
 
         Returns
         -------
@@ -2211,7 +2220,7 @@ class SkeletonLayer(GraphLayer):
         v : int
             The second vertex.
         as_positional : bool, optional
-            Whether the vertices are positional indices. If False, they are treated as vertex labels.
+            Whether the vertices are positional indices. If False, they are treated as vertex features.
 
         Returns
         -------
@@ -2262,7 +2271,7 @@ class SkeletonLayer(GraphLayer):
         sources : Union[np.ndarray, list]
             The source vertices to start the cover paths from.
         as_positional : bool, optional
-            Whether the sources are positional indices. If False, they are treated as vertex labels.
+            Whether the sources are positional indices. If False, they are treated as vertex features.
 
         Returns
         -------
@@ -2379,7 +2388,7 @@ class SkeletonLayer(GraphLayer):
         else:
             return [self.segments[ii] for ii in segment_ids]
 
-    def map_annotations_to_label(
+    def map_annotations_to_feature(
         self,
         annotation: str,
         distance_threshold: float,
@@ -2388,7 +2397,7 @@ class SkeletonLayer(GraphLayer):
         validate: bool = False,
         agg_direction: Literal["undirected", "upstream", "downstream"] = "undirected",
     ) -> Union[pd.Series, pd.DataFrame]:
-        """Aggregates a point annotation to a label on the layer based on a maximum proximity.
+        """Aggregates a point annotation to a feature on the layer based on a maximum proximity.
 
         Parameters
         ----------
@@ -2401,8 +2410,8 @@ class SkeletonLayer(GraphLayer):
             on the annotations properties as per the `groupby.agg` method.
             * "count" returns how many annotations are within the given radius.
             * "density" returns the count of annotations divided by the subgraph path length measured in half-edge-lengths per vertex.
-            * To make a new label called "aggregate_label" that is the median "size" of a point annotation,
-            it would be {"aggregate_label": ('size', 'median')}. Multiple labels can be specified at the same time in this manner.
+            * To make a new feature called "aggregate_feature" that is the median "size" of a point annotation,
+            it would be {"aggregate_feature": ('size', 'median')}. Multiple features can be specified at the same time in this manner.
         chunk_size : int, optional
             The size of chunks to process at a time, which limits memory consumption. Defaults to 1000.
 
@@ -2417,7 +2426,7 @@ class SkeletonLayer(GraphLayer):
         else:
             agg_temp = agg
             compute_net_path = False
-        result = self._map_annotations_to_label(
+        result = self._map_annotations_to_feature(
             annotation,
             distance_threshold,
             agg=agg_temp,
@@ -2452,17 +2461,17 @@ class PointCloudLayer(PointMixin):
         spatial_columns: Optional[list] = None,
         *,
         vertex_index: Optional[Union[str, np.ndarray]] = None,
-        labels: Optional[Union[dict, pd.DataFrame]] = None,
+        features: Optional[Union[dict, pd.DataFrame]] = None,
         morphsync: MorphSync = None,
         linkage: Optional[dict] = None,
         existing: bool = False,
     ):
-        vertices, spatial_columns, labels = self._setup_properties(
+        vertices, spatial_columns, features = self._setup_properties(
             name=name,
             morphsync=morphsync,
             vertices=vertices,
             spatial_columns=spatial_columns,
-            labels=labels,
+            features=features,
             vertex_index=vertex_index,
         )
         if not existing:
@@ -2505,7 +2514,7 @@ class PointCloudLayer(PointMixin):
         vertices : Optional[np.ndarray]
             The vertices to get the distance to the root for. If None, all vertices are used.
         as_positional : bool, optional
-            If True, the vertices are treated as positional indices. If False, they are treated as vertex labels.
+            If True, the vertices are treated as positional indices. If False, they are treated as vertex features.
             By default False.
 
         Returns
@@ -2542,7 +2551,7 @@ class PointCloudLayer(PointMixin):
         vertices : Optional[np.ndarray]
             The vertices to get the distance between. If None, all vertices are used.
         as_positional : bool, optional
-            If True, the vertices are treated as positional indices. If False, they are treated as vertex labels.
+            If True, the vertices are treated as positional indices. If False, they are treated as vertex features.
             By default False.
         via: Literal["skeleton", "graph", "mesh"], optional
             The method to use for calculating distances. Can be "skeleton", "graph", or "mesh". Default is "skeleton".
@@ -2609,17 +2618,17 @@ class MeshLayer(FaceMixin, PointMixin):
         spatial_columns: Optional[list] = None,
         *,
         vertex_index: Optional[Union[str, np.ndarray]] = None,
-        labels: Optional[Union[dict, pd.DataFrame]] = None,
+        features: Optional[Union[dict, pd.DataFrame]] = None,
         morphsync: MorphSync = None,
         linkage: Optional[Link] = None,
         existing: bool = False,
     ):
-        vertices, spatial_columns, labels = self._setup_properties(
+        vertices, spatial_columns, features = self._setup_properties(
             name=name,
             morphsync=morphsync,
             vertices=vertices,
             spatial_columns=spatial_columns,
-            labels=labels,
+            features=features,
             vertex_index=vertex_index,
         )
 
