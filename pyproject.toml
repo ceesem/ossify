@@ -19,7 +19,7 @@ dependencies = [
     "orjson>=3.10.15",
     "cloud-files>=5.8.0",
     "matplotlib>=3.10.6",
-    "morphsync @ git+https://github.com/ceesem/morphsync.git@v0.0.3-csm"
+    "morphsync @ git+https://github.com/ceesem/morphsync.git@v0.0.3-csm",
 ]
 authors = [
     { name = "Casey Schneider-Mizell", email = "caseysm@gmail.com" },
@@ -57,6 +57,7 @@ profile = [
 viz = [
     "pyvista",
     "cortical-tools>=0.0.4",
+    "seaborn>=0.13.2",
 ]
 
 

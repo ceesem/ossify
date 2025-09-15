@@ -271,7 +271,6 @@ class Cell:
         else:
             self._morphsync = copy.deepcopy(morphsync)
         self._name = name
-        self._labels = {}
         if meta is None:
             self._meta = dict()
         else:

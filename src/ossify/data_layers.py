@@ -497,7 +497,7 @@ class PointMixin(ABC):
     @property
     def label_names(self) -> list:
         """Get the list of column names associated with labels (non-spatial columns)."""
-        return self._label_columns
+        return self.nodes.columns.difference(self.spatial_columns).tolist()
 
     @property
     def labels(self) -> pd.DataFrame:
@@ -578,7 +578,26 @@ class PointMixin(ABC):
             how="left",
             validate="1:1",
         )
-        self._label_columns += list(label.columns)
+        return self
+
+    def drop_labels(self, labels: Union[str, list]) -> Self:
+        """Drop labels from the DataFrame.
+
+        Parameters
+        ----------
+        labels: Union[str, list]
+            The label column name or list of names to drop.
+
+        Returns
+        -------
+        Self
+            The updated DataLayer instance.
+        """
+        if isinstance(labels, str):
+            labels = [labels]
+        self._morphsync.layers[self.layer_name].nodes.drop(
+            columns=labels, inplace=True, errors="ignore"
+        )
         return self
 
     def _map_range_to_range(self, layer: str, source_index: np.ndarray) -> np.ndarray:
