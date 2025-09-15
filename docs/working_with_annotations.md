@@ -19,6 +19,57 @@ Annotations (`PointCloudLayer` in annotation context) contain:
 - **Linkage**: Optional connections to morphological layers
 - **Sparse nature**: Represent discrete events, not continuous morphology
 
+## Inspecting Annotations
+
+### Quick Overview with `describe()`
+
+The `describe()` method provides a comprehensive summary of annotation layers, showing vertex counts, labels, and connections to other layers:
+
+```python
+# Individual annotation layer
+cell.annotations.synapses.describe()
+```
+
+**Output:**
+```
+# Cell: my_neuron
+# Layer: synapses (PointCloudLayer)
+├── 23 vertices
+├── Labels: [synapse_type, confidence, size]
+└── Links: skeleton → synapses
+```
+
+The output shows:
+- **Cell context**: Which cell these annotations belong to
+- **Layer type**: Confirms this is a PointCloudLayer (annotation)
+- **Metrics**: Vertex count (number of annotation points)
+- **Labels**: Available metadata columns for each annotation
+- **Links**: Connections to morphological layers (`<->` = bidirectional, `→` = unidirectional)
+
+### Annotation Manager Overview
+
+You can inspect all annotations at once:
+
+```python
+# All annotations in the cell  
+cell.annotations.describe()
+```
+
+**Output:**
+```
+# Annotations (2)
+├── synapses (PointCloudLayer)
+│   ├── 23 vertices
+│   ├── Labels: [synapse_type, confidence]
+│   └── Links: skeleton → synapses
+└── spines (PointCloudLayer)
+    ├── 47 vertices
+    ├── Labels: [spine_type, head_diameter]
+    └── Links: skeleton → spines
+```
+
+This gives you a detailed overview of all annotation layers and their relationships to morphological layers.
+
 ## Creating Annotations
 
 ### Basic Point Annotations

@@ -1407,6 +1407,125 @@ class GraphLayer(PointMixin, EdgeMixin):
         )
         return new_obj
 
+    @property
+    def half_edge_length(self) -> np.ndarray:
+        """Get the sum length of half-edges from a vertices to all parents and children.
+
+        Returns
+        -------
+        np.ndarray
+            Array of half-edge lengths for each vertex.
+        """
+        return np.array(self.csgraph_undirected.sum(axis=0)).flatten() / 2
+
+    def proximity_mapping(
+        self,
+        distance_threshold: float,
+        chunk_size: int = 1000,
+        agg_direction: Literal["undirected", "upstream", "downstream"] = "undirected",
+    ) -> pd.DataFrame:
+        """Get a DataFrame of all vertices within a certain distance of each other.
+
+        Parameters
+        ----------
+        distance_threshold : float
+            Maximum distance to consider for proximity.
+        chunk_size : int, optional
+            Size of processing chunks for memory efficiency. Default 1000.
+        agg_direction : Literal["undirected", "upstream", "downstream"], optional
+            Direction along the skeleton to consider for proximity. Options are 'undirected', 'upstream', 'downstream'.
+            "undirected" considers all neighbors within the distance threshold.
+            "upstream" considers only neighbors towards the root.
+            "downstream" considers only neighbors away from the root.
+            Default is 'undirected'.
+
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame with columns 'idx' and 'prox_idx' indicating pairs of proximal vertices.
+        """
+        if not isinstance(self, SkeletonLayer) and agg_direction in [
+            "upstream",
+            "downstream",
+        ]:
+            raise ValueError(
+                "agg_direction can only be 'undirected' for non-skeleton graph layers."
+            )
+        idx_list, prox_list = gf.build_proximity_lists_chunked(
+            self.vertices,
+            self.csgraph,
+            distance_threshold=distance_threshold,
+            chunk_size=chunk_size,
+            orientation=agg_direction,
+        )
+        prox_df = pd.DataFrame(
+            {
+                "idx": self.vertex_index[idx_list],
+                "prox_idx": self.vertex_index[prox_list],
+            }
+        )
+        return prox_df
+
+    def _map_annotations_to_label(
+        self,
+        annotation: str,
+        distance_threshold: float,
+        agg: Union[str, dict] = "count",
+        chunk_size: int = 1000,
+        validate: bool = False,
+        agg_direction: Literal["undirected", "upstream", "downstream"] = "undirected",
+        compute_net_path: bool = False,
+        node_weight: Optional[np.ndarray] = None,
+    ) -> pd.DataFrame:
+        prox_df = self.proximity_mapping(
+            distance_threshold=distance_threshold,
+            chunk_size=chunk_size,
+            agg_direction=agg_direction,
+        )
+
+        anno_df = self._morphsync.layers[annotation].nodes
+        local_vertex_col = f"temp_{uuid.uuid4().hex}"
+        local_vertex = self._cell.annotations[annotation].map_index_to_layer(
+            self.layer_name, validate=validate
+        )
+        anno_df[local_vertex_col] = local_vertex
+        if isinstance(agg, str) and agg == "count":
+            agg = {f"{annotation}_count": (local_vertex_col, "count")}
+
+        if compute_net_path:
+            path_length_col_name = f"path_length_{uuid.uuid4().hex}"
+            if node_weight is None:
+                node_weight = self.half_edge_length
+            pl_ser = pd.Series(
+                index=self.vertex_index, data=node_weight, name=path_length_col_name
+            )
+            prox_df = prox_df.merge(
+                pl_ser,
+                left_on="prox_idx",
+                right_index=True,
+                how="left",
+            )
+            agg["net_path_length"] = (path_length_col_name, "sum")
+
+        prox_df = prox_df.merge(
+            anno_df,
+            left_on="prox_idx",
+            right_on=local_vertex_col,
+            how="left",
+        )
+        anno_df.drop(columns=local_vertex_col, inplace=True)
+        if agg == "count":
+            count_ser = prox_df.groupby("idx")[local_vertex_col].count()
+            count_ser.name = f"{annotation}_count"
+            return count_ser
+        elif isinstance(agg, dict):
+            agg_df = prox_df.groupby("idx").agg(**agg)
+            return agg_df
+        else:
+            raise ValueError(
+                f"Unknown aggregation type: {agg}. Must be 'count' or a dict."
+            )
+
     def map_annotations_to_label(
         self,
         annotation: str,
@@ -1414,7 +1533,6 @@ class GraphLayer(PointMixin, EdgeMixin):
         agg: Union[str, dict] = "count",
         chunk_size: int = 1000,
         validate: bool = False,
-        agg_direction: str = "undirected",
     ) -> Union[pd.Series, pd.DataFrame]:
         """Aggregate a point annotation to a label on the layer.
 
@@ -1442,43 +1560,14 @@ class GraphLayer(PointMixin, EdgeMixin):
         Union[pd.Series, pd.DataFrame]
             Aggregated annotation values. Series for 'count', DataFrame for dict aggregations.
         """
-        idx_list, prox_list = gf.build_proximity_lists_chunked(
-            self.vertices,
-            self.csgraph,
+        return self._map_annotations_to_label(
+            annotation=annotation,
             distance_threshold=distance_threshold,
+            agg=agg,
             chunk_size=chunk_size,
-            orientation=agg_direction,
+            validate=validate,
+            agg_direction="undirected",
         )
-        prox_df = pd.DataFrame(
-            {
-                "idx": self.vertex_index[idx_list],
-                "prox_idx": self.vertex_index[prox_list],
-            }
-        )
-        anno_df = self._morphsync.layers[annotation].nodes
-        local_vertex = self._cell.annotations[annotation].map_index_to_layer(
-            self.layer_name, validate=validate
-        )
-        local_vertex_col = f"temp_{uuid.uuid4().hex}"
-        anno_df[local_vertex_col] = local_vertex
-        prox_df = prox_df.merge(
-            anno_df,
-            left_on="prox_idx",
-            right_on=local_vertex_col,
-            how="left",
-        )
-        anno_df.drop(columns=local_vertex_col, inplace=True)
-        if agg == "count":
-            count_ser = prox_df.groupby("idx")[local_vertex_col].count()
-            count_ser.name = f"{annotation}_count"
-            return count_ser
-        elif isinstance(agg, dict):
-            agg_df = prox_df.groupby("idx").agg(**agg)
-            return agg_df
-        else:
-            raise ValueError(
-                f"Unknown aggregation type: {agg}. Must be 'count' or a dict."
-            )
 
     def _get_layer_metrics(self) -> str:
         """Get layer metrics including vertex and edge count."""
@@ -2271,17 +2360,6 @@ class SkeletonLayer(GraphLayer):
         else:
             return [self.segments[ii] for ii in segment_ids]
 
-    @property
-    def half_edge_length(self) -> np.ndarray:
-        """Get the sum length of half-edges from a vertices to all parents and children.
-
-        Returns
-        -------
-        np.ndarray
-            Array of half-edge lengths for each vertex.
-        """
-        return np.array(self.csgraph_undirected.sum(axis=0)).flatten() / 2
-
     def map_annotations_to_label(
         self,
         annotation: str,
@@ -2289,6 +2367,7 @@ class SkeletonLayer(GraphLayer):
         agg: Union[Literal["count", "density"], dict] = "count",
         chunk_size: int = 1000,
         validate: bool = False,
+        agg_direction: Literal["undirected", "upstream", "downstream"] = "undirected",
     ) -> Union[pd.Series, pd.DataFrame]:
         """Aggregates a point annotation to a label on the layer based on a maximum proximity.
 
@@ -2315,30 +2394,26 @@ class SkeletonLayer(GraphLayer):
         """
         if agg == "density":
             agg_temp = "count"
+            compute_net_path = True
         else:
             agg_temp = agg
-        result = super().map_annotations_to_label(
+            compute_net_path = False
+        result = self._map_annotations_to_label(
             annotation,
             distance_threshold,
             agg=agg_temp,
             chunk_size=chunk_size,
             validate=validate,
+            agg_direction=agg_direction,
+            compute_net_path=compute_net_path,
+            node_weight=self.half_edge_length,
         )
         if agg == "density":
-            count_len_df = pd.concat(
-                (
-                    pd.Series(
-                        data=self.half_edge_length,
-                        index=self.vertex_index,
-                        name="net_length",
-                    ),
-                    result,
-                ),
-                axis=1,
-            )
+            value_column = f"{annotation}_count"
+            length_column = "net_path_length"
             return pd.Series(
-                data=count_len_df[result.name] / count_len_df["net_length"],
-                index=count_len_df.index,
+                data=result[value_column] / result[length_column].replace(0, np.nan),
+                index=result.index,
                 name=f"{annotation}_density",
             )
         else:

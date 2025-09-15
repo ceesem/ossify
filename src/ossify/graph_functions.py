@@ -852,11 +852,11 @@ def build_proximity_lists_chunked(
                 )
             case "downstream":
                 distances = sparse.csgraph.dijkstra(
-                    csgraph, indices=indices, directed=True, limit=distance_threshold
+                    csgraph.T, indices=indices, directed=True, limit=distance_threshold
                 )
             case "upstream":
                 distances = sparse.csgraph.dijkstra(
-                    csgraph.T, indices=indices, directed=True, limit=distance_threshold
+                    csgraph, indices=indices, directed=True, limit=distance_threshold
                 )
             case _:
                 raise ValueError(

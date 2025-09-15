@@ -18,6 +18,37 @@ A `GraphLayer` contains:
 - **Edges**: Connections between vertices (can form cycles)
 - **Network properties**: Connectivity analysis, distance calculations between arbitrary vertices
 
+## Inspecting Graph Layers
+
+### Quick Overview with `describe()`
+
+The `describe()` method provides a comprehensive summary of graph layers, showing vertex/edge counts, labels, and connections to other layers:
+
+```python
+# Individual graph layer
+cell.graph.describe()
+```
+
+**Output:**
+```
+# Cell: my_neuron
+# Layer: graph (GraphLayer)  
+├── 45 vertices, 67 edges
+├── Labels: [node_type, confidence]
+└── Links: []
+```
+
+The output shows:
+- **Cell context**: Which cell this graph belongs to
+- **Layer type**: Confirms this is a GraphLayer
+- **Metrics**: Vertex and edge counts  
+- **Labels**: Available data columns beyond spatial coordinates
+- **Links**: Connections to other layers (`<->` = bidirectional, `→` = unidirectional)
+
+### Layer Manager Overview
+
+You can also inspect all morphological layers at once using `cell.layers.describe()` to see how your graph fits with other layers like skeletons and meshes.
+
 ## Creating Graph Layers
 
 ### Basic Graph Creation

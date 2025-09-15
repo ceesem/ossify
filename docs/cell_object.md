@@ -209,6 +209,68 @@ The `describe()` method is particularly useful for:
 - **Validation** that data loaded correctly
 - **Documentation** of cell composition in notebooks
 
+### Multi-Level Inspection with `describe()`
+
+Ossify provides detailed inspection at multiple levels of granularity:
+
+```python
+# 1. Cell overview (high-level summary)
+cell.describe()
+
+# 2. All morphological layers (detailed)
+cell.layers.describe()
+# Output:
+# Layers (3)
+# ├── skeleton (SkeletonLayer)
+# │   ├── 150 vertices, 149 edges
+# │   ├── Labels: [radius, branch_type]
+# │   └── Links: mesh <-> skeleton, synapses → skeleton
+# ├── mesh (MeshLayer)
+# │   ├── 2847 vertices, 5691 faces
+# │   ├── Labels: [compartment]
+# │   └── Links: skeleton <-> mesh
+# └── graph (GraphLayer)
+#     ├── 45 vertices, 67 edges
+#     ├── Labels: []
+#     └── Links: []
+
+# 3. All annotations (detailed)
+cell.annotations.describe()
+# Output:
+# Annotations (2)
+# ├── synapses (PointCloudLayer)
+# │   ├── 23 vertices
+# │   ├── Labels: [synapse_type, confidence]
+# │   └── Links: skeleton → synapses
+# └── spines (PointCloudLayer)
+#     ├── 47 vertices
+#     ├── Labels: [spine_type]
+#     └── Links: skeleton → spines
+
+# 4. Individual layers (with cell context)
+cell.skeleton.describe()
+# Output:
+# Cell: my_neuron
+# Layer: skeleton (SkeletonLayer)
+# ├── 150 vertices, 149 edges
+# ├── Labels: [radius, branch_type]
+# └── Links: mesh <-> skeleton, synapses → skeleton
+
+cell.annotations.synapses.describe()
+# Output:
+# Cell: my_neuron
+# Layer: synapses (PointCloudLayer)
+# ├── 23 vertices
+# ├── Labels: [synapse_type, confidence]
+# └── Links: skeleton → synapses
+```
+
+This hierarchical inspection system lets you:
+- **Start broad** with `cell.describe()` for overall structure
+- **Focus on groups** with `cell.layers.describe()` or `cell.annotations.describe()`
+- **Drill down** to individual layers for detailed analysis
+- **Maintain context** with cell name shown in individual layer descriptions
+
 ### Accessing All Labels
 
 ```python

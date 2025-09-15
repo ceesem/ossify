@@ -19,6 +19,61 @@ A `SkeletonLayer` contains:
 - **Root**: A designated root vertex that defines tree orientation
 - **Tree properties**: Branch points, end points, paths, distances to root
 
+## Inspecting Skeleton Layers
+
+### Quick Overview with `describe()`
+
+The `describe()` method provides a comprehensive summary of skeleton layers, showing vertex/edge counts, labels, and connections to other layers:
+
+```python
+# Individual skeleton layer
+cell.skeleton.describe()
+```
+
+**Output:**
+```
+# Cell: my_neuron
+# Layer: skeleton (SkeletonLayer)
+├── 150 vertices, 149 edges
+├── Labels: [radius, branch_type, distance_to_root]
+└── Links: mesh <-> skeleton, synapses → skeleton
+```
+
+The output shows:
+- **Cell context**: Which cell this skeleton belongs to
+- **Layer type**: Confirms this is a SkeletonLayer
+- **Metrics**: Vertex and edge counts
+- **Labels**: Available data columns beyond spatial coordinates
+- **Links**: Connections to other layers (`<->` = bidirectional, `→` = unidirectional)
+
+### Layer Manager Overview
+
+You can also inspect all morphological layers at once:
+
+```python
+# All layers in the cell
+cell.layers.describe()
+```
+
+**Output:**
+```
+# Layers (3)
+├── skeleton (SkeletonLayer)
+│   ├── 150 vertices, 149 edges
+│   ├── Labels: [radius, branch_type]
+│   └── Links: mesh <-> skeleton, synapses → skeleton
+├── mesh (MeshLayer)
+│   ├── 2847 vertices, 5691 faces
+│   ├── Labels: [compartment]
+│   └── Links: skeleton <-> mesh
+└── graph (GraphLayer)
+    ├── 45 vertices, 67 edges
+    ├── Labels: []
+    └── Links: []
+```
+
+This gives you a detailed overview of all morphological layers and their relationships.
+
 ## Creating Skeleton Layers
 
 ### Basic Skeleton Creation

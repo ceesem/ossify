@@ -15,6 +15,37 @@ A `MeshLayer` contains:
 - **Faces**: Triangular faces connecting vertices (as indices)  
 - **Surface properties**: Face connectivity, area calculations, trimesh integration
 
+## Inspecting Mesh Layers
+
+### Quick Overview with `describe()`
+
+The `describe()` method provides a comprehensive summary of mesh layers, showing vertex/face counts, labels, and connections to other layers:
+
+```python
+# Individual mesh layer
+cell.mesh.describe()
+```
+
+**Output:**
+```
+# Cell: my_neuron  
+# Layer: mesh (MeshLayer)
+├── 2847 vertices, 5691 faces
+├── Labels: [compartment, surface_area]
+└── Links: skeleton <-> mesh
+```
+
+The output shows:
+- **Cell context**: Which cell this mesh belongs to
+- **Layer type**: Confirms this is a MeshLayer  
+- **Metrics**: Vertex and face counts
+- **Labels**: Available data columns beyond spatial coordinates
+- **Links**: Connections to other layers (`<->` = bidirectional, `→` = unidirectional)
+
+### Layer Manager Overview
+
+You can also inspect all morphological layers at once using `cell.layers.describe()` to see how your mesh fits with other layers like skeletons and graphs.
+
 ## Creating Mesh Layers
 
 ### Basic Mesh Creation
