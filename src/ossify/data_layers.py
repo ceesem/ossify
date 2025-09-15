@@ -1198,6 +1198,156 @@ class PointMixin(ABC):
             mask=keep_indices, as_positional=False, self_only=self_only
         )
 
+    def describe(self) -> None:
+        """Generate a compact description of the layer including vertices, labels, and links.
+
+        Provides information about:
+        - Layer name and type
+        - Vertex count (and edges/faces for applicable layer types)
+        - Label names
+        - Links to other layers
+
+        Returns
+        -------
+        None
+            Always returns None (prints formatted text)
+        """
+        print(self._describe_text())
+
+    def _describe_text(self) -> str:
+        """Generate text-based description of the layer."""
+        lines = []
+
+        # Cell header (if layer is attached to a cell)
+        if hasattr(self, "_cell") and self._cell is not None:
+            cell_name = (
+                str(self._cell.name) if self._cell.name is not None else "Unnamed"
+            )
+            lines.append(f"# Cell: {cell_name}")
+
+        # Layer header with name and type
+        lines.append(f"# Layer: {self.name} ({self.__class__.__name__})")
+
+        # Basic metrics (vertex count, edges/faces handled by subclass overrides)
+        metrics = self._get_layer_metrics()
+        lines.append(f"├── {metrics}")
+
+        # Labels section
+        if len(self.label_names) > 0:
+            label_list = ", ".join(self.label_names)
+            label_line = f"├── Labels: [{label_list}]"
+            lines.extend(self._wrap_line(label_line))
+        else:
+            lines.append("├── Labels: []")
+
+        # Links section
+        link_display = self._get_link_display()
+        if link_display:
+            link_line = f"└── Links: {link_display}"
+            lines.extend(self._wrap_line(link_line))
+        else:
+            lines.append("└── Links: []")
+
+        return "\n".join(lines)
+
+    def _wrap_line(self, line: str, max_width: int = 120) -> List[str]:
+        """Wrap a long line to max_width characters with proper tree indentation."""
+        if len(line) <= max_width:
+            return [line]
+
+        # Find where the actual content starts (after tree characters and whitespace)
+        content_start = 0
+        for i, char in enumerate(line):
+            if char not in "├└─│ ":
+                content_start = i
+                break
+
+        prefix = line[:content_start]
+        content = line[content_start:]
+
+        # Calculate available width for content
+        available_width = max_width - len(prefix)
+
+        if len(content) <= available_width:
+            return [line]
+
+        # Split the content, preserving brackets and commas
+        wrapped_lines = []
+        current_line = prefix + content
+
+        while len(current_line) > max_width:
+            # Find the best place to break (prefer after comma + space)
+            break_pos = max_width
+
+            # Look for comma + space within reasonable range
+            search_start = max(max_width - 30, len(prefix))
+            for i in range(min(max_width, len(current_line) - 1), search_start, -1):
+                if current_line[i : i + 2] == ", ":
+                    break_pos = i + 2
+                    break
+
+            # If no good break found, break at max_width
+            if break_pos == max_width and break_pos < len(current_line):
+                # Make sure we don't break in the middle of a word
+                while break_pos > len(prefix) and current_line[break_pos] not in ", ":
+                    break_pos -= 1
+                if break_pos <= len(prefix):
+                    break_pos = max_width
+
+            wrapped_lines.append(current_line[:break_pos])
+            # Use appropriate continuation indentation
+            continuation_indent = "    " if "└" in prefix else "│   "
+            current_line = continuation_indent + current_line[break_pos:].lstrip()
+
+        if current_line.strip():
+            wrapped_lines.append(current_line)
+
+        return wrapped_lines
+
+    def _get_layer_metrics(self) -> str:
+        """Get basic layer metrics. Override in subclasses for specific metrics."""
+        return f"{len(self.vertices)} vertices"
+
+    def _get_link_display(self) -> str:
+        """Generate display string for links involving this layer."""
+        if not hasattr(self._morphsync, "links"):
+            return ""
+
+        # Find all links involving this layer
+        my_links = []
+        processed_pairs = set()
+
+        for link_key in self._morphsync.links.keys():
+            source, target = link_key
+
+            # Skip if this layer is not involved
+            if self.name not in (source, target):
+                continue
+
+            # Skip if we've already processed this pair in reverse
+            reverse_key = (target, source)
+            if reverse_key in processed_pairs:
+                continue
+
+            # Determine the other layer
+            other_layer = target if source == self.name else source
+
+            # Check if bidirectional link exists
+            if reverse_key in self._morphsync.links:
+                # Bidirectional link
+                my_links.append(f"{other_layer} <-> {self.name}")
+                processed_pairs.add(link_key)
+                processed_pairs.add(reverse_key)
+            else:
+                # Unidirectional link
+                if source == self.name:
+                    my_links.append(f"{self.name} → {target}")
+                else:
+                    my_links.append(f"{source} → {self.name}")
+                processed_pairs.add(link_key)
+
+        return ", ".join(my_links)
+
     def __len__(self) -> int:
         return self.n_vertices
 
@@ -1330,6 +1480,12 @@ class GraphLayer(PointMixin, EdgeMixin):
                 f"Unknown aggregation type: {agg}. Must be 'count' or a dict."
             )
 
+    def _get_layer_metrics(self) -> str:
+        """Get layer metrics including vertex and edge count."""
+        vertex_count = len(self.vertices)
+        edge_count = len(self.edges) if len(self.edges.shape) > 1 else 0
+        return f"{vertex_count} vertices, {edge_count} edges"
+
     def __repr__(self) -> str:
         return f"GraphLayer(name={self.name}, vertices={self.vertices.shape[0]}, edges={self.edges.shape[0]})"
 
@@ -1457,7 +1613,7 @@ class SkeletonLayer(GraphLayer):
         Optional[np.ndarray]
             3D coordinates of the root node, or None if no root is set.
         """
-        if self.root == -1:
+        if self.root is None:
             return None
         return self.vertex_df.loc[self.root, self.spatial_columns].values
 
@@ -2401,6 +2557,12 @@ class MeshLayer(FaceMixin, PointMixin):
             existing=True,
         )
         return new_obj
+
+    def _get_layer_metrics(self) -> str:
+        """Get layer metrics including vertex and face count."""
+        vertex_count = len(self.vertices)
+        face_count = len(self.faces) if len(self.faces.shape) > 1 else 0
+        return f"{vertex_count} vertices, {face_count} faces"
 
     def __repr__(self) -> str:
         return f"MeshLayer(name={self.name}, vertices={self.vertices.shape[0]}, faces={self.faces.shape[0]})"

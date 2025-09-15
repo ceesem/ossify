@@ -23,7 +23,7 @@ def _process_synapse_table(
     columns: dict,
     timestamp: "datetime.datetime",
     reference_tables: Optional[list[str]] = None,
-    reference_suffixs: Optional[dict] = None,
+    reference_suffixes: Optional[dict] = None,
     drop_other_side: bool = True,
     omit_autapses: bool = True,
 ) -> pd.DataFrame:
@@ -67,7 +67,7 @@ def _process_synapse_table(
                 ref_df,
                 how="left",
                 on="id",
-                suffixes=("", f"_{reference_suffixs.get(ref_table, ref_table)}"),
+                suffixes=("", f"_{reference_suffixes.get(ref_table, ref_table)}"),
             )
     return syn_df
 
@@ -78,6 +78,7 @@ def load_cell_from_client(
     *,
     synapses: bool = False,
     reference_tables: Optional[list[str]] = None,
+    reference_suffixes: Optional[dict] = None,
     restore_graph: bool = False,
     restore_properties: bool = True,
     synapse_spatial_point: str = "ctr_pt_position",
@@ -148,6 +149,7 @@ def load_cell_from_client(
             drop_other_side=not include_partner_root_id,
             omit_autapses=omit_self_synapses,
             reference_tables=reference_tables,
+            reference_suffixes=reference_suffixes,
         )
         post_syn_df = _process_synapse_table(
             root_id,
@@ -159,6 +161,7 @@ def load_cell_from_client(
             drop_other_side=not include_partner_root_id,
             omit_autapses=omit_self_synapses,
             reference_tables=reference_tables,
+            reference_suffixes=reference_suffixes,
         )
 
     l2ids = sk["lvl2_ids"]

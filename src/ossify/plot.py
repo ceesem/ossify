@@ -821,29 +821,30 @@ def plot_morphology_2d(
         ax=ax,
     )
     if root_marker:
-        root_location = np.atleast_2d(skel.base_root_location)
-        if root_color is None:
-            if skel.base_root in skel.vertex_index:
-                root_color = (
-                    colors_array[skel.root_positional]
-                    if colors_array is not None
-                    else None
-                )
-            else:
-                raise ValueError(
-                    "root_color must be provided explicitly if root is not in skeleton vertices"
-                )
-        ax = plot_points(
-            root_location,
-            colors=root_color,
-            sizes=[root_size],
-            invert_y=invert_y,
-            ax=ax,
-            zorder=zorder + 1,
-            projection=projection,
-            offset_h=offset_h,
-            offset_v=offset_v,
-        )
+        if skel.root_location is not None:
+            root_location = np.atleast_2d(skel.root_location)
+            if root_color is None:
+                if skel.base_root in skel.vertex_index:
+                    root_color = (
+                        colors_array[skel.root_positional]
+                        if colors_array is not None
+                        else None
+                    )
+                else:
+                    raise ValueError(
+                        "root_color must be provided explicitly if root is not in skeleton vertices"
+                    )
+            ax = plot_points(
+                root_location,
+                colors=root_color,
+                sizes=[root_size],
+                invert_y=invert_y,
+                ax=ax,
+                zorder=zorder + 1,
+                projection=projection,
+                offset_h=offset_h,
+                offset_v=offset_v,
+            )
     return ax
 
 

@@ -130,6 +130,121 @@ class LayerManager:
             raise ValueError(f'{self._context.capitalize()} "{name}" does not exist.')
         del self._layers[name]
 
+    def describe(self) -> None:
+        """Generate a detailed description of all managed layers.
+
+        Shows each layer with its metrics, labels, and links - same level of
+        detail as individual layer describe() methods.
+
+        Returns
+        -------
+        None
+            Always returns None (prints formatted text)
+        """
+        print(self._describe_text())
+
+    def _describe_text(self) -> str:
+        """Generate text-based description of all managed layers."""
+        lines = []
+
+        # Header with context and count
+        context_title = self._context.capitalize() + "s"
+        layer_count = len(self._layers)
+        lines.append(f"# {context_title} ({layer_count})")
+
+        if layer_count == 0:
+            lines.append("└── No layers present")
+            return "\n".join(lines)
+
+        # List each layer with details
+        layer_items = list(self._layers.items())
+        for i, (name, layer) in enumerate(layer_items):
+            is_last = i == len(layer_items) - 1
+            prefix = "└──" if is_last else "├──"
+            continuation = "    " if is_last else "│   "
+
+            # Layer name and type
+            lines.append(f"{prefix} {name} ({layer.__class__.__name__})")
+
+            # Get metrics
+            metrics = layer._get_layer_metrics()
+            lines.append(f"{continuation}├── {metrics}")
+
+            # Labels
+            if len(layer.label_names) > 0:
+                label_list = ", ".join(layer.label_names)
+                label_line = f"{continuation}├── Labels: [{label_list}]"
+                lines.extend(self._wrap_line(label_line))
+            else:
+                lines.append(f"{continuation}├── Labels: []")
+
+            # Links
+            link_display = layer._get_link_display()
+            if link_display:
+                link_line = f"{continuation}└── Links: {link_display}"
+                lines.extend(self._wrap_line(link_line))
+            else:
+                lines.append(f"{continuation}└── Links: []")
+
+        return "\n".join(lines)
+
+    def _wrap_line(self, line: str, max_width: int = 120) -> List[str]:
+        """Wrap a long line to max_width characters with proper tree indentation."""
+        if len(line) <= max_width:
+            return [line]
+
+        # Find where the actual content starts (after tree characters and whitespace)
+        content_start = 0
+        for i, char in enumerate(line):
+            if char not in "├└─│ ":
+                content_start = i
+                break
+
+        prefix = line[:content_start]
+        content = line[content_start:]
+
+        # Calculate available width for content
+        available_width = max_width - len(prefix)
+
+        if len(content) <= available_width:
+            return [line]
+
+        # Split the content, preserving brackets and commas
+        wrapped_lines = []
+        current_line = prefix + content
+
+        while len(current_line) > max_width:
+            # Find the best place to break (prefer after comma + space)
+            break_pos = max_width
+
+            # Look for comma + space within reasonable range
+            search_start = max(max_width - 30, len(prefix))
+            for i in range(min(max_width, len(current_line) - 1), search_start, -1):
+                if current_line[i : i + 2] == ", ":
+                    break_pos = i + 2
+                    break
+
+            # If no good break found, break at max_width
+            if break_pos == max_width and break_pos < len(current_line):
+                # Make sure we don't break in the middle of a word
+                while break_pos > len(prefix) and current_line[break_pos] not in ", ":
+                    break_pos -= 1
+                if break_pos <= len(prefix):
+                    break_pos = max_width
+
+            wrapped_lines.append(current_line[:break_pos])
+            # Use appropriate continuation indentation based on prefix
+            if "└──" in prefix:
+                continuation_indent = "    " + " " * max(0, (len(prefix) - 4))
+            else:
+                continuation_indent = "│   " + " " * max(0, (len(prefix) - 4))
+            current_line = continuation_indent + current_line[break_pos:].lstrip()
+
+        if current_line.strip():
+            wrapped_lines.append(current_line)
+
+        return wrapped_lines
+
     def __repr__(self) -> str:
         return f"LayerManager({self._context}s={list(self._layers.keys())})"
 
@@ -876,14 +991,24 @@ class Cell:
 
         # Cell header
         cell_name = str(self.name) if self.name is not None else "Unnamed"
-        lines.append(f"Cell: {cell_name}")
-        lines.append("├─ Layers")
 
-        # Core "blessed" layers - always show these
+        # Count layers, annotations, and potential linkages
+        num_layers = self._count_total_layers()
+        num_annotations = len(self.annotations)
+        num_linkages = (
+            len(self._morphsync.links) if hasattr(self._morphsync, "links") else 0
+        )
+
+        lines.append(f"# Cell: {cell_name}")
+
+        # Layers section with count
+        lines.append(f"├── Layers ({num_layers})")
+
+        # Always show skeleton, mesh, graph in that order
         core_layers = [
-            (self.MESH_LN, self.mesh, "mesh"),
-            (self.SKEL_LN, self.skeleton, "skeleton"),
-            (self.GRAPH_LN, self.graph, "graph"),
+            ("skeleton", self.skeleton),
+            ("mesh", self.mesh),
+            ("graph", self.graph),
         ]
 
         # Additional layers (non-core layers)
@@ -892,119 +1017,98 @@ class Cell:
             layer for layer in self.layers if layer.name not in core_layer_names
         ]
 
-        total_layers = len(core_layers) + len(additional_layers)
-        layer_count = 0
+        all_layers = core_layers + [(layer.name, layer) for layer in additional_layers]
 
-        # Process core layers
-        for layer_name, layer_obj, layer_type in core_layers:
-            layer_count += 1
-            is_last_layer = layer_count == total_layers and len(self.annotations) == 0
-            is_last_before_annotations = (
-                layer_count == total_layers and len(self.annotations) > 0
+        for i, (layer_name, layer_obj) in enumerate(all_layers):
+            is_last_layer = (
+                i == len(all_layers) - 1 and num_annotations == 0 and num_linkages == 0
             )
 
             if is_last_layer:
-                prefix = "   └─"
-                continuation = "     "
-            elif is_last_before_annotations:
-                prefix = "   ├─"
-                continuation = "   │ "
+                prefix = "└──"
             else:
-                prefix = "   ├─"
-                continuation = "   │ "
+                prefix = "├──"
 
             if layer_obj is not None:
-                lines.append(f"{prefix} {layer_name} ({layer_type})")
-                lines.append(f"{continuation}   n_vertices: {len(layer_obj.vertices)}")
+                vertex_count = len(layer_obj.vertices)
 
-                # Add specific metrics based on layer type
                 if hasattr(layer_obj, "faces"):  # Mesh layers
                     face_count = (
                         len(layer_obj.faces) if len(layer_obj.faces.shape) > 1 else 0
                     )
-                    lines.append(f"{continuation}   n_faces: {face_count}")
+                    lines.append(
+                        f"│   {prefix} {layer_name}: {vertex_count} vertices, {face_count} faces"
+                    )
                 elif hasattr(layer_obj, "edges"):  # Graph/Skeleton layers
                     edge_count = (
                         len(layer_obj.edges) if len(layer_obj.edges.shape) > 1 else 0
                     )
-                    lines.append(f"{continuation}   n_edges: {edge_count}")
-
-                # Add label names
-                if hasattr(layer_obj, "label_names") and len(layer_obj.label_names) > 0:
-                    label_list = ", ".join(layer_obj.label_names)
-                    label_line = f"{continuation}   labels: [{label_list}]"
-                    lines.extend(
-                        self._wrap_line(label_line, 120, continuation + "           ")
+                    lines.append(
+                        f"│   {prefix} {layer_name}: {vertex_count} vertices, {edge_count} edges"
                     )
                 else:
-                    lines.append(f"{continuation}   labels: []")
+                    lines.append(f"│   {prefix} {layer_name}: {vertex_count} vertices")
             else:
-                lines.append(f"{prefix} {layer_name} ({layer_type})")
-                lines.append(f"{continuation}   not present")
-
-        # Process additional layers
-        for i, layer in enumerate(additional_layers):
-            layer_count += 1
-            is_last_layer = layer_count == total_layers and len(self.annotations) == 0
-            is_last_before_annotations = (
-                layer_count == total_layers and len(self.annotations) > 0
-            )
-
-            if is_last_layer:
-                prefix = "   └─"
-                continuation = "     "
-            elif is_last_before_annotations:
-                prefix = "   ├─"
-                continuation = "   │ "
-            else:
-                prefix = "   ├─"
-                continuation = "   │ "
-
-            lines.append(f"{prefix} {layer.name} ({layer.layer_type})")
-            lines.append(f"{continuation}   n_vertices: {len(layer.vertices)}")
-
-            # Add specific metrics based on layer type
-            if hasattr(layer, "faces"):  # Mesh layers
-                face_count = len(layer.faces) if len(layer.faces.shape) > 1 else 0
-                lines.append(f"{continuation}   n_faces: {face_count}")
-            elif hasattr(layer, "edges"):  # Graph/Skeleton layers
-                edge_count = len(layer.edges) if len(layer.edges.shape) > 1 else 0
-                lines.append(f"{continuation}   n_edges: {edge_count}")
-
-            # Add label names
-            if hasattr(layer, "label_names") and len(layer.label_names) > 0:
-                label_list = ", ".join(layer.label_names)
-                label_line = f"{continuation}   labels: [{label_list}]"
-                lines.extend(
-                    self._wrap_line(label_line, 120, continuation + "           ")
-                )
-            else:
-                lines.append(f"{continuation}   labels: []")
+                lines.append(f"│   {prefix} {layer_name}: not present")
 
         # Annotations section
-        if len(self.annotations) > 0:
-            lines.append("└─ Annotations")
+        if num_annotations > 0:
+            if num_linkages > 0:
+                lines.append(f"├── Annotations ({num_annotations})")
+            else:
+                lines.append(f"└── Annotations ({num_annotations})")
 
             for i, annotation in enumerate(self.annotations):
-                is_last = i == len(self.annotations) - 1
-                prefix = "   └─" if is_last else "   ├─"
-                continuation = "     " if is_last else "   │ "
+                is_last_annotation = i == len(self.annotations) - 1
 
-                lines.append(f"{prefix} {annotation.name}")
-                lines.append(f"{continuation}   n_vertices: {len(annotation.vertices)}")
-
-                # Add label names
-                if (
-                    hasattr(annotation, "label_names")
-                    and len(annotation.label_names) > 0
-                ):
-                    label_list = ", ".join(annotation.label_names)
-                    label_line = f"{continuation}   labels: [{label_list}]"
-                    lines.extend(
-                        self._wrap_line(label_line, 120, continuation + "           ")
-                    )
+                if is_last_annotation:
+                    prefix = "└──"
                 else:
-                    lines.append(f"{continuation}   labels: []")
+                    prefix = "├──"
+
+                if num_linkages == 0:
+                    continuation = "    " if is_last_annotation else "│   "
+                else:
+                    continuation = "│   "
+
+                vertex_count = len(annotation.vertices)
+                lines.append(
+                    f"{continuation}{prefix} {annotation.name}: {vertex_count} points"
+                )
+
+        # Linkage section (if there are any links)
+        if num_linkages > 0:
+            # Process links to detect bidirectional connections
+            processed_pairs = set()
+            link_display_items = []
+
+            for link_key in self._morphsync.links.keys():
+                source, target = link_key
+                reverse_key = (target, source)
+
+                # Skip if we've already processed this pair in reverse
+                if reverse_key in processed_pairs:
+                    continue
+
+                # Check if bidirectional link exists
+                if reverse_key in self._morphsync.links:
+                    # Bidirectional link
+                    link_display_items.append(f"{source} <-> {target}")
+                    processed_pairs.add(link_key)
+                    processed_pairs.add(reverse_key)
+                else:
+                    # Unidirectional link
+                    link_display_items.append(f"{source} → {target}")
+                    processed_pairs.add(link_key)
+
+            # Show the actual number of connection pairs being displayed
+            num_connections = len(link_display_items)
+            lines.append(f"└── Linkage ({num_connections} connections)")
+
+            for i, link_display in enumerate(link_display_items):
+                is_last_link = i == len(link_display_items) - 1
+                prefix = "└──" if is_last_link else "├──"
+                lines.append(f"    {prefix} {link_display}")
 
         return "\n".join(lines)
 
