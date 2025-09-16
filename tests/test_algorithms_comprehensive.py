@@ -12,7 +12,7 @@ from scipy import sparse
 from ossify import Cell, SkeletonLayer, algorithms
 from ossify.algorithms import (
     _distribution_entropy,
-    _feature_axon_synapse_flow,
+    _label_axon_synapse_flow,
     _laplacian_offset,
     _precompute_synapse_inds,
     _split_direction_and_quality,
@@ -179,18 +179,18 @@ class TestSynapseBetweenness:
 
 
 class TestfeatureAxonFromSynapseFlow:
-    """Tests for feature_axon_from_synapse_flow algorithm."""
+    """Tests for label_axon_from_synapse_flow algorithm."""
 
-    def test_feature_axon_basic_functionality(self, nrn):
+    def test_label_axon_basic_functionality(self, nrn):
         """Test basic axon featureing from synapse flow."""
         # Test basic functionality
-        is_axon = algorithms.feature_axon_from_synapse_flow(
+        is_axon = algorithms.label_axon_from_synapse_flow(
             nrn, pre_syn="pre_syn", post_syn="post_syn"
         )
         assert is_axon.sum() == 4181
         assert np.any(is_axon) or np.any(~is_axon)
 
-    def test_feature_axon_with_arrays(self, nrn):
+    def test_label_axon_with_arrays(self, nrn):
         """Test axon featureing with direct arrays instead of annotation names."""
 
         # Test with SkeletonLayer and arrays
@@ -201,7 +201,7 @@ class TestfeatureAxonFromSynapseFlow:
             "skeleton", as_positional=True
         )
 
-        is_axon = algorithms.feature_axon_from_synapse_flow(
+        is_axon = algorithms.label_axon_from_synapse_flow(
             nrn.skeleton,
             pre_syn=pre_syn_inds,
             post_syn=post_syn_inds,
@@ -212,10 +212,10 @@ class TestfeatureAxonFromSynapseFlow:
         assert is_axon.dtype == bool
         assert is_axon.sum() == 4181
 
-    def test_feature_axon_return_segregation_index(self, nrn):
+    def test_label_axon_return_segregation_index(self, nrn):
         """Test axon featureing with segregation index return using real data."""
         # Test with return_segregation_index=True using real data
-        result = algorithms.feature_axon_from_synapse_flow(
+        result = algorithms.label_axon_from_synapse_flow(
             nrn, pre_syn="pre_syn", post_syn="post_syn", return_segregation_index=True
         )
 
@@ -229,10 +229,10 @@ class TestfeatureAxonFromSynapseFlow:
         assert isinstance(seg_index, (int, float))
         assert 0 <= seg_index <= 1  # Segregation index should be in [0, 1]
 
-    def test_feature_axon_multiple_times(self, nrn):
+    def test_label_axon_multiple_times(self, nrn):
         """Test axon featureing with multiple splits (ntimes > 1) using real data."""
         # Test with multiple splits using real data
-        is_axon = algorithms.feature_axon_from_synapse_flow(
+        is_axon = algorithms.label_axon_from_synapse_flow(
             nrn, pre_syn="pre_syn", post_syn="post_syn", ntimes=2
         )
 
@@ -240,7 +240,7 @@ class TestfeatureAxonFromSynapseFlow:
         assert is_axon.dtype == bool
 
         # Compare with single split to ensure different results
-        is_axon_single = algorithms.feature_axon_from_synapse_flow(
+        is_axon_single = algorithms.label_axon_from_synapse_flow(
             nrn, pre_syn="pre_syn", post_syn="post_syn", ntimes=1
         )
 
@@ -249,12 +249,12 @@ class TestfeatureAxonFromSynapseFlow:
 
 
 class TestfeatureAxonFromSpectralSplit:
-    """Tests for feature_axon_from_spectral_split algorithm."""
+    """Tests for label_axon_from_spectral_split algorithm."""
 
     def test_spectral_split_basic(self, nrn):
         """Test basic spectral split functionality using real data."""
         # Test spectral split with real data
-        is_axon = algorithms.feature_axon_from_spectral_split(
+        is_axon = algorithms.label_axon_from_spectral_split(
             nrn, pre_syn="pre_syn", post_syn="post_syn"
         )
 
@@ -269,7 +269,7 @@ class TestfeatureAxonFromSpectralSplit:
         # It should raise an error when trying to use SkeletonLayer with string annotation names
         # since SkeletonLayer doesn't have annotations
         with pytest.raises((TypeError, AttributeError, KeyError)):
-            algorithms.feature_axon_from_spectral_split(
+            algorithms.label_axon_from_spectral_split(
                 nrn.skeleton,  # SkeletonLayer input
                 pre_syn="pre_syn",  # String annotation name
                 post_syn="post_syn",
@@ -278,17 +278,17 @@ class TestfeatureAxonFromSpectralSplit:
     def test_spectral_split_parameters(self, nrn):
         """Test spectral split with different parameters using real data."""
         # Test with raw_split=True
-        is_axon_raw = algorithms.feature_axon_from_spectral_split(
+        is_axon_raw = algorithms.label_axon_from_spectral_split(
             nrn, pre_syn="pre_syn", post_syn="post_syn", raw_split=True
         )
 
         # Test with different smoothing_alpha
-        is_axon_smooth = algorithms.feature_axon_from_spectral_split(
+        is_axon_smooth = algorithms.label_axon_from_spectral_split(
             nrn, pre_syn="pre_syn", post_syn="post_syn", smoothing_alpha=0.5
         )
 
         # Test with very low smoothing
-        is_axon_low_smooth = algorithms.feature_axon_from_spectral_split(
+        is_axon_low_smooth = algorithms.label_axon_from_spectral_split(
             nrn, pre_syn="pre_syn", post_syn="post_syn", smoothing_alpha=0.1
         )
 
@@ -436,7 +436,7 @@ class TestAlgorithmIntegration:
         assert np.sum(betweenness) >= 0  # Should have non-negative values
 
         # Step 2: Use synapse flow method for axon detection
-        is_axon_flow = algorithms.feature_axon_from_synapse_flow(
+        is_axon_flow = algorithms.label_axon_from_synapse_flow(
             nrn, "pre_syn", "post_syn", return_segregation_index=True
         )
         axon_features_flow, seg_index_flow = is_axon_flow
@@ -446,7 +446,7 @@ class TestAlgorithmIntegration:
         assert axon_features_flow.dtype == bool
 
         # Step 3: Use spectral method for comparison
-        is_axon_spectral = algorithms.feature_axon_from_spectral_split(
+        is_axon_spectral = algorithms.label_axon_from_spectral_split(
             nrn, "pre_syn", "post_syn"
         )
 
