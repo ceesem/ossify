@@ -1526,6 +1526,7 @@ class GraphLayer(PointMixin, EdgeMixin):
         agg_direction: Literal["undirected", "upstream", "downstream"] = "undirected",
         compute_net_path: bool = False,
         node_weight: Optional[np.ndarray] = None,
+        query: Optional[str] = None,
     ) -> pd.DataFrame:
         prox_df = self.proximity_mapping(
             distance_threshold=distance_threshold,
@@ -1557,8 +1558,13 @@ class GraphLayer(PointMixin, EdgeMixin):
             )
             agg["net_path_length"] = (path_length_col_name, "sum")
 
+        if query is not None:
+            merge_anno_df = anno_df.query(query)
+        else:
+            merge_anno_df = anno_df
+
         prox_df = prox_df.merge(
-            anno_df,
+            merge_anno_df,
             left_on="prox_idx",
             right_on=local_vertex_col,
             how="left",
@@ -2418,6 +2424,7 @@ class SkeletonLayer(GraphLayer):
         chunk_size: int = 1000,
         validate: bool = False,
         agg_direction: Literal["undirected", "upstream", "downstream"] = "undirected",
+        query: Optional[str] = None,
     ) -> Union[pd.Series, pd.DataFrame]:
         """Aggregates a point annotation to a feature on the layer based on a maximum proximity.
 
@@ -2457,6 +2464,7 @@ class SkeletonLayer(GraphLayer):
             agg_direction=agg_direction,
             compute_net_path=compute_net_path,
             node_weight=self.half_edge_length,
+            query=query,
         )
         if agg == "density":
             value_column = f"{annotation}_count"
