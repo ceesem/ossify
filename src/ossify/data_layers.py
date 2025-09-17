@@ -142,6 +142,7 @@ class EdgeMixin(ABC):
         targets: Optional[np.ndarray] = None,
         as_positional=False,
         limit: Optional[float] = None,
+        directed: bool = False,
     ) -> np.ndarray:
         """
         Get the distance between two sets of vertices in the skeleton.
@@ -158,6 +159,9 @@ class EdgeMixin(ABC):
         limit: Optional[float]
             The maximum distance to consider in the graph distance lookup. If None, no limit is applied.
             Distances above this will be set to infinity.
+        directed: bool
+            Whether to use directed distances (True) or undirected distances (False).
+            Default False.
 
         Returns
         -------
@@ -177,12 +181,20 @@ class EdgeMixin(ABC):
             )
         if limit is None:
             limit = np.inf
-        return gf.source_target_distances(
-            sources=sources,
-            targets=targets,
-            csgraph=self.csgraph_undirected,
-            limit=limit,
-        )
+        if not directed:
+            return gf.source_target_distances(
+                sources=sources,
+                targets=targets,
+                csgraph=self.csgraph_undirected,
+                limit=limit,
+            )
+        else:
+            return gf.source_target_distances(
+                sources=sources,
+                targets=targets,
+                csgraph=self.csgraph,
+                limit=limit,
+            )
 
     def path_between(
         self,
@@ -539,8 +551,9 @@ class PointMixin(ABC):
 
     def add_feature(
         self,
-        feature: Union[list, np.ndarray, dict, pd.DataFrame],
+        feature: Union[list, np.ndarray, dict, pd.DataFrame, pd.Series],
         name: Optional[str] = None,
+        overwrite: bool = False,
     ) -> Self:
         """Add a new vertex feature to the layer.
 
@@ -550,6 +563,8 @@ class PointMixin(ABC):
             The feature data to add. If an array or list, it should follow the vertex order.
         name: Optional[str]
             The name of the feature column (required if feature is a list or np.ndarray).
+        overwrite: bool
+            Whether to overwrite an existing feature with the same name. Default False.
 
         Returns
         -------
@@ -567,6 +582,7 @@ class PointMixin(ABC):
                 )
             if isinstance(feature, pd.Series):
                 if name is not None:
+                    feature = feature.copy()  # avoid modifying original series
                     feature.name = name
                 feature = feature.to_frame()
             feature = feature.loc[self.vertex_index]
@@ -577,8 +593,14 @@ class PointMixin(ABC):
 
         if feature.shape[0] != self.n_vertices:
             raise ValueError("feature must have the same number of rows as vertices.")
+
         if np.any(feature.columns.isin(self.nodes.columns)):
-            raise ValueError('"feature name already exists in the nodes DataFrame.")')
+            if not overwrite:
+                raise ValueError(
+                    '"feature name already exists in the nodes DataFrame.")'
+                )
+            else:
+                self.drop_features(name)
 
         self._morphsync.layers[self.layer_name].nodes = self.nodes.merge(
             feature,
@@ -1504,6 +1526,7 @@ class GraphLayer(PointMixin, EdgeMixin):
         agg_direction: Literal["undirected", "upstream", "downstream"] = "undirected",
         compute_net_path: bool = False,
         node_weight: Optional[np.ndarray] = None,
+        query: Optional[str] = None,
     ) -> pd.DataFrame:
         prox_df = self.proximity_mapping(
             distance_threshold=distance_threshold,
@@ -1535,8 +1558,13 @@ class GraphLayer(PointMixin, EdgeMixin):
             )
             agg["net_path_length"] = (path_length_col_name, "sum")
 
+        if query is not None:
+            merge_anno_df = anno_df.query(query)
+        else:
+            merge_anno_df = anno_df
+
         prox_df = prox_df.merge(
-            anno_df,
+            merge_anno_df,
             left_on="prox_idx",
             right_on=local_vertex_col,
             how="left",
@@ -2396,6 +2424,7 @@ class SkeletonLayer(GraphLayer):
         chunk_size: int = 1000,
         validate: bool = False,
         agg_direction: Literal["undirected", "upstream", "downstream"] = "undirected",
+        query: Optional[str] = None,
     ) -> Union[pd.Series, pd.DataFrame]:
         """Aggregates a point annotation to a feature on the layer based on a maximum proximity.
 
@@ -2435,6 +2464,7 @@ class SkeletonLayer(GraphLayer):
             agg_direction=agg_direction,
             compute_net_path=compute_net_path,
             node_weight=self.half_edge_length,
+            query=query,
         )
         if agg == "density":
             value_column = f"{annotation}_count"
