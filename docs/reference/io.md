@@ -245,7 +245,7 @@ def add_analysis_features(cell):
     
     # Add compartment features if synapses available
     if "pre_syn" in cell.annotations.names:
-        is_axon = ossify.feature_axon_from_synapse_flow(cell)
+        is_axon = ossify.label_axon_from_synapse_flow(cell)
         compartment = np.where(is_axon, "axon", "dendrite")
         cell.skeleton.add_feature(compartment, "compartment")
     

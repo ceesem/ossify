@@ -8,8 +8,8 @@ from .base import Cell, SkeletonLayer
 __all__ = [
     "strahler_number",
     "smooth_features",
-    "feature_axon_from_synapse_flow",
-    "feature_axon_from_spectral_split",
+    "label_axon_from_synapse_flow",
+    "label_axon_from_spectral_split",
     "synapse_betweenness",
     "segregation_index",
 ]
@@ -170,7 +170,7 @@ def segregation_index(
     return 1 - observed_ent / (unsplit_ent + 1e-10)
 
 
-def feature_axon_from_synapse_flow(
+def label_axon_from_synapse_flow(
     cell: Union[Cell, SkeletonLayer],
     pre_syn: Union[str, np.ndarray] = "pre_syn",
     post_syn: Union[str, np.ndarray] = "post_syn",
@@ -239,7 +239,7 @@ def feature_axon_from_synapse_flow(
             )
         else:
             post_syn_inds = np.asarray(post_syn)
-    is_axon, Hsplit = _feature_axon_synapse_flow(
+    is_axon, Hsplit = _label_axon_synapse_flow(
         skel, pre_syn_inds, post_syn_inds, extend_feature_to_segment
     )
     if Hsplit < segregation_index_threshold:
@@ -285,7 +285,7 @@ def feature_axon_from_synapse_flow(
                             masked_post_syn_inds.append(masked_idx)
                     masked_post_syn_inds = np.array(masked_post_syn_inds)
 
-                is_axon_sub, Hsplit_sub = _feature_axon_synapse_flow(
+                is_axon_sub, Hsplit_sub = _label_axon_synapse_flow(
                     masked_cell.skeleton,
                     masked_pre_syn_inds,
                     masked_post_syn_inds,
@@ -322,7 +322,7 @@ def _split_direction_and_quality(
     return ds_fraction_pre >= us_fraction_pre, seg_index
 
 
-def _feature_axon_synapse_flow(
+def _label_axon_synapse_flow(
     skeleton: SkeletonLayer,
     pre_syn_inds: np.ndarray,
     post_syn_inds: np.ndarray,
@@ -353,7 +353,7 @@ def _feature_axon_synapse_flow(
     return is_axon, Hsplit
 
 
-def feature_axon_from_spectral_split(
+def label_axon_from_spectral_split(
     cell: Union[Cell, SkeletonLayer],
     pre_syn: str = "pre_syn",
     post_syn: str = "post_syn",
