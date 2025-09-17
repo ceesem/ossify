@@ -142,6 +142,7 @@ class EdgeMixin(ABC):
         targets: Optional[np.ndarray] = None,
         as_positional=False,
         limit: Optional[float] = None,
+        directed: bool = False,
     ) -> np.ndarray:
         """
         Get the distance between two sets of vertices in the skeleton.
@@ -158,6 +159,9 @@ class EdgeMixin(ABC):
         limit: Optional[float]
             The maximum distance to consider in the graph distance lookup. If None, no limit is applied.
             Distances above this will be set to infinity.
+        directed: bool
+            Whether to use directed distances (True) or undirected distances (False).
+            Default False.
 
         Returns
         -------
@@ -177,12 +181,20 @@ class EdgeMixin(ABC):
             )
         if limit is None:
             limit = np.inf
-        return gf.source_target_distances(
-            sources=sources,
-            targets=targets,
-            csgraph=self.csgraph_undirected,
-            limit=limit,
-        )
+        if not directed:
+            return gf.source_target_distances(
+                sources=sources,
+                targets=targets,
+                csgraph=self.csgraph_undirected,
+                limit=limit,
+            )
+        else:
+            return gf.source_target_distances(
+                sources=sources,
+                targets=targets,
+                csgraph=self.csgraph,
+                limit=limit,
+            )
 
     def path_between(
         self,
