@@ -502,8 +502,8 @@ with cell.mask_context('skeleton', cell.skeleton.features['compartment'] == 3) a
 axes[1].set_title("Dendrite Only (Masked)")
 
 for ax in axes:
-    ax.set_xfeature("X (nm)")
-    ax.set_yfeature("Y (nm)")
+    ax.set_xlabel("X (nm)")
+    ax.set_ylabel("Y (nm)")
 
 plt.tight_layout()
 plt.show()
