@@ -1,104 +1,76 @@
 [build-system]
-requires = ["hatchling>=1.26.1"]
 build-backend = "hatchling.build"
+requires = ["hatchling>=1.26.1"]
 
 [tool.hatch.metadata]
 allow-direct-references = true
 [project]
-name = "ossify"
-version = "0.0.1"
-description = "Mesh and skeleton analysis"
-readme = "README.md"
-requires-python = ">=3.11"
+authors = [{ name = "Casey Schneider-Mizell", email = "caseysm@gmail.com" }]
 dependencies = [
     "caveclient>=7.6.0",
-    "cloud-volume>=11.1.5",
-    "numpy>=2.0.2",
-    "scipy>=1.15",
-    "trimesh[easy]>=4.6.2",
-    "orjson>=3.10.15",
     "cloud-files>=5.8.0",
+    "cloud-volume>=11.1.5",
     "matplotlib>=3.10.6",
     "morphsync @ git+https://github.com/bdpedigo/morphsync.git@main",
+    "numpy>=2.0.2",
+    "orjson>=3.10.15",
+    "scipy>=1.15",
+    "trimesh[easy]>=4.6.2",
 ]
-authors = [
-    { name = "Casey Schneider-Mizell", email = "caseysm@gmail.com" },
-]
+description = "Mesh and skeleton analysis"
+name = "ossify"
+readme = "README.md"
+requires-python = ">=3.11"
+version = "0.0.1"
 
-classifiers = [
-    "License :: OSI Approved :: MIT License",
-]
+classifiers = ["License :: OSI Approved :: MIT License"]
 
 [project.optional-dependencies]
-legacy = [
-    "h5py>=3.14.0",
-]
+legacy = ["h5py>=3.14.0"]
 
 [dependency-groups]
-dev = [
-    "pytest",
-    "pytest-cov",
-    "ipykernel",
-    "bump-my-version",
-    "cloud-volume"
- ]
-docs = [
-    "mkdocs",
-    "mkdocs-material",
-    "mkdocstrings[python]",
-]
-lint = [
-    "ruff"
-]
-profile = [
-    "scalene",
-    "pyinstrument",
-]
-viz = [
-    "pyvista",
-    "cortical-tools>=0.0.4",
-    "seaborn>=0.13.2",
-]
+dev = ["bump-my-version", "cloud-volume", "ipykernel", "pytest", "pytest-cov"]
+docs = ["mkdocs", "mkdocs-material", "mkdocstrings[python]"]
+lint = ["ruff"]
+profile = ["pyinstrument", "scalene"]
+viz = ["pyvista", "seaborn>=0.13.2"]
 
 
 [tool.uv]
 default-groups = ["dev", "docs", "lint", "profile", "viz"]
 
-[tool.uv.sources]
-cortical-tools = { path = "../cortical-tools", editable = true }
-
 [tool.bumpversion]
-current_version = "0.0.1"
-parse = "(?P<major>\\d+)\\.(?P<minor>\\d+)\\.(?P<patch>\\d+)"
-serialize = ["{major}.{minor}.{patch}"]
-regex = false
-ignore_missing_version = false
-tag = true
-sign_tags = false
-tag_name = "v{new_version}"
-tag_message = "Bump version: {current_version} → {new_version}"
 allow_dirty = false
 commit = true
-message = "v{new_version}"
 commit_args = ""
-pre_commit_hooks = ['uv sync', 'git add uv.lock']
+current_version = "0.0.1"
+ignore_missing_version = false
+message = "v{new_version}"
+parse = "(?P<major>\\d+)\\.(?P<minor>\\d+)\\.(?P<patch>\\d+)"
 post_commit_hooks = ["./.bmv-post-commit.sh"]
+pre_commit_hooks = ['git add uv.lock', 'uv sync']
+regex = false
+serialize = ["{major}.{minor}.{patch}"]
+sign_tags = false
+tag = true
+tag_message = "Bump version: {current_version} → {new_version}"
+tag_name = "v{new_version}"
 
 [[tool.bumpversion.files]]
 filename = "src/ossify/__init__.py"
-search = "__version__ = \"{current_version}\""
 replace = "__version__ = \"{new_version}\""
+search = "__version__ = \"{current_version}\""
 
 [[tool.bumpversion.files]]
 filename = "pyproject.toml"
-search = "version = \"{current_version}\""
 replace = "version = \"{new_version}\""
+search = "version = \"{current_version}\""
 
 [tool.ruff]
 extend-exclude = ["*.ipynb"]
 
 [tool.ruff.lint]
-select=["E9","F63","F7","F82"]
+select = ["E9", "F63", "F7", "F82"]
 
 [tool.poe.tasks.drybump]
 cmd = "uv run bump-my-version bump --dry-run --verbose"
