@@ -10,13 +10,12 @@ __all__ = [
     "GraphSync",
     "MeshSync",
     "PointSync",
-    "Facet",
+    "Layer",
     "is_ossify_layer",
     "Link",
-    "Facet",
 ]
 
-Facet = sync.base.FacetFrame  # Alias for FacetFrame
+Layer = sync.base.Layer  # Alias for Layer
 MorphSync = sync.MorphSync
 
 

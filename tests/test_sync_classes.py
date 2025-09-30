@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-import pytest
 
 from ossify.sync_classes import Link, MorphSync
 
@@ -333,7 +332,6 @@ class TestMorphSync:
         assert mapping_keep.isna().any()
         assert mapping_keep.isna().sum() == 2
 
-
     def test_get_mapping_paths(
         self, simple_skeleton_data, simple_graph_data, simple_mesh_data, spatial_columns
     ):
@@ -375,9 +373,7 @@ class TestMorphSync:
         morphsync.add_link("graph", "mesh", mapping=graph_to_mesh)
 
         # Test get_mapping_paths
-        mapping_paths = morphsync.get_mapping_paths(
-            "skeleton", "mesh", dropna=True
-        )
+        mapping_paths = morphsync.get_mapping_paths("skeleton", "mesh", dropna=True)
 
         # Should have columns for each step in the path
         assert "skeleton" in mapping_paths.columns

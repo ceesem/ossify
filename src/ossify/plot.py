@@ -1,5 +1,5 @@
 from numbers import Number
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Literal, Optional, Tuple, Union
 
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
@@ -8,7 +8,7 @@ import pandas as pd
 from matplotlib.collections import LineCollection
 from matplotlib.colors import Colormap, ListedColormap, Normalize
 
-from .base import Cell, GraphLayer, MeshLayer, PointCloudLayer, SkeletonLayer
+from .base import Cell, PointCloudLayer, SkeletonLayer
 
 __all__ = [
     "plot_cell_2d",

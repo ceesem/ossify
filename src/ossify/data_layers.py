@@ -456,11 +456,11 @@ class PointMixin(ABC):
         return self._name
 
     @property
-    def layer(self) -> Facet:
+    def layer(self) -> Layer:
         """Get the morphsync layer associated with the data layer."""
         return self._get_layer(self.layer_name)
 
-    def _get_layer(self, layer_name: str) -> Facet:  # type: ignore
+    def _get_layer(self, layer_name: str) -> Layer:  # type: ignore
         return self._morphsync.layers[layer_name]
 
     @property
@@ -1147,9 +1147,7 @@ class PointMixin(ABC):
         for target_layer in target_layers:
             # Get mapping with nulls preserved
             mapping = self._morphsync.get_mapping(
-                source=target_layer,
-                target=self.layer_name,
-                dropna=False
+                source=target_layer, target=self.layer_name, dropna=False
             )
 
             # Find indices with null mappings (NaN or pd.NA)

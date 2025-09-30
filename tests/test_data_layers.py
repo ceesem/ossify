@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-import pytest
 from scipy import sparse
 
 from ossify import Cell, Link
@@ -877,12 +876,8 @@ class TestMappingFunctionality:
         )
 
         # Test different null strategies with complete mapping
-        mapping_drop = cell._morphsync.get_mapping(
-            "skeleton", "graph", dropna=True
-        )
-        mapping_keep = cell._morphsync.get_mapping(
-            "skeleton", "graph", dropna=False
-        )
+        mapping_drop = cell._morphsync.get_mapping("skeleton", "graph", dropna=True)
+        mapping_keep = cell._morphsync.get_mapping("skeleton", "graph", dropna=False)
 
         # With complete mapping, all strategies should have same length
         assert len(mapping_drop) == len(indices_skel)
