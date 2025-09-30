@@ -11,7 +11,7 @@ dependencies = [
     "cloud-files>=5.8.0",
     "cloud-volume>=11.1.5",
     "matplotlib>=3.10.6",
-    "morphsync @ git+https://github.com/bdpedigo/morphsync.git@main",
+    "morphsync==0.1.0",
     "numpy>=2.0.2",
     "orjson>=3.10.15",
     "scipy>=1.15",

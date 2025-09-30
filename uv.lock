@@ -1961,15 +1961,20 @@ wheels = [
 [[package]]
 name = "morphsync"
 version = "0.1.0"
-source = { git = "https://github.com/bdpedigo/morphsync.git?rev=main#e161250b1f57e7663fc06ed98b71064e68eb503a" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cachetools" },
     { name = "fastremap" },
     { name = "joblib" },
+    { name = "networkx" },
     { name = "numpy" },
     { name = "pandas" },
     { name = "scikit-learn" },
     { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/18/14/58216f0e48f0eb77659298494ce89db989bf9a26ac2fefdade5e7f0e03bb/morphsync-0.1.0.tar.gz", hash = "sha256:32f43f61d021f97a35d14a9111863c07a13962cdca429b9194219572952f4499", size = 11321443 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f4/b0/abebbd0024652e63f4c659170136c8fc274472d76e1d71b579b04ab78b41/morphsync-0.1.0-py3-none-any.whl", hash = "sha256:effb1e26576eee2e74c73db867941c7827a8fbb07bf622f67631a3e5d46bfc34", size = 14818 },
 ]
 
 [[package]]
@@ -2184,7 +2189,7 @@ requires-dist = [
     { name = "cloud-volume", specifier = ">=11.1.5" },
     { name = "h5py", marker = "extra == 'legacy'", specifier = ">=3.14.0" },
     { name = "matplotlib", specifier = ">=3.10.6" },
-    { name = "morphsync", git = "https://github.com/bdpedigo/morphsync.git?rev=main" },
+    { name = "morphsync", specifier = "==0.1.0" },
     { name = "numpy", specifier = ">=2.0.2" },
     { name = "orjson", specifier = ">=3.10.15" },
     { name = "scipy", specifier = ">=1.15" },
