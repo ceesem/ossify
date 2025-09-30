@@ -1379,6 +1379,18 @@ class PointMixin(ABC):
     def __len__(self) -> int:
         return self.n_vertices
 
+    def __getitem__(self, key: List[str]) -> Union[pd.Series, pd.DataFrame]:
+        "Passthrough to nodes dataframe"
+        return self.nodes[key]
+
+    def loc(self, key: Union[str, List[str], np.ndarray]) -> pd.DataFrame:
+        """Passthrough to layer.nodes.loc"""
+        return self.nodes.loc[key]
+
+    def iloc(self, key: Union[int, List[int], np.ndarray]) -> pd.DataFrame:
+        """Passthrough to layer.nodes.iloc"""
+        return self.nodes.iloc[key]
+
 
 class GraphLayer(PointMixin, EdgeMixin):
     layer_name = GRAPH_LAYER_NAME

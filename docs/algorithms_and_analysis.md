@@ -84,7 +84,7 @@ cell.add_point_annotations("pre_syn", vertices=pre_syn_locations)
 cell.add_point_annotations("post_syn", vertices=post_syn_locations)
 
 # Classify compartments using synapse flow
-is_axon = ossify.feature_axon_from_synapse_flow(
+is_axon = ossify.label_axon_from_synapse_flow(
     cell=cell,
     pre_syn="pre_syn",           # Presynaptic annotation name
     post_syn="post_syn",         # Postsynaptic annotation name
@@ -114,7 +114,7 @@ cell.skeleton.add_feature(compartment_features, name="compartment")
 
 ```python
 # Multiple iterations for better classification
-is_axon_multi, segregation_idx = ossify.feature_axon_from_synapse_flow(
+is_axon_multi, segregation_idx = ossify.label_axon_from_synapse_flow(
     cell=cell,
     pre_syn="pre_syn",
     post_syn="post_syn",
@@ -138,7 +138,7 @@ Alternative classification method using spectral analysis:
 
 ```python
 # Spectral split method (smoother boundaries)
-is_axon_spectral = ossify.feature_axon_from_spectral_split(
+is_axon_spectral = ossify.label_axon_from_spectral_split(
     cell=cell,
     pre_syn="pre_syn",
     post_syn="post_syn",
@@ -475,8 +475,8 @@ analyze_synapse_distribution(cell)
 - `ossify.smooth_features(cell, feature, alpha=0.90)` - Smooth features along skeleton topology
 
 ### Compartment Classification
-- `ossify.feature_axon_from_synapse_flow(cell, pre_syn, post_syn, extend_feature_to_segment=False, ntimes=1, ...)` - Classify using synapse flow
-- `ossify.feature_axon_from_spectral_split(cell, pre_syn, post_syn, aggregation_distance=1, smoothing_alpha=0.99, ...)` - Classify using spectral method
+- `ossify.label_axon_from_synapse_flow(cell, pre_syn, post_syn, extend_feature_to_segment=False, ntimes=1, ...)` - Classify using synapse flow
+- `ossify.label_axon_from_spectral_split(cell, pre_syn, post_syn, aggregation_distance=1, smoothing_alpha=0.99, ...)` - Classify using spectral method
 
 ### Synapse Analysis
 - `ossify.synapse_betweenness(skel, pre_inds, post_inds)` - Compute synapse traffic through vertices

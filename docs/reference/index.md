@@ -16,7 +16,7 @@ cell = ossify.load_cell_from_client(root_id=12345, client=cave_client)
 
 # Analyze morphology
 strahler = ossify.strahler_number(cell)
-is_axon = ossify.feature_axon_from_synapse_flow(cell)
+is_axon = ossify.label_axon_from_synapse_flow(cell)
 
 # Create visualizations
 fig, ax = ossify.plot_cell_2d(cell, color="compartment")
@@ -82,7 +82,7 @@ Load and save data from local files, cloud storage (S3, GCS) via `cloud-files`, 
 |--------|-------------|-------------|
 | **[Core Classes](core.md)** | Foundation classes and containers | `Cell`, `Link` |
 | **[Data Layers](layers.md)** | Spatial and graph representation classes | `SkeletonLayer`, `GraphLayer`, `MeshLayer`, `PointCloudLayer` |
-| **[Algorithms](algorithms.md)** | Analysis and computation functions | `strahler_number`, `feature_axon_*`, `smooth_features` |
+| **[Algorithms](algorithms.md)** | Analysis and computation functions | `strahler_number`, `label_axon_*`, `smooth_features` |
 | **[Plotting](plotting.md)** | Visualization and figure creation | `plot_cell_*`, `plot_morphology_*` |
 | **[File I/O](io.md)** | Data loading and saving | `load_cell`, `save_cell`, `CellFiles` |
 | **[External](external.md)** | Third-party integrations | `cell_from_client` |

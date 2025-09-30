@@ -7,7 +7,7 @@ Ossify provides computational methods for analyzing neuromorphological structure
 | Algorithm Category | Functions | Purpose |
 |--------------------|-----------|---------|
 | **[Morphological Analysis](#morphological-analysis)** | `strahler_number` | Tree structure characterization |
-| **[Synapse Analysis](#synapse-analysis)** | `synapse_betweenness`, `feature_axon_from_*`, `segregation_index` | Connectivity and compartmentalization |
+| **[Synapse Analysis](#synapse-analysis)** | `synapse_betweenness`, `label_axon_from_*`, `segregation_index` | Connectivity and compartmentalization |
 | **[Smoothing & Filtering](#smoothing-and-filtering)** | `smooth_features` | Signal processing on graphs |
 
 ---
@@ -99,9 +99,9 @@ cell.skeleton.add_feature(betweenness, "syn_betweenness")
 high_betweenness = betweenness > np.percentile(betweenness, 95)
 ```
 
-### feature_axon_from_synapse_flow
+### label_axon_from_synapse_flow
 
-::: ossify.algorithms.feature_axon_from_synapse_flow
+::: ossify.algorithms.label_axon_from_synapse_flow
     options:
         heading_level: 4
         show_root_heading: true
@@ -116,7 +116,7 @@ high_betweenness = betweenness > np.percentile(betweenness, 95)
 
 ```python
 # Basic axon identification
-is_axon = ossify.feature_axon_from_synapse_flow(
+is_axon = ossify.label_axon_from_synapse_flow(
     cell,
     pre_syn="pre_syn",      # Annotation layer with presynaptic sites
     post_syn="post_syn",    # Annotation layer with postsynaptic sites
@@ -135,7 +135,7 @@ compartment = np.where(axon_mask, "axon", "dendrite")
 cell.skeleton.add_feature(compartment, "compartment")
 
 # Iterative refinement for complex morphologies
-is_axon_refined = ossify.feature_axon_from_synapse_flow(
+is_axon_refined = ossify.label_axon_from_synapse_flow(
     cell,
     pre_syn="pre_syn",
     post_syn="post_syn", 
@@ -144,9 +144,9 @@ is_axon_refined = ossify.feature_axon_from_synapse_flow(
 )
 ```
 
-### feature_axon_from_spectral_split
+### label_axon_from_spectral_split
 
-::: ossify.algorithms.feature_axon_from_spectral_split
+::: ossify.algorithms.label_axon_from_spectral_split
     options:
         heading_level: 4
         show_root_heading: true
@@ -161,7 +161,7 @@ is_axon_refined = ossify.feature_axon_from_synapse_flow(
 
 ```python
 # Spectral method with density smoothing
-is_axon_spectral = ossify.feature_axon_from_spectral_split(
+is_axon_spectral = ossify.label_axon_from_spectral_split(
     cell,
     pre_syn="pre_syn",
     post_syn="post_syn",
@@ -295,14 +295,14 @@ def analyze_compartmentalization(cell, min_segregation=0.5):
     betweenness = ossify.synapse_betweenness(cell.skeleton, pre_ids, post_ids)
     
     # 2. Flow-based compartmentalization
-    axon_flow, seg_flow = ossify.feature_axon_from_synapse_flow(
+    axon_flow, seg_flow = ossify.label_axon_from_synapse_flow(
         cell, 
         return_segregation_index=True,
         segregation_index_threshold=min_segregation
     )
     
     # 3. Spectral alternative
-    axon_spectral = ossify.feature_axon_from_spectral_split(
+    axon_spectral = ossify.label_axon_from_spectral_split(
         cell,
         segregation_index_threshold=min_segregation
     )
@@ -350,7 +350,7 @@ def extract_morphology_features(cell):
     
     # Compartment analysis (if synapses available)
     if "pre_syn" in cell.annotations.names:
-        axon_mask, segregation = ossify.feature_axon_from_synapse_flow(
+        axon_mask, segregation = ossify.label_axon_from_synapse_flow(
             cell, return_segregation_index=True
         )
         axon_length = skeleton.cable_length(skeleton.vertex_index[axon_mask])

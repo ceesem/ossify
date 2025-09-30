@@ -59,8 +59,8 @@ def main():
         ax=ax,
     )
     ax.set_title("Neuron Morphology - Compartment Classification", fontsize=14)
-    ax.set_xfeature("X (nm)")
-    ax.set_yfeature("Y (nm)")
+    ax.set_xlabel("X (nm)")
+    ax.set_ylabel("Y (nm)")
     plt.tight_layout()
     plt.savefig("docs/images/basic_morphology.png", dpi=150, bbox_inches="tight")
     plt.close()
@@ -79,8 +79,8 @@ def main():
         ax=ax,
     )
     ax.set_title("Strahler Order Analysis", fontsize=14)
-    ax.set_xfeature("X (nm)")
-    ax.set_yfeature("Y (nm)")
+    ax.set_xlabel("X (nm)")
+    ax.set_ylabel("Y (nm)")
     plt.tight_layout()
     plt.savefig("docs/images/strahler_analysis.png", dpi=150, bbox_inches="tight")
     plt.close()
@@ -125,8 +125,8 @@ def main():
         ax=ax,
     )
     ax.set_title("Radius Variation", fontsize=14)
-    ax.set_xfeature("X (nm)")
-    ax.set_yfeature("Y (nm)")
+    ax.set_xlabel("X (nm)")
+    ax.set_ylabel("Y (nm)")
     plt.tight_layout()
     plt.savefig("docs/images/radius_visualization.png", dpi=150, bbox_inches="tight")
     plt.close()
@@ -156,8 +156,8 @@ def main():
     axes[1].set_title("Dendrite Only (Masked)", fontsize=14)
 
     for ax in axes:
-        ax.set_xfeature("X (nm)")
-        ax.set_yfeature("Y (nm)")
+        ax.set_xlabel("X (nm)")
+        ax.set_ylabel("Y (nm)")
 
     plt.tight_layout()
     plt.savefig("docs/images/masking_example.png", dpi=150, bbox_inches="tight")

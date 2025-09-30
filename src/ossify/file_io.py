@@ -1,4 +1,5 @@
 import io
+import os
 import tarfile
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, Optional, Union
@@ -62,7 +63,7 @@ def _load_from_file_object(file_obj: BinaryIO) -> Cell:
 
 def save_cell(
     cell: Cell,
-    file: Union[str, BinaryIO, None] = None,
+    file: Union[str, os.PathLike, BinaryIO, None] = None,
     allow_overwrite: bool = False,
 ) -> None:
     """Save Cell to a file path or file object.
@@ -71,15 +72,21 @@ def save_cell(
     ----------
     cell : Cell
         The Cell object to save.
-    file: Union[str, BinaryIO, None]
-        File path, open binary file object, or None (uses "<cell.name>.osy" as a string).
+    file: Union[str, os.PathLike, BinaryIO, None]
+        File path, path-like object, open binary file object, or None (uses "<cell.name>.osy" as a string).
     allow_overwrite : bool
         Whether to allow overwriting existing files.
     """
-    if isinstance(file, str) or file is None:
-        _save_to_path(cell, file, allow_overwrite)
+    if file is None:
+        _save_to_path(cell, None, allow_overwrite)
     else:
-        _save_to_file_object(cell, file)
+        try:
+            # Try to convert to string path - works for str, Path, AnyPath, etc.
+            path_str = os.fspath(file)
+            _save_to_path(cell, path_str, allow_overwrite)
+        except TypeError:
+            # Not a path-like object, treat as file object
+            _save_to_file_object(cell, file)
 
 
 def _save_to_path(cell: Cell, path: Optional[str], allow_overwrite: bool) -> None:

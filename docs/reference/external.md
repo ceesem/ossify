@@ -93,7 +93,7 @@ cell = ossify.load_cell_from_client(
 )
 
 # Analyze compartmentalization
-is_axon, segregation = ossify.feature_axon_from_synapse_flow(
+is_axon, segregation = ossify.label_axon_from_synapse_flow(
     cell, 
     return_segregation_index=True
 )
@@ -140,7 +140,7 @@ def cave_to_analysis_pipeline(root_ids, client, output_format="both"):
         cell.skeleton.add_feature(strahler, "strahler_order")
         
         # Compartment analysis
-        is_axon, segregation = ossify.feature_axon_from_synapse_flow(
+        is_axon, segregation = ossify.label_axon_from_synapse_flow(
             cell, return_segregation_index=True
         )
         compartment = ["dendrite" if not ax else "axon" for ax in is_axon]

@@ -440,7 +440,7 @@ def create_publication_figure(cell, output_path="figure.pdf"):
     \"\"\"Create a publication-ready multi-panel figure\"\"\"
     
     # Calculate compartmentalization
-    is_axon = ossify.feature_axon_from_synapse_flow(cell)
+    is_axon = ossify.label_axon_from_synapse_flow(cell)
     compartment = np.where(is_axon, "Axon", "Dendrite")
     cell.skeleton.add_feature(compartment, "compartment")
     
@@ -500,10 +500,10 @@ def plot_analysis_comparison(cell, algorithms=['flow', 'spectral']):
     
     # Run different algorithms
     if 'flow' in algorithms:
-        results['flow'] = ossify.feature_axon_from_synapse_flow(cell)
+        results['flow'] = ossify.label_axon_from_synapse_flow(cell)
         
     if 'spectral' in algorithms:
-        results['spectral'] = ossify.feature_axon_from_spectral_split(cell)
+        results['spectral'] = ossify.label_axon_from_spectral_split(cell)
     
     # Create comparison plot
     n_methods = len(results)

@@ -42,6 +42,7 @@ def _process_synapse_table(
             desired_resolution=[1, 1, 1],
             split_positions=True,
             timestamp=timestamp,
+            metadata=False,
         )
     if omit_autapses:
         syn_df.query(f"{side_column} != {other_column}", inplace=True)
@@ -58,13 +59,20 @@ def _process_synapse_table(
     if reference_tables is not None:
         for ref_table in reference_tables:
             with suppress_output():
-                ref_df = client.materialize.tables[ref_table](
-                    id=syn_df["id"]
-                ).live_query(
+                ref_df = client.materialize.live_live_query(
+                    ref_table,
+                    filter_in_dict={ref_table: {"target_id": syn_df["id"].tolist()}},
                     timestamp=timestamp,
-                )
+                    metadata=False,
+                    desired_resolution=[1, 1, 1],
+                ).drop(columns=["created", "valid"], errors="ignore")
             syn_df = syn_df.merge(
-                ref_df,
+                ref_df.rename(
+                    columns={
+                        "target_id": "id",
+                        "id": f"id_{reference_suffixes.get(ref_table, ref_table)}",
+                    }
+                ),
                 how="left",
                 on="id",
                 suffixes=("", f"_{reference_suffixes.get(ref_table, ref_table)}"),
