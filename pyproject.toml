@@ -65,7 +65,7 @@ viz = [
 default-groups = ["dev", "docs", "lint", "profile", "viz"]
 
 [tool.uv.sources]
-cortical-tools = { path = "../cortical_tools", editable = true }
+cortical-tools = { path = "../cortical-tools", editable = true }
 
 [tool.bumpversion]
 current_version = "0.0.1"
