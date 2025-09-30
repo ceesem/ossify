@@ -19,7 +19,7 @@ dependencies = [
     "orjson>=3.10.15",
     "cloud-files>=5.8.0",
     "matplotlib>=3.10.6",
-    "morphsync @ git+https://github.com/ceesem/morphsync.git@v0.0.3-csm",
+    "morphsync @ git+https://github.com/bdpedigo/morphsync.git@main",
 ]
 authors = [
     { name = "Casey Schneider-Mizell", email = "caseysm@gmail.com" },
@@ -65,7 +65,7 @@ viz = [
 default-groups = ["dev", "docs", "lint", "profile", "viz"]
 
 [tool.uv.sources]
-cortical-tools = { path = "../cortical_tools", editable = true }
+cortical-tools = { path = "../cortical-tools", editable = true }
 
 [tool.bumpversion]
 current_version = "0.0.1"
