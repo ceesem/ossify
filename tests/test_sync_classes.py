@@ -241,7 +241,7 @@ class TestMorphSync:
         assert path == ["skeleton", "graph", "mesh"]
 
         # Test mapping traversal
-        mapping = morphsync.get_mapping("skeleton", "mesh", null_strategy="drop")
+        mapping = morphsync.get_mapping("skeleton", "mesh", dropna=True)
         assert len(mapping) == 4  # Should lose vertex 104 due to incomplete mapping
 
     def test_mapping_validation_modes(
@@ -292,7 +292,7 @@ class TestMorphSync:
         mapping = morphsync.get_mapping("skeleton", "graph", validate="many_to_one")
         assert len(mapping) == 5
 
-    def test_null_strategy_behaviors(
+    def test_dropna_behaviors(
         self, simple_skeleton_data, simple_graph_data, spatial_columns
     ):
         """Test different null handling strategies."""
@@ -323,23 +323,16 @@ class TestMorphSync:
         morphsync.add_link("skeleton", "graph", mapping=partial_mapping)
 
         # Test drop strategy
-        mapping_drop = morphsync.get_mapping("skeleton", "graph", null_strategy="drop")
+        mapping_drop = morphsync.get_mapping("skeleton", "graph", dropna=True)
         assert len(mapping_drop) == 3
         assert not mapping_drop.isna().any()
 
         # Test keep strategy
-        mapping_keep = morphsync.get_mapping("skeleton", "graph", null_strategy="keep")
+        mapping_keep = morphsync.get_mapping("skeleton", "graph", dropna=False)
         assert len(mapping_keep) == 5
         assert mapping_keep.isna().any()
         assert mapping_keep.isna().sum() == 2
 
-        # Test sentinel strategy
-        mapping_sentinel = morphsync.get_mapping(
-            "skeleton", "graph", null_strategy="sentinel"
-        )
-        assert len(mapping_sentinel) == 5
-        assert (mapping_sentinel == -1).any()
-        assert (mapping_sentinel == -1).sum() == 2
 
     def test_get_mapping_paths(
         self, simple_skeleton_data, simple_graph_data, simple_mesh_data, spatial_columns
@@ -383,7 +376,7 @@ class TestMorphSync:
 
         # Test get_mapping_paths
         mapping_paths = morphsync.get_mapping_paths(
-            "skeleton", "mesh", null_strategy="drop"
+            "skeleton", "mesh", dropna=True
         )
 
         # Should have columns for each step in the path
