@@ -55,7 +55,6 @@ profile = [
 ]
 viz = [
     "pyvista",
-    "cortical-tools>=0.0.4",
     "seaborn>=0.13.2",
 ]
 
