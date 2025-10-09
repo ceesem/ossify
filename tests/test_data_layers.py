@@ -877,22 +877,17 @@ class TestMappingFunctionality:
         )
 
         # Test different null strategies with complete mapping
-        mapping_drop = cell._morphsync.get_mapping(
-            "skeleton", "graph", null_strategy="drop"
-        )
+        mapping_drop = cell._morphsync.get_mapping("skeleton", "graph", dropna=True)
         mapping_keep = cell._morphsync.get_mapping(
-            "skeleton", "graph", null_strategy="keep"
-        )
-        mapping_sentinel = cell._morphsync.get_mapping(
-            "skeleton", "graph", null_strategy="sentinel"
+            "skeleton",
+            "graph",
+            dropna=False,
         )
 
         # With complete mapping, all strategies should have same length
         assert len(mapping_drop) == len(indices_skel)
         assert len(mapping_keep) == len(indices_skel)
-        assert len(mapping_sentinel) == len(indices_skel)
 
         # Test that mapping functions exist and return valid data
         assert mapping_drop is not None
         assert mapping_keep is not None
-        assert mapping_sentinel is not None

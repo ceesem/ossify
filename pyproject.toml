@@ -12,14 +12,13 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "caveclient>=7.6.0",
-    "cloud-volume>=11.1.5",
     "numpy>=2.0.2",
     "scipy>=1.15",
-    "trimesh[easy]>=4.6.2",
+    "trimesh>=4.6.2",
     "orjson>=3.10.15",
     "cloud-files>=5.8.0",
     "matplotlib>=3.10.6",
-    "morphsync @ git+https://github.com/ceesem/morphsync.git@v0.0.3-csm",
+    "morphsync==0.1.0",
 ]
 authors = [
     { name = "Casey Schneider-Mizell", email = "caseysm@gmail.com" },
@@ -64,8 +63,6 @@ viz = [
 [tool.uv]
 default-groups = ["dev", "docs", "lint", "profile", "viz"]
 
-[tool.uv.sources]
-cortical-tools = { path = "../cortical_tools", editable = true }
 
 [tool.bumpversion]
 current_version = "0.0.1"

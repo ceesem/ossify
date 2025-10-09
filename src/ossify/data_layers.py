@@ -631,7 +631,7 @@ class PointMixin(ABC):
             source=self.layer_name,
             target=layer,
             source_index=source_index,
-            null_strategy="drop",
+            dropna=True,
         )
         return mapping.values
 
@@ -661,7 +661,7 @@ class PointMixin(ABC):
             source=self.layer_name,
             target=layer,
             source_index=source_index,
-            null_strategy="drop",
+            dropna=True,
         )
         if validate:
             if np.any(mapping.index.duplicated()):
@@ -691,7 +691,7 @@ class PointMixin(ABC):
             source=self.layer_name,
             target=layer,
             source_index=source_index,
-            null_strategy="drop",
+            dropna=True,
         )
         mapping_dict = mapping.groupby(by=mapping.index).agg(list).to_dict()
         return {k: np.array(v) for k, v in mapping_dict.items()}
@@ -729,7 +729,7 @@ class PointMixin(ABC):
             source=self.layer_name,
             target=layer,
             source_index=self.vertex_index,
-            null_strategy="keep",
+            dropna=False,
         )
         mapping_merged = mapping.to_frame().merge(
             self.nodes[features],
@@ -1149,7 +1149,7 @@ class PointMixin(ABC):
             mapping = self._morphsync.get_mapping(
                 source=target_layer,
                 target=self.layer_name,
-                null_strategy="keep",
+                dropna=False,
             )
 
             # Find indices with null mappings (NaN or pd.NA)

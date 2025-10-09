@@ -16,7 +16,7 @@ __all__ = [
     "Facet",
 ]
 
-Facet = sync.base.FacetFrame  # Alias for FacetFrame
+Facet = sync.base.Layer  # Alias for FacetFrame
 MorphSync = sync.MorphSync
 
 

@@ -677,8 +677,8 @@ wheels = [
 
 [[package]]
 name = "cortical-tools"
-version = "0.0.4"
-source = { editable = "../cortical_tools" }
+version = "0.0.5"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "caveclient" },
     { name = "cloud-volume" },
@@ -690,39 +690,9 @@ dependencies = [
     { name = "standard-transform" },
     { name = "tqdm-joblib" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "caveclient", specifier = ">=7.7.4" },
-    { name = "cloud-volume", specifier = ">=12.3.1" },
-    { name = "gpytoolbox", specifier = ">=0.3.6" },
-    { name = "nglui", specifier = ">=4.4.2" },
-    { name = "numpy", specifier = ">=2.0.2" },
-    { name = "pandas", specifier = ">=2.2.3" },
-    { name = "pcg-skel", specifier = ">=1.3.1" },
-    { name = "standard-transform", specifier = ">=1.4.1" },
-    { name = "tqdm-joblib", specifier = ">=0.0.4" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "bump-my-version" },
-    { name = "ipykernel" },
-    { name = "jupyter-server-proxy" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "pyvista", extras = ["all"] },
-    { name = "seaborn" },
-]
-docs = [
-    { name = "mkdocs" },
-    { name = "mkdocs-material" },
-    { name = "mkdocstrings", extras = ["python"] },
-]
-lint = [{ name = "ruff" }]
-profile = [
-    { name = "pyinstrument" },
-    { name = "scalene" },
+sdist = { url = "https://files.pythonhosted.org/packages/1a/c5/63497ba0f072aab399297563669ff58c03f4a1497e46d87b1c984c58bd0b/cortical_tools-0.0.5.tar.gz", hash = "sha256:de1c9a9fc68facd6975e5e204d0e95cc50780f4fb5fea3049f58ca19515b4fee", size = 576318, upload-time = "2025-09-25T16:17:42.331Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ac/0c/8f8503590d6f5e5cb77c1fe7bf2263e425309c02ff9ea32b1642cdb3e3f8/cortical_tools-0.0.5-py3-none-any.whl", hash = "sha256:fa8f2226b359514fddaab403875c8c61ac1d2456edf47840a031d5652569e949", size = 27635, upload-time = "2025-09-25T16:17:41.072Z" },
 ]
 
 [[package]]
@@ -2191,15 +2161,20 @@ wheels = [
 [[package]]
 name = "morphsync"
 version = "0.1.0"
-source = { git = "https://github.com/ceesem/morphsync.git?rev=v0.0.3-csm#70a5685777e271d1420589ceba943d1919d0244c" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cachetools" },
     { name = "fastremap" },
     { name = "joblib" },
+    { name = "networkx" },
     { name = "numpy" },
     { name = "pandas" },
     { name = "scikit-learn" },
     { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/18/14/58216f0e48f0eb77659298494ce89db989bf9a26ac2fefdade5e7f0e03bb/morphsync-0.1.0.tar.gz", hash = "sha256:32f43f61d021f97a35d14a9111863c07a13962cdca429b9194219572952f4499", size = 11321443, upload-time = "2025-09-30T21:49:14.024Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f4/b0/abebbd0024652e63f4c659170136c8fc274472d76e1d71b579b04ab78b41/morphsync-0.1.0-py3-none-any.whl", hash = "sha256:effb1e26576eee2e74c73db867941c7827a8fbb07bf622f67631a3e5d46bfc34", size = 14818, upload-time = "2025-09-30T21:49:11.699Z" },
 ]
 
 [[package]]
@@ -2554,13 +2529,12 @@ source = { editable = "." }
 dependencies = [
     { name = "caveclient" },
     { name = "cloud-files" },
-    { name = "cloud-volume" },
     { name = "matplotlib" },
     { name = "morphsync" },
     { name = "numpy" },
     { name = "orjson" },
     { name = "scipy" },
-    { name = "trimesh", extra = ["easy"] },
+    { name = "trimesh" },
 ]
 
 [package.optional-dependencies]
@@ -2598,14 +2572,13 @@ viz = [
 requires-dist = [
     { name = "caveclient", specifier = ">=7.6.0" },
     { name = "cloud-files", specifier = ">=5.8.0" },
-    { name = "cloud-volume", specifier = ">=11.1.5" },
     { name = "h5py", marker = "extra == 'legacy'", specifier = ">=3.14.0" },
     { name = "matplotlib", specifier = ">=3.10.6" },
-    { name = "morphsync", git = "https://github.com/ceesem/morphsync.git?rev=v0.0.3-csm" },
+    { name = "morphsync", specifier = "==0.1.0" },
     { name = "numpy", specifier = ">=2.0.2" },
     { name = "orjson", specifier = ">=3.10.15" },
     { name = "scipy", specifier = ">=1.15" },
-    { name = "trimesh", extras = ["easy"], specifier = ">=4.6.2" },
+    { name = "trimesh", specifier = ">=4.6.2" },
 ]
 provides-extras = ["legacy"]
 
@@ -2628,7 +2601,7 @@ profile = [
     { name = "scalene" },
 ]
 viz = [
-    { name = "cortical-tools", editable = "../cortical_tools" },
+    { name = "cortical-tools", specifier = ">=0.0.4" },
     { name = "pyvista" },
     { name = "seaborn", specifier = ">=0.13.2" },
 ]
@@ -2641,9 +2614,13 @@ dependencies = [
     { name = "fastremap" },
     { name = "networkx" },
     { name = "numpy" },
+    { name = "pybind11" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/8b/2e/e98aff6a5980244e18b53e0c1a9275b551fcb5593ade6de5752d14cbc147/osteoid-0.4.0.tar.gz", hash = "sha256:47a7356c6dd0e95e11a582a7e50551c4d24acf185118543e0dd2f74430f74cc7", size = 22859, upload-time = "2025-08-22T01:49:30.483Z" }
 wheels = [
+    { url = "https://files.pythonhosted.org/packages/97/5e/c5018e35e244b4c6ee7371ba74db4c1c0ee588dc8ffc195422821a4d059e/osteoid-0.4.0-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:c031cfaa12a477f5a04d8fdfed411705c2b8ae231eb0548fdffd0d46471b8ecb", size = 97244, upload-time = "2025-10-03T21:19:24.328Z" },
+    { url = "https://files.pythonhosted.org/packages/32/9a/5b6be73b646816902eb489b0b09a75df6a8ef2552c4d83292170304f9138/osteoid-0.4.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:07f4134e1dc28a6be152bdaec05e12e0c485f93952a9d15ac462dd58247dd373", size = 94674, upload-time = "2025-10-03T21:19:25.502Z" },
+    { url = "https://files.pythonhosted.org/packages/c2/ac/e468a01dfe8070346ecc8dff80391a6c392c1267b7d447b2842adc4ad6b7/osteoid-0.4.0-cp311-cp311-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:b9ec040e4ef811c27f6661d311fb17a6fc5e9e7ef5ade79ede7760fc5e6661a1", size = 105468, upload-time = "2025-10-03T21:19:26.372Z" },
     { url = "https://files.pythonhosted.org/packages/c8/52/01157438d577802d903bc1250459de2aeac0b5d6c1bb1f1db6c4e4a186b9/osteoid-0.4.0-py3-none-any.whl", hash = "sha256:0ecf9a5503eacdb07a86c3390897c9b4e9b532e5cc26c26fc56700159e9dc27d", size = 23297, upload-time = "2025-08-22T01:49:29.683Z" },
 ]
 
@@ -3087,6 +3064,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e9/e6/78ebbb10a8c8e4b61a59249394a4a594c1a7af95593dc933a349c8d00964/pyasn1_modules-0.4.2.tar.gz", hash = "sha256:677091de870a80aae844b1ca6134f54652fa2c8c5a52aa396440ac3106e941e6", size = 307892, upload-time = "2025-03-28T02:41:22.17Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/47/8d/d529b5d697919ba8c11ad626e835d4039be708a35b0d22de83a269a6682c/pyasn1_modules-0.4.2-py3-none-any.whl", hash = "sha256:29253a9207ce32b64c3ac6600edc75368f98473906e8fd1043bd6b5b1de2c14a", size = 181259, upload-time = "2025-03-28T02:41:19.028Z" },
+]
+
+[[package]]
+name = "pybind11"
+version = "3.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/2f/7b/a6d8dcb83c457e24a9df1e4d8fd5fb8034d4bbc62f3c324681e8a9ba57c2/pybind11-3.0.1.tar.gz", hash = "sha256:9c0f40056a016da59bab516efb523089139fcc6f2ba7e4930854c61efb932051", size = 546914, upload-time = "2025-08-22T20:09:27.265Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cd/8a/37362fc2b949d5f733a8b0f2ff51ba423914cabefe69f1d1b6aab710f5fe/pybind11-3.0.1-py3-none-any.whl", hash = "sha256:aa8f0aa6e0a94d3b64adfc38f560f33f15e589be2175e103c0a33c6bce55ee89", size = 293611, upload-time = "2025-08-22T20:09:25.235Z" },
 ]
 
 [[package]]

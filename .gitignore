@@ -111,3 +111,11 @@ var/
 *.orig
 *.sublime-workspace
 
+.polyscope.ini
+blah.png
+doc_notebook.ipynb
+imgui.ini
+mesh_labels.npy
+test2.png
+v1dd_types.ipynb
+src/ossify/test.ipynb
