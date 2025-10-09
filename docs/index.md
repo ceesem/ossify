@@ -8,16 +8,17 @@ Ossify is built around the concept of a `Cell`, which is a container for multipl
 
 ## Installation
 
-For right now, ossify must be installed from source locally or from the GitHub repository.
+Ossify is on pypi:
 
-The easiest way would be to add to your pyproject.toml file:
-
-```toml
-dependencies = [
-    "ossify @ git+https://github.com/ceesem/ossify.git@v0.0.0-pre"
-    ...
-]
 ```
+pip install ossify
+```
+
+Or, preferably, use `uv` and install by adding it to your `pyproject.toml`.
+
+Ossify requires python 3.11 or higher.
+
+Note that Ossify is currently in pre-release mode and the API may change without notice (although I will try to mention this in the [Changelog](./changelog.md))
 
 ## What can it do?
 
