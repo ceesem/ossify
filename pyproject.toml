@@ -39,8 +39,9 @@ dev = [
     "pytest-cov",
     "ipykernel",
     "bump-my-version",
-    "cloud-volume"
- ]
+    "cloud-volume",
+    "h5py>=3.14.0",
+]
 docs = [
     "mkdocs",
     "mkdocs-material",
