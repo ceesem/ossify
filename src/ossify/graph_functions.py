@@ -716,7 +716,7 @@ def find_leaf_nodes(
 def source_target_distances(
     sources: Union[np.ndarray, list],
     targets: Union[np.ndarray, list],
-    csgraph: Optional[sparse.csgraph],
+    csgraph: Optional[sparse.sparray] = None,
     limit: Optional[float] = None,
 ) -> np.ndarray:
     """
@@ -787,7 +787,7 @@ def build_segments(
     branch_points,
     child_nodes,
     hops_to_root,
-):
+) -> Tuple[List[np.ndarray], np.ndarray]:
     segments = []
     segment_map = np.full(len(vertices), -1)
     if len(branch_points) > 0:
@@ -802,6 +802,41 @@ def build_segments(
         segments.append(seg[np.argsort(hops_to_root[seg])[::-1]])
     segment_map = invs
     return segments, segment_map
+
+
+def build_capped_segments(
+    segments: List[np.ndarray],
+    vertices: np.ndarray,
+    max_length: float,
+) -> Tuple[List[np.ndarray], np.ndarray]:
+    capped_segments = []
+    segment_map = np.full(len(vertices), -1)
+    max_ind = 0
+    for seg in segments:
+        split_segs = split_segment(seg, vertices, max_length)
+        capped_segments.extend(split_segs)
+        for s in split_segs:
+            segment_map[s] = max_ind
+            max_ind += 1
+    return capped_segments, segment_map
+
+
+def split_segment(
+    path_inds: np.ndarray,
+    vertices: np.ndarray,
+    max_length: float,
+) -> List[np.ndarray]:
+    path_pts = vertices[path_inds]
+    len_delta = np.concatenate([[0], np.linalg.norm(np.diff(path_pts, axis=0), axis=1)])
+    cumulative_length = np.cumsum(len_delta)
+    if cumulative_length[-1] <= max_length:
+        return [path_inds]
+    num_splits = int(cumulative_length[-1] // max_length)
+    effective_max_length = cumulative_length[-1] / (num_splits + 1)
+    split_indices = (
+        np.where(np.diff(cumulative_length % effective_max_length) < 0)[0] + 1
+    )
+    return np.split(path_inds, split_indices[:-1])
 
 
 def build_cover_paths(

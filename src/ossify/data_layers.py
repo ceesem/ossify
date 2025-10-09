@@ -2375,6 +2375,29 @@ class SkeletonLayer(GraphLayer):
             )
         return self._dag_cache.segment_map
 
+    def segments_capped(
+        self, max_length: float, positional: bool = True
+    ) -> List[np.ndarray]:
+        """Get segments that are capped at a maximum length.
+
+        Parameters
+        ----------
+        max_length : float
+            The maximum length of each segment.
+        positional : bool, optional
+            Whether to return segments in positional indices. Default True.
+
+        Returns
+        -------
+        """
+        segments = self.segments_positional
+        capped_segs, capped_seg_map = gf.build_capped_segments(
+            segments, self.vertices, max_length
+        )
+        if positional:
+            capped_segs = [self.vertex_index[seg] for seg in capped_segs]
+        return capped_segs, capped_seg_map
+
     def expand_to_segment(
         self, vertices: Union[np.ndarray, List[int]], as_positional: bool = False
     ) -> List[np.ndarray]:
