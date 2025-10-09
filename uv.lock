@@ -1990,6 +1990,7 @@ legacy = [
 dev = [
     { name = "bump-my-version" },
     { name = "cloud-volume" },
+    { name = "h5py" },
     { name = "ipykernel" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -2029,6 +2030,7 @@ provides-extras = ["legacy"]
 dev = [
     { name = "bump-my-version" },
     { name = "cloud-volume" },
+    { name = "h5py", specifier = ">=3.14.0" },
     { name = "ipykernel" },
     { name = "pytest" },
     { name = "pytest-cov" },
