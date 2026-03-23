@@ -1,9 +1,6 @@
 # Algorithms and Analysis
 
-!!! warning "AI-Generated Documentation"
-    This documentation was generated with assistance from AI. While we strive for accuracy, errors may be present. If you find issues, unclear explanations, or have suggestions for improvement, please [report them on GitHub](https://github.com/ceesem/ossify/issues).
-
-Ossify provides a suite of algorithms for analyzing neuronal morphology, particularly focused on skeleton trees. These algorithms help classify compartments, analyze branching patterns, and compute morphological properties essential for neuroscience research.
+Ossify includes algorithms for common morphological analysis tasks: measuring branching complexity, classifying axon versus dendrite, quantifying synapse distributions, and smoothing noisy features. These algorithms operate on the skeleton's tree structure and use linked annotations (synapses) when available.
 
 !!! note "Skeleton-Focused Algorithms"
     Most algorithms in ossify are designed for skeleton layers since they represent tree structures essential for morphological analysis. Some algorithms can work with graphs, but they're optimized for tree topologies.

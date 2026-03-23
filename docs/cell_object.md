@@ -1,9 +1,6 @@
 # The Cell Object
 
-!!! warning "AI-Generated Documentation"
-    This documentation was generated with assistance from AI. While we strive for accuracy, errors may be present. If you find issues, unclear explanations, or have suggestions for improvement, please [report them on GitHub](https://github.com/ceesem/ossify/issues).
-
-The `Cell` is the central container in ossify that holds all morphological data for a single cellular structure. It manages different types of data layers and their relationships through a unified interface.
+The `Cell` is the central container in ossify. It holds all the representations of a single neuron — mesh, skeleton, graph, annotations — along with the links that connect them. Most ossify workflows start by creating or loading a Cell, then operating on its layers.
 
 ## Cell Architecture
 

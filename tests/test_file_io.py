@@ -94,10 +94,19 @@ class TestSaveAndLoadCell:
             loaded_cell.skeleton.feature_names == original_cell.skeleton.feature_names
         )
         for feature_name in original_cell.skeleton.feature_names:
-            np.testing.assert_array_equal(
-                loaded_cell.skeleton.get_feature(feature_name),
-                original_cell.skeleton.get_feature(feature_name),
-            )
+            original_feat = original_cell.skeleton.get_feature(feature_name)
+            loaded_feat = loaded_cell.skeleton.get_feature(feature_name)
+
+            # Use approximate equality for numeric types (handles float32 vs float64)
+            if np.issubdtype(loaded_feat.dtype, np.number):
+                np.testing.assert_allclose(
+                    loaded_feat,
+                    original_feat,
+                    rtol=1e-6,
+                    atol=1e-7,
+                )
+            else:
+                np.testing.assert_array_equal(loaded_feat, original_feat)
 
     def test_save_and_load_multi_layer_cell(
         self, simple_skeleton_data, simple_mesh_data, spatial_columns

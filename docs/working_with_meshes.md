@@ -1,9 +1,6 @@
 # Working with Meshes
 
-!!! warning "AI-Generated Documentation"
-    This documentation was generated with assistance from AI. While we strive for accuracy, errors may be present. If you find issues, unclear explanations, or have suggestions for improvement, please [report them on GitHub](https://github.com/ceesem/ossify/issues).
-
-Mesh layers in ossify represent surface data as collections of vertices and triangular faces. They're ideal for representing the 3D surface of cellular structures like neuron soma, dendrites, or entire cell bodies.
+Meshes represent the full 3D surface of a neuron — millions of vertices and triangular faces from the EM segmentation. Use meshes when you need surface area, volume, or detailed geometric information. For topology and branching analysis, the skeleton is usually more appropriate.
 
 !!! note "Shared Features"
     Meshes inherit many common features from the `PointMixin` class. For information about features, masking, transformations, spatial queries, and cross-layer mapping, see [Shared Layer Features](shared_layer_features.md).

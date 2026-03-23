@@ -1,9 +1,6 @@
-# Shared Layer Features
+# Features and Data on Layers
 
-!!! warning "AI-Generated Documentation"
-    This documentation was generated with assistance from AI. While we strive for accuracy, errors may be present. If you find issues, unclear explanations, or have suggestions for improvement, please [report them on GitHub](https://github.com/ceesem/ossify/issues).
-
-All ossify layers (meshes, graphs, skeletons, and point clouds) inherit common functionality through the `PointMixin` class. This document covers the features that work the same way across all layer types.
+Every layer in ossify — mesh, graph, skeleton, or annotation — carries vertex-level features: arrays of data attached to each vertex. Features are how you store and access properties like radius, compartment labels, volume, quality scores, and anything else you compute or import. This page covers the operations that work the same way across all layer types.
 
 ## Common Properties
 

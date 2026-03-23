@@ -1,18 +1,31 @@
-from typing import TYPE_CHECKING, Literal, Optional
+from enum import IntEnum
+from typing import TYPE_CHECKING, Literal, Optional, Tuple, Union
 
 import fastremap
 import numpy as np
 import pandas as pd
 
+from ossify.data_layers import SkeletonLayer
+
 from .base import Cell, Link
 from .utils import get_l2id_column, get_supervoxel_column, suppress_output
 
-__all__ = ["load_cell_from_client"]
+__all__ = ["load_cell_from_client", "SWCCompartment"]
 
 if TYPE_CHECKING:
     import datetime
 
     from caveclient import CAVEclientFull as CAVEclient
+
+
+class SWCCompartment(IntEnum):
+    """Standard SWC compartment labels. See https://swc-specification.readthedocs.io/en/latest/swc.html#id-type-x-y-z-radius-parent"""
+
+    UNDEFINED = 0
+    SOMA = 1
+    AXON = 2
+    DENDRITE = 3
+    APICAL_DENDRITE = 4
 
 
 def _process_synapse_table(
@@ -45,7 +58,7 @@ def _process_synapse_table(
             metadata=False,
         )
     if omit_autapses:
-        syn_df.query(f"{side_column} != {other_column}", inplace=True)
+        syn_df = syn_df[syn_df[side_column] != syn_df[other_column]]
 
     svid_column = get_supervoxel_column(side_column)
     l2_ids = client.chunkedgraph.get_roots(
@@ -236,3 +249,113 @@ def load_cell_from_client(
         )
 
     return nrn
+
+
+# def resample(
+#         sk: Union[Cell, SkeletonLayer],
+#         spacing, kind="linear",
+#         tip_length_ratio=0.5,
+#         avoid_root=True
+#     ) -> Tuple[SkeletonLayer, np.ndarray]:
+#     """Resample a skeleton's vertices
+
+#     Parameters
+#     ----------
+#     sk : Skeleton
+#         Input skeleton file with a skeleton
+#     spacing : numeric
+#         Desired spacing in nanometers
+#     kind : str, optional
+#         Type of interpolation to use when resampling. Options follow scipy.interpolate.interp1d. By default "linear"
+#     tip_length_ratio : float, optional
+#         The ratio of spacing to branch tip length that a branch tip must have in order to be included in the final skeleton
+#         for example: spacing is 10 and branch length is 8. The branch tip will be included if tip_length_ratio is .8 or lower,
+#         but excluded if tip_length_ratio is greater than 0.8.
+
+#     Returns
+#     -------
+#     Skeleton
+#         New skeleton with resampled vertices.
+
+#     resample_map
+#         Array where the ith index corresponds to the ith vertex of the resampled skeleton and the value
+#         is the associated index in the original skeleton. To assign vertices, we assign a "domain" to each
+#         vertex in the original skeleton that is halfway between the vertex and its neighbors. Resampled
+#         vertices that fall within that domain (based on topology and distance-to-root) are then associated
+#         with the original vertex.
+#     """
+#     path_counter = 0
+#     branch_d = {}
+#     vert_list = []
+#     edge_list = []
+#     output_map_list = []
+
+#     for path in sk.cover_paths:
+#         new_verts, new_edges, output_map_path, branch_d = resample_path(
+#             path,
+#             sk,
+#             path_counter,
+#             spacing,
+#             kind,
+#             tip_length_ratio,
+#             branch_d,
+#             avoid_root,
+#         )
+#         vert_list.append(new_verts)
+#         edge_list.append(new_edges)
+#         output_map_list.append(output_map_path)
+#         path_counter += len(new_verts)
+
+#     new_verts = np.vstack(vert_list)
+#     new_edges = np.vstack(edge_list)
+#     resample_map = np.concatenate(output_map_list)
+
+#     return (
+#         Skeleton(
+#             new_verts,
+#             new_edges,
+#             root=branch_d[int(sk.root)],
+#             remove_zero_length_edges=False,
+#         ),
+#         resample_map,
+#     )
+
+# def export_swc_dataframe(
+#     cell: Cell,
+#     resample_distance: Optional[float] = None,
+#     compartment: Optional[Union[str, list]] = None,
+#     compartment_mapping: Optional[dict] = None,
+#     radius: Optional[Union[str, list]] = None,
+#     rescale: Optional[float] = None,
+#     rescale_radius: bool = True,
+#     default_compartment_label: int = 0,
+#     default_radius: float = 1.0,
+# ) -> pd.DataFrame:
+#     """Export the skeleton layer of a Cell as a SWC-format DataFrame. See https://swc-specification.readthedocs.io/en/latest/swc.html for SWC format details.
+
+#     Parameters
+#     ----------
+#     cell : Cell
+#         The Cell object containing the skeleton to export.
+#     resample_distance : Optional[float]
+#         If provided, resample the skeleton vertices to be approximately this distance apart.
+#     compartment : Optional[Union[str, list]]
+#         If provided, the name(s) of annotation(s) to use for compartment labels. Can be a single annotation name or a list of names (if multiple annotations contain compartment info).
+#     compartment_mapping : Optional[dict]
+#         If provided, a mapping from original compartment labels to desired output labels. Only applied if `compartment` is provided.
+#     radius : Optional[Union[str, list]]
+#         If provided, the name(s) of feature(s) to use for radius values. Can be a single feature name or a list of names (if multiple features contain radius info).
+#     rescale : Optional[float]
+#         If provided, rescale all coordinates by this factor (e.g., to convert from nm to um).
+#     rescale_radius : bool
+#         Whether to apply the same rescaling factor to radius values (if `radius` is provided).
+#     default_compartment_label : int
+#         The default label to use for compartments if no compartment annotation is provided.
+#     default_radius : float
+#         The default radius to use if no radius annotation is provided.
+
+#     Returns
+#     -------
+#     pd.DataFrame
+#         A DataFrame in SWC format with columns: ["id", "type", "x", "y", "z", "radius", "parent"].
+#     """

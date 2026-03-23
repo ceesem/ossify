@@ -1,9 +1,6 @@
 # Masking and Filtering
 
-!!! warning "AI-Generated Documentation"
-    This documentation was generated with assistance from AI. While we strive for accuracy, errors may be present. If you find issues, unclear explanations, or have suggestions for improvement, please [report them on GitHub](https://github.com/ceesem/ossify/issues).
-
-Masking is a powerful feature in ossify that allows you to create filtered views of your data without permanently modifying the original. You can apply masks to individual layers or entire cells, enabling focused analysis on subsets of your morphological data.
+Masking lets you restrict analysis to a subset of a neuron — a single compartment, a spatial region, or vertices meeting a quality threshold. When you mask a layer that's linked to other layers, the mask propagates: annotations, features, and linked layers all update accordingly. This is how you go from "analyze the whole cell" to "analyze only the dendrite" in one line.
 
 !!! note "Shared Features"
     Masking functionality is available across all layer types through the `PointMixin` class. For information about other shared features, see [Shared Layer Features](shared_layer_features.md).

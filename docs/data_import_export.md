@@ -1,9 +1,6 @@
 # Data Import and Export
 
-!!! warning "AI-Generated Documentation"
-    This documentation was generated with assistance from AI. While we strive for accuracy, errors may be present. If you find issues, unclear explanations, or have suggestions for improvement, please [report them on GitHub](https://github.com/ceesem/ossify/issues).
-
-Ossify provides multiple ways to load and save cellular morphology data, from native ossify formats to external sources like CAVEclient and legacy MeshWork files. This guide covers all the import and export options available.
+Ossify supports several data sources: its native `.osy` format, live CAVE databases via CAVEclient, legacy MeshWork files, and raw arrays for custom pipelines. This page covers how to load, save, and convert data between these formats.
 
 ## Native Ossify Format
 
