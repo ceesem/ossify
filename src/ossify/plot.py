@@ -1,14 +1,20 @@
 from numbers import Number
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
-import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 from matplotlib.collections import LineCollection
-from matplotlib.colors import Colormap, ListedColormap, Normalize
 
-from .base import Cell, GraphLayer, MeshLayer, PointCloudLayer, SkeletonLayer
+from .base import Cell, PointCloudLayer, SkeletonLayer
+from .plot_utils import (
+    _create_discrete_color_dict,
+    _get_discrete_colormap,
+    _is_discrete_data,
+    _map_value_to_colors,
+    _rescale_scalar,
+    _resolve_color_parameter,
+    _resolve_scalar_parameter,
+)
 
 __all__ = [
     "plot_cell_2d",
@@ -24,313 +30,6 @@ __all__ = [
     "Rotation",
     "RotateCell",
 ]
-
-
-def _is_discrete_data(
-    values: np.ndarray, max_unique_ratio: float = 0.05, max_unique_count: int = 20
-) -> bool:
-    """Detect if data should be treated as discrete/categorical.
-
-    Parameters
-    ----------
-    values : np.ndarray
-        Array of values to analyze
-    max_unique_ratio : float, default 0.05
-        Maximum ratio of unique values to total values for discrete classification
-    max_unique_count : int, default 20
-        Maximum number of unique values for discrete classification
-
-    Returns
-    -------
-    bool
-        True if data appears to be discrete/categorical
-    """
-    values = np.asarray(values)
-
-    # Always treat string/object data as discrete
-    if values.dtype.kind in ["U", "S", "O"]:
-        return True
-
-    # Always treat boolean data as discrete
-    if values.dtype == bool:
-        return True
-
-    # For numeric data, check uniqueness
-    unique_vals = np.unique(values[~pd.isna(values)])
-    n_unique = len(unique_vals)
-    n_total = len(values)
-
-    if n_total == 0:
-        return False
-
-    unique_ratio = n_unique / n_total
-
-    # Consider discrete if few unique values OR low unique ratio
-    return n_unique <= max_unique_count or unique_ratio <= max_unique_ratio
-
-
-def _get_discrete_colormap(colormap_name: str, n_colors: int) -> ListedColormap:
-    """Get a discrete colormap with specified number of colors.
-
-    Parameters
-    ----------
-    colormap_name : str
-        Name of the colormap or 'auto' for automatic selection
-    n_colors : int
-        Number of discrete colors needed
-
-    Returns
-    -------
-    ListedColormap
-        Discrete colormap with n_colors
-    """
-    # Automatic colormap selection based on number of colors
-    if colormap_name == "auto":
-        if n_colors <= 10:
-            colormap_name = "tab10"
-        elif n_colors <= 20:
-            colormap_name = "tab20"
-        else:
-            colormap_name = "hsv"  # For many categories, use HSV
-
-    # Handle standard qualitative colormaps
-    qualitative_maps = {
-        "Set1": 9,
-        "Set2": 8,
-        "Set3": 12,
-        "Pastel1": 9,
-        "Pastel2": 8,
-        "Dark2": 8,
-        "Accent": 8,
-        "tab10": 10,
-        "tab20": 20,
-        "tab20b": 20,
-        "tab20c": 20,
-    }
-
-    if colormap_name in qualitative_maps:
-        base_cmap = plt.get_cmap(colormap_name)
-        max_colors = qualitative_maps[colormap_name]
-
-        if n_colors <= max_colors:
-            # Use the colormap as-is
-            colors = [base_cmap(i) for i in range(n_colors)]
-        else:
-            # Repeat colors if we need more than available
-            colors = [base_cmap(i % max_colors) for i in range(n_colors)]
-
-        return ListedColormap(colors)
-
-    # For continuous colormaps, sample evenly
-    base_cmap = plt.get_cmap(colormap_name)
-    if n_colors == 1:
-        colors = [base_cmap(0.5)]  # Use middle color for single category
-    else:
-        colors = [base_cmap(i / (n_colors - 1)) for i in range(n_colors)]
-
-    return ListedColormap(colors)
-
-
-def _create_discrete_color_dict(
-    values: np.ndarray,
-    colormap: Union[str, Colormap, ListedColormap] = "auto",
-    missing_color: Union[str, Tuple[float, ...]] = "gray",
-) -> Dict:
-    """Create a color dictionary for discrete/categorical data.
-
-    Parameters
-    ----------
-    values : np.ndarray
-        Array of discrete values
-    colormap : str, Colormap, or ListedColormap, default 'auto'
-        Colormap specification
-    missing_color : str or tuple, default 'gray'
-        Color to use for missing/unmapped values
-
-    Returns
-    -------
-    Dict
-        Dictionary mapping values to colors
-    """
-    values = np.asarray(values)
-    unique_vals = np.unique(values[~pd.isna(values)])
-    n_unique = len(unique_vals)
-
-    if n_unique == 0:
-        return {}
-
-    # Get discrete colormap
-    if isinstance(colormap, str):
-        discrete_cmap = _get_discrete_colormap(colormap, n_unique)
-    elif isinstance(colormap, ListedColormap):
-        discrete_cmap = colormap
-    else:
-        # Convert continuous colormap to discrete
-        if n_unique == 1:
-            colors = [colormap(0.5)]
-        else:
-            colors = [colormap(i / (n_unique - 1)) for i in range(n_unique)]
-        discrete_cmap = ListedColormap(colors)
-
-    # Create color dictionary
-    color_dict = {}
-    for i, val in enumerate(unique_vals):
-        color_dict[val] = discrete_cmap.colors[i % len(discrete_cmap.colors)]
-
-    # Add missing value color if needed
-    if missing_color is not None:
-        color_dict["__missing__"] = missing_color
-
-    return color_dict
-
-
-def _map_value_to_colors(
-    values: np.ndarray,
-    colormap: Union[str, Colormap, Dict] = "cmc.hawaii",
-    color_norm: Optional[Tuple[float, float]] = None,
-    alpha: Union[float, np.ndarray] = 1.0,
-    force_discrete: Optional[bool] = None,
-    missing_color: Union[str, Tuple[float, ...]] = "gray",
-) -> np.ndarray:
-    """Map values to colors with automatic discrete/continuous detection.
-
-    Parameters
-    ----------
-    values : np.ndarray
-        Array of values to map to colors
-    colormap : str, Colormap, or Dict, default "cmc.hawaii"
-        Colormap specification
-    color_norm : tuple of float, optional
-        (min, max) tuple for color normalization (continuous data only)
-    alpha : float or np.ndarray, default 1.0
-        Alpha value(s) for colors
-    force_discrete : bool, optional
-        Force discrete (True) or continuous (False) mapping. If None, auto-detect.
-    missing_color : str or tuple, default 'gray'
-        Color for unmapped values in discrete mode
-
-    Returns
-    -------
-    np.ndarray
-        RGBA color array
-    """
-    values = np.asarray(values)
-
-    # Handle alpha
-    if isinstance(alpha, (list, np.ndarray)):
-        alpha = np.asarray(alpha)
-        if len(alpha) != len(values):
-            raise ValueError("Alpha array must have same length as values")
-    else:
-        alpha = np.full(len(values), alpha)
-
-    # Convert boolean to integer for processing
-    if values.dtype == bool:
-        values = values.astype(int)
-
-    # Handle explicit dictionary colormap (always discrete)
-    if isinstance(colormap, dict):
-        rgba_colors = np.zeros((len(values), 4))
-        rgba_colors[:, 3] = alpha  # Set alpha channel
-
-        # Handle missing color
-        missing_rgb = (
-            cm.colors.to_rgb(missing_color)
-            if isinstance(missing_color, str)
-            else missing_color[:3]
-        )
-
-        for i, val in enumerate(values):
-            if pd.isna(val):
-                rgba_colors[i, :3] = missing_rgb
-            elif val not in colormap:
-                rgba_colors[i, :3] = missing_rgb
-            else:
-                color = colormap[val]
-                # Convert various color formats to RGB
-                if isinstance(color, str):
-                    if color.startswith("#"):
-                        # Hex color
-                        rgb = tuple(
-                            int(color[j : j + 2], 16) / 255.0 for j in (1, 3, 5)
-                        )
-                    else:
-                        # Named color - use matplotlib
-                        rgb = cm.colors.to_rgb(color)
-                else:
-                    # Assume RGB tuple or RGBA tuple
-                    rgb = color[:3]
-                rgba_colors[i, :3] = rgb
-
-        # Return RGB for consistency with original behavior, unless alpha varies or is not 1.0
-        if isinstance(alpha, np.ndarray):
-            if not np.allclose(alpha, 1.0):
-                return rgba_colors
-        elif not np.isclose(alpha, 1.0):
-            return rgba_colors
-        return rgba_colors[:, :3]
-
-    # Determine if data should be treated as discrete
-    is_discrete = force_discrete
-    if is_discrete is None:
-        is_discrete = _is_discrete_data(values)
-
-    if is_discrete:
-        # Create discrete color dictionary and map
-        color_dict = _create_discrete_color_dict(values, colormap, missing_color)
-        return _map_value_to_colors(
-            values, color_dict, alpha=alpha, missing_color=missing_color
-        )
-
-    # Handle continuous mapping
-    if isinstance(colormap, str):
-        cmap = plt.get_cmap(colormap)
-    else:
-        cmap = colormap
-
-    # Clean values for continuous mapping (remove NaNs)
-    clean_values = values.copy().astype(float)
-    nan_mask = pd.isna(clean_values)
-
-    # Apply normalization
-    if color_norm is not None:
-        vmin, vmax = color_norm
-        norm = Normalize(vmin=vmin, vmax=vmax)
-        normalized_values = norm(clean_values)
-    else:
-        # Auto-normalize to [0, 1]
-        valid_values = clean_values[~nan_mask]
-        if len(valid_values) == 0:
-            normalized_values = np.zeros_like(clean_values)
-        else:
-            vmin, vmax = np.nanmin(valid_values), np.nanmax(valid_values)
-            if vmin == vmax:
-                normalized_values = np.zeros_like(clean_values)
-            else:
-                normalized_values = (clean_values - vmin) / (vmax - vmin)
-
-    # Map to colors
-    rgba_colors = cmap(normalized_values)
-
-    # Handle NaN values by setting them to missing color
-    if np.any(nan_mask):
-        missing_rgb = (
-            cm.colors.to_rgb(missing_color)
-            if isinstance(missing_color, str)
-            else missing_color[:3]
-        )
-        rgba_colors[nan_mask, :3] = missing_rgb
-
-    # Apply alpha
-    rgba_colors[:, 3] = alpha
-
-    # Return RGB for consistency with original behavior, unless alpha varies or is not 1.0
-    if isinstance(alpha, np.ndarray):
-        if not np.allclose(alpha, 1.0):
-            return rgba_colors
-    elif not np.isclose(alpha, 1.0):
-        return rgba_colors
-    return rgba_colors[:, :3]
 
 
 def _should_invert_y_axis(projection: Union[str, Callable]) -> bool:
@@ -997,35 +696,6 @@ def plot_skeleton(
     return ax
 
 
-def _resolve_color_parameter(
-    color_param: Union[str, np.ndarray, tuple, Any], skel: SkeletonLayer
-) -> Union[np.ndarray, str, tuple, None]:
-    """Resolve color parameter - try features first, then matplotlib colors.
-
-    Parameters
-    ----------
-    color_param : str, np.ndarray, tuple, or Any
-        Color specification to resolve
-    skel : SkeletonLayer
-        Skeleton layer to look up features from
-
-    Returns
-    -------
-    np.ndarray, str, tuple, or None
-        Resolved color parameter - array if feature found, original value otherwise
-    """
-    if isinstance(color_param, str):
-        # Try to get as feature first
-        try:
-            return skel.get_feature(color_param)
-        except (KeyError, AttributeError):
-            # Fall back to matplotlib color
-            return color_param
-    else:
-        # Return as-is (array, tuple, etc.)
-        return color_param
-
-
 def plot_points(
     points: np.ndarray,
     sizes: Optional[np.ndarray] = None,
@@ -1101,34 +771,6 @@ def plot_points(
     ax = _apply_y_inversion_to_axes(ax, orig_projection, invert_y)
 
     return ax
-
-
-def _rescale_scalar(
-    value: np.ndarray,
-    norm: Optional[Tuple[float, float]],
-    out_range: Optional[Tuple[float, float]],
-) -> np.ndarray:
-    """Linearly rescale a scalar value to a new range with clipping
-
-    Parameters
-    ----------
-    value : np.ndarray
-        Value to rescale
-    norm : tuple of float
-        (min, max) tuple for normalization
-
-    Returns
-    -------
-    np.ndarray
-        Rescaled value
-    """
-    if norm is None:
-        norm = (np.min(value), np.max(value))
-    if out_range is None:
-        out_range = (np.min(value), np.max(value))
-    return (out_range[1] - out_range[0]) * np.asarray(
-        Normalize(*norm, clip=True)(value)
-    ) + out_range[0]
 
 
 def plot_annotations_2d(
@@ -1275,46 +917,26 @@ def plot_morphology_2d(
             single_color = mcolors.to_rgba(resolved_color)
             colors_array = np.tile(single_color, (skel.n_vertices, 1))
 
-    # Process alpha (similar to existing logic)
-    alpha_array = None
+    # Process alpha: arrays without a norm are assumed pre-normalized to [0, 1]
     if alpha_extent is None:
         alpha_extent = (0.1, 1.0)
-    if isinstance(alpha, str):
-        alpha_values = skel.get_feature(alpha)
-        if alpha_norm is None:
-            alpha_norm = (np.min(alpha_values), np.max(alpha_values))
-        alpha_array = np.asarray(Normalize(*alpha_norm, clip=True)(alpha_values))
-        alpha_array = alpha_array[0] + alpha_array * (alpha_extent[1] - alpha_extent[0])
-    elif isinstance(alpha, (np.ndarray, list, pd.Series)):
-        if alpha_norm is not None:
-            alpha_array = np.asarray(Normalize(*alpha_norm, clip=True)(alpha))
-            alpha_array = alpha_extent[0] + alpha_array * (
-                alpha_extent[1] - alpha_extent[0]
-            )
-        else:
-            alpha_array = np.asarray(alpha)
-    elif isinstance(alpha, Number):
-        alpha_array = np.full(skel.n_vertices, alpha)
+    rescale_alpha = isinstance(alpha, str) or alpha_norm is not None
+    alpha_array = _resolve_scalar_parameter(
+        alpha,
+        skel.n_vertices,
+        norm=alpha_norm,
+        out_range=alpha_extent if rescale_alpha else None,
+        layer=skel,
+    )
 
-    # Process linewidth (similar to existing logic)
-    linewidth_array = None
-    if isinstance(linewidth, str):
-        linewidth_values = skel.get_feature(linewidth)
-        if linewidth_norm is None:
-            linewidth_norm = (np.min(linewidth_values), np.max(linewidth_values))
-        normalized = Normalize(*linewidth_norm, clip=True)(linewidth_values)
-        if widths is None:
-            widths = (np.min(linewidth_values), np.max(linewidth_values))
-        linewidth_array = widths[0] + (widths[1] - widths[0]) * normalized
-    elif isinstance(linewidth, (np.ndarray, list, pd.Series)):
-        if linewidth_norm is None:
-            linewidth_norm = (np.min(linewidth), np.max(linewidth))
-        normalized = Normalize(*linewidth_norm, clip=True)(linewidth)
-        if widths is None:
-            widths = (np.min(linewidth), np.max(linewidth))
-        linewidth_array = widths[0] + (widths[1] - widths[0]) * normalized
-    elif isinstance(linewidth, Number):
-        linewidth_array = np.full(skel.n_vertices, linewidth)
+    # Process linewidth: always normalize and rescale to widths range
+    linewidth_array = _resolve_scalar_parameter(
+        linewidth,
+        skel.n_vertices,
+        norm=linewidth_norm,
+        out_range=widths,
+        layer=skel,
+    )
 
     # Call the core plotting function
     ax = plot_skeleton(

@@ -74,15 +74,13 @@ def build_parent_node_array(vertices, edges) -> np.ndarray:
 
 
 def build_child_node_dictionary(vertices, csgraph) -> dict:
-    # Get unique values and inverse mapping
-    _, col_idx = csgraph.nonzero()
+    row_idx, col_idx = csgraph.nonzero()
     unique_vals, inverse_indices = np.unique(col_idx, return_inverse=True)
 
-    # Create dictionary
     col_dict = {}
     for i, unique_val in enumerate(unique_vals):
         if unique_val in vertices:
-            col_dict[unique_val] = np.where(inverse_indices == i)[0]
+            col_dict[unique_val] = row_idx[inverse_indices == i]
     return col_dict
 
 
@@ -905,45 +903,56 @@ def build_proximity_lists_chunked(
     return np.concatenate(index_list), np.concatenate(proximity_list)
 
 
-# def resample_tree(
-#     vertices: np.ndarray,
-#     edges: np.ndarray,
-#     spacing: float,
-#     interpolation_method: Literal["linear", "nearest", "zero", "slinear", "quadratic", "cubic"] = "linear",
-#     tip_min_ratio: float=0.5,
-#     avoid_root: bool=True,
-# ) -> Tuple[np.ndarray, np.ndarray]:
-#     """
-#     Resample tree vertices along edges to achieve approximately uniform spacing.
+def resample_segment(
+    path_positions: np.ndarray,
+    spacing: float,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Resample a polyline path to achieve approximately uniform vertex spacing.
 
-#     Parameters
-#     ----------
-#     vertices : np.ndarray
-#         Array of shape (n_vertices, 3) containing 3D positions of vertices.
-#     edges : np.ndarray
-#         Array of shape (n_edges, 2) where each row is [parent_id, child_id].
-#     spacing : float
-#         Desired spacing between resampled vertices along the tree.
-#     interpolation_method : Literal["linear", "nearest", "zero", "slinear", "quadratic", "cubic"], optional
-#         Type of interpolation to use when resampling. Options follow scipy.interpolate.interp1d. By default "linear".
-#     tip_min_ratio : float, optional
-#         Minimum ratio of branch tip length to spacing for the tip to be included in resampling. Default is 0.5.
-#         For example, if spacing is 10 and branch tip length is 6, the tip will be included only if tip_min_ratio is 0.6 or lower.
-#     avoid_root: bool, optional
-#         Whether to avoid resampling vertices between the root node and the first vertex.
-#         If the root node is a soma, this avoids creating new vertices within the soma.
-#         If the root node is not a soma, this can be set to False.
-#         Default is True.
+    Endpoints are always preserved exactly. Interior vertices are replaced with
+    new vertices at evenly spaced intervals along the path.
 
-#     Returns
-#     -------
-#     Tuple[np.ndarray, np.ndarray]
-#         A tuple containing:
-#         - resampled_vertices: Array of shape (m_vertices, 3) with resampled vertex positions.
-#         - resampled_edges: Array of shape (m_edges, 2) with edges connecting resampled vertices.
+    Parameters
+    ----------
+    path_positions : np.ndarray
+        Array of shape (n, 3) with 3D positions along the path. First and last
+        rows are the endpoint topo points that will be preserved.
+    spacing : float
+        Target Euclidean distance between consecutive vertices.
 
-#     Notes
-#     -----
-#     This function traverses the tree structure and places new vertices at regular intervals along the edges.
-#     The original vertices are included in the resampled set, and new vertices are added as needed to maintain the specified spacing.
-#     """
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray]
+        - new_positions: Array of shape (m, 3) with resampled vertex positions.
+          First and last rows match the input endpoints exactly.
+        - nearest_original_idx: Array of shape (m,) mapping each new vertex to
+          the index (into path_positions) of the nearest original vertex by
+          cumulative path distance.
+    """
+    edge_lengths = np.linalg.norm(np.diff(path_positions, axis=0), axis=1)
+    cumulative = np.concatenate(([0.0], np.cumsum(edge_lengths)))
+    total_length = cumulative[-1]
+
+    if total_length == 0 or len(path_positions) <= 2:
+        nearest_original_idx = np.arange(len(path_positions))
+        return path_positions.copy(), nearest_original_idx
+
+    n_intervals = max(1, round(total_length / spacing))
+    new_cumulative = np.linspace(0, total_length, n_intervals + 1)
+
+    # Interpolate positions at new cumulative distances
+    new_positions = np.empty((len(new_cumulative), path_positions.shape[1]))
+    new_positions[0] = path_positions[0]
+    new_positions[-1] = path_positions[-1]
+
+    for dim in range(path_positions.shape[1]):
+        new_positions[1:-1, dim] = np.interp(
+            new_cumulative[1:-1], cumulative, path_positions[:, dim]
+        )
+
+    # Map each new vertex to the nearest original vertex by path distance
+    nearest_original_idx = np.array(
+        [np.argmin(np.abs(cumulative - d)) for d in new_cumulative]
+    )
+
+    return new_positions, nearest_original_idx

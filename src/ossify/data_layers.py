@@ -2482,6 +2482,194 @@ class SkeletonLayer(GraphLayer):
         else:
             return result
 
+    def resample(
+        self,
+        spacing: float,
+        skip_root_adjacent: bool = False,
+        feature_agg: Union[str, dict] = "nearest",
+    ) -> "SkeletonLayer":
+        """Resample skeleton vertices to achieve approximately uniform spacing.
+
+        Topological points (branch points, end points, root) are always preserved.
+        Only the interior vertices of each unbranched segment are resampled.
+
+        Parameters
+        ----------
+        spacing : float
+            Target Euclidean distance between consecutive vertices along each
+            segment. Actual spacing is adjusted per-segment to evenly divide
+            the total segment length.
+        skip_root_adjacent : bool, optional
+            If True, segments directly connected to the root vertex are left
+            unchanged. Useful when the root is a soma and densifying near it
+            is undesirable. Default False.
+        feature_agg : Union[str, dict], optional
+            How to remap features to new vertices.
+            - ``"nearest"``: each new vertex gets the feature value of the nearest
+              original vertex by path distance. Works for both upsampling and
+              downsampling and is safe for categorical features. Default.
+            - dict: mapping of ``{feature_name: agg_func}`` where *agg_func* is
+              a pandas-compatible aggregation string (e.g. ``"mean"``,
+              ``"median"``). Original vertices are grouped by nearest new vertex
+              and aggregated. Features not in the dict fall back to ``"nearest"``.
+
+        Returns
+        -------
+        SkeletonLayer
+            A new skeleton with resampled vertices, rebuilt edges, and remapped
+            features. Original topological-point vertex indices are preserved;
+            new interior vertices receive fresh integer indices.
+
+        Examples
+        --------
+        >>> resampled = cell.skeleton.resample(spacing=1000)
+        >>> resampled = cell.skeleton.resample(spacing=500, skip_root_adjacent=True)
+        >>> resampled = cell.skeleton.resample(
+        ...     spacing=2000, feature_agg={"radius": "mean"}
+        ... )
+        """
+        segments = self.segments_positional
+        segments_plus = self.segments_plus_positional
+        root_pos = self.root_positional
+        pna = self.parent_node_array
+
+        # Vertex collection: map vertex_id -> (position, orig_positional_idx)
+        vertex_data = {}  # vertex_id -> (position_array, orig_pos_idx)
+        segment_id_paths = []  # list of vertex_id sequences for edge building
+
+        next_new_id = int(self.vertex_index.max()) + 1
+
+        for seg, seg_plus in zip(segments, segments_plus):
+            parent_pos = pna[seg[-1]]
+            has_parent = parent_pos != -1
+
+            # Use segments_plus geometry for resampling so spacing is correct
+            # at the boundary, but omit the final topo point from output.
+            if has_parent:
+                geom_path = seg_plus
+            else:
+                geom_path = seg
+
+            if len(geom_path) < 2:
+                # Single-vertex segment (e.g. isolated endpoint): just emit
+                vid = int(self.vertex_index[seg[0]])
+                if vid not in vertex_data:
+                    vertex_data[vid] = (self.vertices[seg[0]].copy(), int(seg[0]))
+                segment_id_paths.append([vid])
+                continue
+
+            is_root_adjacent = root_pos in (geom_path[0], geom_path[-1])
+            path_positions = self.vertices[geom_path]
+
+            if skip_root_adjacent and is_root_adjacent:
+                new_pos = path_positions
+                nearest_orig = np.arange(len(geom_path))
+            else:
+                new_pos, nearest_orig = gf.resample_segment(path_positions, spacing)
+
+            # Emit all resampled vertices except the last (the parent topo point)
+            # if this segment has a parent. The parent is owned by another segment.
+            n_emit = len(new_pos) - 1 if has_parent else len(new_pos)
+
+            seg_ids = []
+            for i in range(n_emit):
+                orig_pos_idx = int(geom_path[nearest_orig[i]])
+                is_first = i == 0
+                is_last_emitted = i == n_emit - 1
+
+                if is_first:
+                    # Distal topo point — preserve original vertex index
+                    topo_idx = seg[0]
+                    vid = int(self.vertex_index[topo_idx])
+                    if vid not in vertex_data:
+                        vertex_data[vid] = (
+                            self.vertices[topo_idx].copy(),
+                            int(topo_idx),
+                        )
+                elif is_last_emitted and not has_parent:
+                    # Proximal end of root segment — preserve original vertex index
+                    topo_idx = seg[-1]
+                    vid = int(self.vertex_index[topo_idx])
+                    if vid not in vertex_data:
+                        vertex_data[vid] = (
+                            self.vertices[topo_idx].copy(),
+                            int(topo_idx),
+                        )
+                elif skip_root_adjacent and is_root_adjacent:
+                    pos_idx = int(geom_path[i])
+                    vid = int(self.vertex_index[pos_idx])
+                    if vid not in vertex_data:
+                        vertex_data[vid] = (self.vertices[pos_idx].copy(), pos_idx)
+                else:
+                    vid = next_new_id
+                    next_new_id += 1
+                    vertex_data[vid] = (new_pos[i].copy(), orig_pos_idx)
+
+                seg_ids.append(vid)
+
+            # Add connecting edge to parent topo point
+            if has_parent:
+                parent_vid = int(self.vertex_index[parent_pos])
+                seg_ids.append(parent_vid)
+
+            segment_id_paths.append(seg_ids)
+
+        # Assemble arrays in stable insertion order
+        new_vertex_ids = np.array(list(vertex_data.keys()))
+        new_vertices = np.array([vertex_data[v][0] for v in new_vertex_ids])
+        orig_positional_indices = np.array([vertex_data[v][1] for v in new_vertex_ids])
+
+        # Build edges from segment paths (each path already includes the parent
+        # topo point as the final entry, so sequential pairs give all edges).
+        edge_list = []
+        for path_ids in segment_id_paths:
+            for i in range(len(path_ids) - 1):
+                edge_list.append([path_ids[i], path_ids[i + 1]])
+        new_edges = (
+            np.array(edge_list, dtype=int) if edge_list else np.empty((0, 2), dtype=int)
+        )
+
+        # Build feature DataFrame
+        feature_df = None
+        if len(self.feature_names) > 0:
+            orig_features = self.features.iloc[orig_positional_indices].copy()
+            orig_features.index = new_vertex_ids
+
+            if isinstance(feature_agg, str) and feature_agg == "nearest":
+                feature_df = orig_features[
+                    ~orig_features.index.duplicated(keep="first")
+                ]
+            elif isinstance(feature_agg, dict):
+                feature_df = orig_features.copy()
+                for fname, agg_func in feature_agg.items():
+                    if fname in feature_df.columns:
+                        grouped = orig_features.groupby(orig_features.index)[fname].agg(
+                            agg_func
+                        )
+                        feature_df[fname] = grouped
+                feature_df = feature_df[~feature_df.index.duplicated(keep="first")]
+            else:
+                feature_df = orig_features[
+                    ~orig_features.index.duplicated(keep="first")
+                ]
+
+        # Build vertex DataFrame
+        vertex_df = pd.DataFrame(
+            new_vertices,
+            columns=self.spatial_columns,
+            index=new_vertex_ids,
+        )
+        if feature_df is not None:
+            vertex_df = vertex_df.join(feature_df)
+
+        return SkeletonLayer(
+            name=self.name,
+            vertices=vertex_df,
+            edges=new_edges,
+            spatial_columns=self.spatial_columns,
+            root=self.root,
+        )
+
     def __repr__(self) -> str:
         return f"SkeletonLayer(name={self.name}, vertices={self.vertices.shape[0]}, edges={self.edges.shape[0]})"
 

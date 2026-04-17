@@ -891,3 +891,161 @@ class TestMappingFunctionality:
         # Test that mapping functions exist and return valid data
         assert mapping_drop is not None
         assert mapping_keep is not None
+
+
+class TestSkeletonResample:
+    """Tests for SkeletonLayer.resample() functionality."""
+
+    def _make_skeleton(
+        self, vertices, edges, vertex_indices, spatial_columns, features=None
+    ):
+        """Helper to build a Cell with a skeleton."""
+        vertex_df = pd.DataFrame(
+            vertices, columns=spatial_columns, index=vertex_indices
+        )
+        if features is not None:
+            for fname, fvals in features.items():
+                vertex_df[fname] = fvals
+
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=vertex_df,
+            edges=edges,
+            spatial_columns=spatial_columns,
+            root=vertex_indices[0],
+        )
+        return cell.skeleton
+
+    def test_resample_linear_upsampling(self, simple_skeleton_data, spatial_columns):
+        """Upsampling a linear skeleton should increase vertex count."""
+        vertices, _, vertex_indices = simple_skeleton_data
+        # Edges using vertex indices
+        edges = np.array([[101, 100], [102, 101], [103, 102], [104, 103]])
+
+        skeleton = self._make_skeleton(vertices, edges, vertex_indices, spatial_columns)
+        # Original: 5 vertices, spacing=1.0 between them, total length=4.0
+        # Resample with spacing=0.5 -> expect ~8 intervals -> ~9 vertices
+        resampled = skeleton.resample(spacing=0.5)
+
+        assert resampled.n_vertices > skeleton.n_vertices
+        assert resampled.root == 100  # Root preserved
+
+    def test_resample_linear_downsampling(self, simple_skeleton_data, spatial_columns):
+        """Downsampling a linear skeleton should reduce vertex count."""
+        vertices, _, vertex_indices = simple_skeleton_data
+        edges = np.array([[101, 100], [102, 101], [103, 102], [104, 103]])
+
+        skeleton = self._make_skeleton(vertices, edges, vertex_indices, spatial_columns)
+        # Original spacing=1.0, resample with spacing=2.0 -> fewer vertices
+        resampled = skeleton.resample(spacing=2.0)
+
+        assert resampled.n_vertices < skeleton.n_vertices
+        assert resampled.root == 100
+
+    def test_resample_preserves_topo_points(
+        self, branched_skeleton_data, spatial_columns
+    ):
+        """Branch points, end points, and root should be preserved exactly."""
+        vertices, _, vertex_indices = branched_skeleton_data
+        edges = np.array([[101, 100], [102, 101], [103, 101], [104, 102]])
+
+        skeleton = self._make_skeleton(vertices, edges, vertex_indices, spatial_columns)
+        resampled = skeleton.resample(spacing=0.3)
+
+        # All original topo point vertex IDs should be in the resampled skeleton
+        for tp in skeleton.topo_points:
+            assert tp in resampled.vertex_index, (
+                f"Topo point {tp} missing from resampled skeleton"
+            )
+
+        # Topo point positions should match exactly
+        for tp in skeleton.topo_points:
+            orig_pos = skeleton.vertex_df.loc[tp, spatial_columns].values
+            new_pos = resampled.vertex_df.loc[tp, spatial_columns].values
+            np.testing.assert_array_equal(orig_pos, new_pos)
+
+    def test_resample_preserves_cable_length(
+        self, branched_skeleton_data, spatial_columns
+    ):
+        """Total cable length should be approximately preserved."""
+        vertices, _, vertex_indices = branched_skeleton_data
+        edges = np.array([[101, 100], [102, 101], [103, 101], [104, 102]])
+
+        skeleton = self._make_skeleton(vertices, edges, vertex_indices, spatial_columns)
+        resampled = skeleton.resample(spacing=0.3)
+
+        orig_length = skeleton.cable_length()
+        new_length = resampled.cable_length()
+        # Resampling a polyline with angled segments introduces small chord-vs-arc
+        # differences. For a straight-line skeleton the match is exact; for angled
+        # segments the error scales with (spacing / radius_of_curvature)^2.
+        np.testing.assert_allclose(orig_length, new_length, rtol=0.01)
+
+    def test_resample_skip_root_adjacent(self, branched_skeleton_data, spatial_columns):
+        """skip_root_adjacent should leave root-connected segments unchanged."""
+        vertices, _, vertex_indices = branched_skeleton_data
+        edges = np.array([[101, 100], [102, 101], [103, 101], [104, 102]])
+
+        skeleton = self._make_skeleton(vertices, edges, vertex_indices, spatial_columns)
+        resampled_skip = skeleton.resample(spacing=0.3, skip_root_adjacent=True)
+        resampled_noskip = skeleton.resample(spacing=0.3, skip_root_adjacent=False)
+
+        # The skip version should have fewer (or equal) vertices since some segments aren't resampled
+        assert resampled_skip.n_vertices <= resampled_noskip.n_vertices
+
+    def test_resample_feature_nearest(self, simple_skeleton_data, spatial_columns):
+        """Nearest feature mapping should assign correct values."""
+        vertices, _, vertex_indices = simple_skeleton_data
+        edges = np.array([[101, 100], [102, 101], [103, 102], [104, 103]])
+        features = {"radius": [0.5, 0.6, 0.4, 0.7, 0.3]}
+
+        skeleton = self._make_skeleton(
+            vertices, edges, vertex_indices, spatial_columns, features=features
+        )
+        resampled = skeleton.resample(spacing=0.5, feature_agg="nearest")
+
+        # All new vertices should have a radius value
+        assert "radius" in resampled.feature_names
+        radii = resampled.get_feature("radius")
+        assert len(radii) == resampled.n_vertices
+        # All radius values should come from the original set
+        assert all(r in [0.5, 0.6, 0.4, 0.7, 0.3] for r in radii)
+
+    def test_resample_feature_agg_dict(self, simple_skeleton_data, spatial_columns):
+        """Dict-based aggregation should work for downsampling."""
+        vertices, _, vertex_indices = simple_skeleton_data
+        edges = np.array([[101, 100], [102, 101], [103, 102], [104, 103]])
+        features = {"radius": [0.5, 0.6, 0.4, 0.7, 0.3]}
+
+        skeleton = self._make_skeleton(
+            vertices, edges, vertex_indices, spatial_columns, features=features
+        )
+        resampled = skeleton.resample(spacing=2.0, feature_agg={"radius": "mean"})
+
+        assert "radius" in resampled.feature_names
+        assert len(resampled.get_feature("radius")) == resampled.n_vertices
+
+    def test_resample_edge_case_short_segment(self, spatial_columns):
+        """A segment shorter than spacing should still produce endpoints."""
+        # Two vertices very close together plus root
+        vertices = np.array([[0.0, 0.0, 0.0], [0.1, 0.0, 0.0], [0.2, 0.0, 0.0]])
+        vertex_indices = np.array([10, 11, 12])
+        edges = np.array([[11, 10], [12, 11]])
+
+        skeleton = self._make_skeleton(vertices, edges, vertex_indices, spatial_columns)
+        resampled = skeleton.resample(spacing=10.0)
+
+        # Should still have at least the topo points
+        assert resampled.n_vertices >= 2
+        assert 10 in resampled.vertex_index
+        assert 12 in resampled.vertex_index
+
+    def test_resample_valid_tree(self, branched_skeleton_data, spatial_columns):
+        """Resampled skeleton should be a valid tree: n_edges == n_vertices - 1."""
+        vertices, _, vertex_indices = branched_skeleton_data
+        edges = np.array([[101, 100], [102, 101], [103, 101], [104, 102]])
+
+        skeleton = self._make_skeleton(vertices, edges, vertex_indices, spatial_columns)
+        resampled = skeleton.resample(spacing=0.3)
+
+        assert len(resampled.edges) == resampled.n_vertices - 1
