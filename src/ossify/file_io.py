@@ -244,20 +244,32 @@ def _process_linkage(metadata, tf, cell) -> Cell:
 
 
 class CellFiles:
-    def __init__(self, path, use_https: bool = True):
+    def __init__(self, path, use_https: bool = False):
         self.path = str(path)
-        if parse.urlparse(str(path)).scheme in ["s3", "gs", "https", "http"]:
+        scheme = parse.urlparse(str(path)).scheme
+        if scheme in ["s3", "gs", "https", "http"]:
             self.cf = cloudfiles.CloudFiles(path, use_https=use_https)
+            # For native cloud schemes, keep an https fallback for public bucket reads
+            # when native auth credentials are unavailable.
+            self._fallback_cf = (
+                cloudfiles.CloudFiles(path, use_https=True)
+                if scheme in ["s3", "gs"]
+                else None
+            )
             self._remote = True
-        elif parse.urlparse(str(path)).scheme == "mem":
+            self._saveable = scheme in PUTABLE_SCHEMES
+        elif scheme == "mem":
             self.cf = cloudfiles.CloudFiles(path)
+            self._fallback_cf = None
             self._remote = False
+            self._saveable = True
         else:
             self.cf = cloudfiles.CloudFiles(
                 "file://" + str((Path(path).expanduser().absolute()))
             )
+            self._fallback_cf = None
             self._remote = False
-        self._saveable = parse.urlparse(self.cf.cloudpath).scheme in PUTABLE_SCHEMES
+            self._saveable = True
 
     @property
     def saveable(self):
@@ -289,7 +301,13 @@ class CellFiles:
         self.cf.put(filename, tar_bytes)
 
     def load(self, filename: str) -> Cell:
-        f = self.cf.get(filename, raw=True)
+        try:
+            f = self.cf.get(filename, raw=True)
+        except Exception:
+            if self._fallback_cf is not None:
+                f = self._fallback_cf.get(filename, raw=True)
+            else:
+                raise
         if not f:
             raise FileNotFoundError(
                 f"{filename} not found in path {self.cf.cloudpath}."
