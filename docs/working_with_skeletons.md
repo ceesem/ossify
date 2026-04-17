@@ -1,9 +1,6 @@
 # Working with Skeletons
 
-!!! warning "AI-Generated Documentation"
-    This documentation was generated with assistance from AI. While we strive for accuracy, errors may be present. If you find issues, unclear explanations, or have suggestions for improvement, please [report them on GitHub](https://github.com/ceesem/ossify/issues).
-
-Skeleton layers represent tree-structured morphologies with a defined root and no cycles. They're specialized for analyzing branching structures like neuronal arbors, providing tree-specific properties and measurements not available in general graphs.
+Skeletons are the most natural representation for morphological analysis. They reduce a neuron's complex 3D geometry to a rooted tree — making it straightforward to measure cable length, identify branch points, compute path distances, and classify branches into axon and dendrite. Most ossify analysis workflows operate primarily on the skeleton.
 
 !!! note "Shared Features"
     Skeletons inherit many common features from the `PointMixin` class. For information about features, masking, transformations, spatial queries, and cross-layer mapping, see [Shared Layer Features](shared_layer_features.md).

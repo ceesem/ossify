@@ -903,3 +903,47 @@ def build_proximity_lists_chunked(
             proximity_list.append(proximal_indices.tolist())
 
     return np.concatenate(index_list), np.concatenate(proximity_list)
+
+
+# def resample_tree(
+#     vertices: np.ndarray,
+#     edges: np.ndarray,
+#     spacing: float,
+#     interpolation_method: Literal["linear", "nearest", "zero", "slinear", "quadratic", "cubic"] = "linear",
+#     tip_min_ratio: float=0.5,
+#     avoid_root: bool=True,
+# ) -> Tuple[np.ndarray, np.ndarray]:
+#     """
+#     Resample tree vertices along edges to achieve approximately uniform spacing.
+
+#     Parameters
+#     ----------
+#     vertices : np.ndarray
+#         Array of shape (n_vertices, 3) containing 3D positions of vertices.
+#     edges : np.ndarray
+#         Array of shape (n_edges, 2) where each row is [parent_id, child_id].
+#     spacing : float
+#         Desired spacing between resampled vertices along the tree.
+#     interpolation_method : Literal["linear", "nearest", "zero", "slinear", "quadratic", "cubic"], optional
+#         Type of interpolation to use when resampling. Options follow scipy.interpolate.interp1d. By default "linear".
+#     tip_min_ratio : float, optional
+#         Minimum ratio of branch tip length to spacing for the tip to be included in resampling. Default is 0.5.
+#         For example, if spacing is 10 and branch tip length is 6, the tip will be included only if tip_min_ratio is 0.6 or lower.
+#     avoid_root: bool, optional
+#         Whether to avoid resampling vertices between the root node and the first vertex.
+#         If the root node is a soma, this avoids creating new vertices within the soma.
+#         If the root node is not a soma, this can be set to False.
+#         Default is True.
+
+#     Returns
+#     -------
+#     Tuple[np.ndarray, np.ndarray]
+#         A tuple containing:
+#         - resampled_vertices: Array of shape (m_vertices, 3) with resampled vertex positions.
+#         - resampled_edges: Array of shape (m_edges, 2) with edges connecting resampled vertices.
+
+#     Notes
+#     -----
+#     This function traverses the tree structure and places new vertices at regular intervals along the edges.
+#     The original vertices are included in the resampled set, and new vertices are added as needed to maintain the specified spacing.
+#     """

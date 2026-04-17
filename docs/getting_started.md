@@ -1,187 +1,138 @@
-# Getting Started with Ossify
+# Getting Started
 
-!!! warning "AI-Generated Documentation"
-    This documentation was generated with assistance from AI. While we strive for accuracy, errors may be present. If you find issues, unclear explanations, or have suggestions for improvement, please [report them on GitHub](https://github.com/ceesem/ossify/issues).
+This tutorial walks through ossify's core features using a real neuron. Every code block is runnable — no CAVE access or special data required.
 
-This guide will walk you through the basics of creating and working with cellular morphology data in ossify.
+## Install Ossify
 
-## What is Ossify?
-
-Ossify is a Python package for analyzing cellular morphology data, particularly neuronal structures. It provides tools for working with meshes, skeletons, graphs, and point annotations in a unified framework.
-
-## Basic Concepts
-
-The core of ossify is the `Cell` object, which acts as a container for different types of morphological data:
-
-- **Layers**: The main morphological data (meshes, skeletons, graphs)
-- **Annotations**: Sparse point data attached to specific locations
-- **Links**: Connections that map data between different layers
-
-## Your First Cell
-
-Let's start by creating a simple cell with synthetic data:
-
-```python
-import numpy as np
-import ossify
-
-# Create some simple synthetic data
-vertices = np.array([
-    [0, 0, 0],    # Root
-    [1, 0, 0],    # Branch point
-    [2, 0, 0],    # End point 1
-    [1, 1, 0],    # End point 2
-])
-
-edges = np.array([
-    [0, 1],  # Root to branch point
-    [1, 2],  # Branch point to end 1
-    [1, 3],  # Branch point to end 2
-])
-
-# Create a cell with a skeleton
-cell = ossify.Cell(name="my_first_cell")
-cell.add_skeleton(
-    vertices=vertices,
-    edges=edges,
-    root=0  # Root is at index 0
-)
-
-print(cell)
+```bash
+pip install ossify
 ```
 
-## Exploring Your Cell
+## Load the Example Cell
 
-Once you have a cell, you can explore its properties:
+This cell is a real neuron from the MICrONS dataset, hosted as an `.osy` file on GitHub.
 
 ```python
-# Access the skeleton layer
-skeleton = cell.skeleton  # or cell.s for short
+import ossify as osy
 
-# Basic properties
-print(f"Number of vertices: {skeleton.n_vertices}")
-print(f"Root location: {skeleton.root_location}")
-print(f"End points: {skeleton.end_points}")
-print(f"Branch points: {skeleton.branch_points}")
+cell = osy.load_cell('https://github.com/ceesem/ossify/raw/refs/heads/main/864691135336055529.osy')
+```
 
-# Get a detailed view
+## Inspect the Cell
+
+The `describe()` method shows what's inside: layers, annotations, features, and links.
+
+```python
 cell.describe()
 ```
 
-## Adding Different Layer Types
-
-Ossify supports multiple types of morphological data:
-
-### Adding a Mesh
+You can also check individual layers:
 
 ```python
-# Simple triangular mesh
-mesh_vertices = np.array([
-    [0, 0, 0],
-    [1, 0, 0], 
-    [0, 1, 0],
-    [0, 0, 1]
-])
-
-faces = np.array([
-    [0, 1, 2],  # Triangle 1
-    [0, 1, 3],  # Triangle 2
-    [0, 2, 3],  # Triangle 3
-    [1, 2, 3],  # Triangle 4
-])
-
-cell.add_mesh(vertices=mesh_vertices, faces=faces)
-print(f"Mesh has {cell.mesh.n_vertices} vertices")
+print("Layers:", cell.layers.names)
+print("Annotations:", cell.annotations.names)
+print("Skeleton vertices:", cell.skeleton.n_vertices)
+print("Graph vertices:", cell.graph.n_vertices)
 ```
 
-### Adding a Graph
+## Explore the Skeleton
+
+The skeleton is a rooted tree — it has a root (at the soma), branch points, and end points.
 
 ```python
-# Graph is like a skeleton but without tree constraints
-graph_vertices = np.random.randn(10, 3) * 5
-graph_edges = np.array([[i, i+1] for i in range(9)])  # Simple chain
+skel = cell.skeleton
 
-cell.add_graph(vertices=graph_vertices, edges=graph_edges)
-print(f"Graph has {cell.graph.n_vertices} vertices")
+print("Root vertex:", skel.root)
+print("Root location:", skel.root_location)
+print("Branch points:", skel.n_branch_points)
+print("End points:", skel.n_end_points)
+print("Cable length:", skel.cable_length(), "nm")
 ```
 
-## Adding Annotations
-
-Annotations are sparse point data that represent specific features:
+Skeleton features are vertex-level metadata stored as arrays:
 
 ```python
-# Add some synaptic sites
-synapse_locations = np.array([
-    [0.5, 0, 0],  # Near the root
-    [1.5, 0, 0],  # Near branch point
-])
-
-cell.add_point_annotations(
-    name="synapses",
-    vertices=synapse_locations,
-    spatial_columns=["x", "y", "z"]  # Column names for coordinates
-)
-
-print(f"Added {len(cell.annotations.synapses.vertices)} synapses")
+print("Features:", skel.feature_names)
+print("Compartment values:", skel.features['compartment'].unique())
 ```
 
-## Basic Visualization
+## Explore Annotations
+
+Annotations are point clouds with metadata — in this case, synaptic sites.
 
 ```python
-import matplotlib.pyplot as plt
+print("Pre-synaptic sites:", len(cell.annotations.pre_syn))
+print("Post-synaptic sites:", len(cell.annotations.post_syn))
 
-# Simple 2D plot of the skeleton
-fig, ax = plt.subplots(figsize=(8, 6))
-ossify.plot_morphology_2d(
-    cell, 
-    projection="xy",
-    color="compartment",  # Color by compartment (if available)
+# Each annotation has features
+print("Pre-syn features:", cell.annotations.pre_syn.feature_names)
+```
+
+## Map a Feature Across Layers
+
+The graph layer has a `size_nm3` feature (volume per vertex). Let's aggregate it onto the skeleton using the link between them.
+
+```python
+volume = cell.graph.map_features_to_layer("size_nm3", layer='skeleton', agg='sum')
+cell.skeleton.add_feature(volume)
+
+print("Volume feature added:", 'size_nm3' in cell.skeleton.feature_names)
+```
+
+This works because the graph and skeleton are *linked* — ossify knows which graph vertices correspond to which skeleton vertices. The `agg='sum'` parameter tells it to sum the volumes of all graph vertices that map to each skeleton vertex.
+
+## Apply a Mask
+
+Masks let you filter a cell to a subset of vertices. When layers are linked, the mask propagates — annotations and features update automatically.
+
+```python
+# Filter to dendrite only (compartment == 3 in SWC convention)
+dendrite_mask = cell.skeleton.features['compartment'] == 3
+
+with cell.skeleton.mask_context(dendrite_mask) as masked_cell:
+    print("Dendrite cable length:", masked_cell.skeleton.cable_length(), "nm")
+    print("Dendrite pre-synaptic sites:", len(masked_cell.annotations.pre_syn))
+    print("Dendrite post-synaptic sites:", len(masked_cell.annotations.post_syn))
+
+# Original cell is unchanged
+print("Full cable length:", cell.skeleton.cable_length(), "nm")
+```
+
+## Make a Plot
+
+Ossify's plotting functions map features to visual properties like color and line width.
+
+```python
+fig = osy.plot.plot_cell_2d(
+    cell,
+    color='compartment',
     palette={1: 'navy', 2: 'tomato', 3: 'black'},
-    ax=ax
+    linewidth='radius',
+    linewidth_norm=(100, 500),
+    widths=(0.5, 5),
+    root_marker=True,
+    units_per_inch=100_000,
 )
-plt.title("Neuron Morphology")
-plt.show()
 ```
 
-## Loading Real Data
+![2D cell plot](img/quickstart_img.png)
 
-For real data, you can load from files or external sources:
+## Save the Cell
+
+Save to a local `.osy` file to avoid re-downloading:
 
 ```python
-# From a saved ossify file (try this example!)
-cell = ossify.load_cell('https://github.com/ceesem/ossify/raw/refs/heads/main/864691135336055529.osy')
+osy.save_cell(cell, '864691135336055529.osy')
 
-print("Cable length:", cell.skeleton.cable_length(), "nm")
-print("Number of presynaptic sites:", len(cell.annotations.pre_syn))
-print("Available skeleton features:", cell.skeleton.feature_names)
-
-# From CAVEclient (requires caveclient)
-# cell = ossify.load_cell_from_client(root_id=12345, client=cave_client)
-
-# From legacy MeshWork files (requires h5py)
-# cell, mask = ossify.import_legacy_meshwork("path/to/meshwork.h5")
+# Load it back later
+cell = osy.load_cell('864691135336055529.osy')
 ```
 
 ## Next Steps
 
-Now that you have a basic cell, you can:
+Now that you've loaded, inspected, mapped, masked, and plotted a real neuron:
 
-1. **Explore layer properties** - Learn about meshes, graphs, and skeletons
-2. **Work with annotations** - Add features and sparse features  
-3. **Apply masks** - Filter your data for analysis
-4. **Use algorithms** - Compute Strahler numbers, classify compartments
-5. **Create visualizations** - Make publication-ready plots
-
-Each of these topics is covered in detail in the following guides.
-
-## Key Functions Reference
-
-- `ossify.Cell(name)` - Create a new cell
-- `cell.add_skeleton(vertices, edges, root)` - Add skeleton data
-- `cell.add_mesh(vertices, faces)` - Add mesh data  
-- `cell.add_graph(vertices, edges)` - Add graph data
-- `cell.add_point_annotations(name, vertices)` - Add sparse annotations
-- `cell.describe()` - Get a summary of the cell
-- `ossify.plot_morphology_2d(cell)` - Basic 2D visualization
-- `ossify.load_cell(path)` - Load from file
-- `ossify.save_cell(cell, path)` - Save to file
+- [Core Concepts](concepts.md) — understand the data model behind what you just did
+- [Linking and Mapping](linking_and_mapping.md) — go deeper on moving data between representations
+- [Algorithms](algorithms_and_analysis.md) — compute Strahler numbers, classify axon/dendrite, and more
+- [Visualization](visualization_and_plotting.md) — publication-quality figures with colormaps, scale bars, and multi-view layouts

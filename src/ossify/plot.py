@@ -15,11 +15,14 @@ __all__ = [
     "plot_morphology_2d",
     "plot_annotations_2d",
     "plot_cell_multiview",
+    "plot_lineup",
     "plot_skeleton",
     "plot_points",
     "single_panel_figure",
     "multi_panel_figure",
     "add_scale_bar",
+    "Rotation",
+    "RotateCell",
 ]
 
 
@@ -404,6 +407,456 @@ def projection_factory(
     )
 
 
+# ---------------------------------------------------------------------------
+# Rotation parameter resolution
+# ---------------------------------------------------------------------------
+
+
+def _resolve_rotation_params(
+    projection: Union[str, Callable],
+    rotation_angle: Optional[Union[float, int, Literal["best"]]],
+    rotation_axis: Optional[Union[str, np.ndarray]],
+    vertices: Optional[np.ndarray],
+    center: Optional[np.ndarray],
+    invert_y: bool,
+) -> Union[str, Callable]:
+    """Resolve inline rotation parameters into a projection callable.
+
+    Parameters
+    ----------
+    projection : str or Callable
+        Current projection specification.
+    rotation_angle : float, int, "best", or None
+        Rotation angle in degrees, or ``"best"`` for PCA-optimized.
+    rotation_axis : str, np.ndarray, or None
+        Rotation axis specification.
+    vertices : np.ndarray or None
+        Skeleton vertices for PCA modes, shape (N, 3).
+    center : np.ndarray or None
+        3D rotation center, shape (3,).
+    invert_y : bool
+        Whether to bake y-inversion into the rotation callable.
+
+    Returns
+    -------
+    str or Callable
+        The original projection if no rotation, or a rotation callable.
+
+    Raises
+    ------
+    ValueError
+        If parameters are incompatible or incomplete.
+    """
+    if rotation_angle is None:
+        return projection
+
+    # Cannot combine explicit projection with rotation
+    if projection != "xy" and not callable(projection):
+        raise ValueError(
+            "Cannot combine projection with rotation_angle. "
+            "Use the default projection='xy' when specifying rotation_angle."
+        )
+    if callable(projection):
+        raise ValueError(
+            "Cannot combine a callable projection with rotation_angle. "
+            "Use the default projection='xy' when specifying rotation_angle."
+        )
+
+    if isinstance(rotation_angle, bool):
+        raise ValueError("rotation_angle must be a number or 'best', not bool.")
+
+    if isinstance(rotation_angle, (int, float)):
+        if rotation_axis is None:
+            raise ValueError(
+                "rotation_axis is required when rotation_angle is numeric."
+            )
+        if center is None:
+            raise ValueError("center is required when rotation_angle is numeric.")
+        return Rotation(center, rotation_axis, rotation_angle, invert_y=invert_y)
+
+    if rotation_angle == "best":
+        if vertices is None or center is None:
+            raise ValueError(
+                "vertices and center are required when rotation_angle='best'."
+            )
+        pts_c = np.asarray(vertices, dtype=float) - center
+        if rotation_axis is not None:
+            k = _resolve_axis(rotation_axis)
+            theta_deg = np.rad2deg(_best_angle_for_axis(pts_c, k))
+            return Rotation(center, k, theta_deg, invert_y=invert_y)
+        else:
+            R = _pca_rotation_matrix(pts_c)
+            return _build_projection_callable(center, R, None, invert_y)
+
+    raise ValueError(
+        f"rotation_angle must be a number or 'best', got {rotation_angle!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Rotation utilities
+# ---------------------------------------------------------------------------
+
+_AXIS_LABELS: Dict[str, np.ndarray] = {
+    "x": np.array([1.0, 0.0, 0.0]),
+    "y": np.array([0.0, 1.0, 0.0]),
+    "z": np.array([0.0, 0.0, 1.0]),
+}
+
+
+def _resolve_axis(axis: Union[np.ndarray, Literal["x", "y", "z"]]) -> np.ndarray:
+    """Return a unit vector for the given axis specification.
+
+    Parameters
+    ----------
+    axis : np.ndarray or "x" | "y" | "z"
+        Either a 3D vector or a string label.
+
+    Returns
+    -------
+    np.ndarray
+        Unit vector with shape (3,).
+
+    Raises
+    ------
+    ValueError
+        If a string other than "x", "y", "z" is given, or if the vector has
+        zero length.
+    """
+    if isinstance(axis, str):
+        if axis not in _AXIS_LABELS:
+            raise ValueError(f"axis label must be 'x', 'y', or 'z', got {axis!r}")
+        return _AXIS_LABELS[axis].copy()
+    k = np.asarray(axis, dtype=float)
+    norm = np.linalg.norm(k)
+    if norm == 0.0:
+        raise ValueError("axis vector must have non-zero length")
+    return k / norm
+
+
+def _perp_basis(k: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Build an orthonormal basis (u, v) for the plane perpendicular to k.
+
+    Parameters
+    ----------
+    k : np.ndarray
+        Unit vector with shape (3,).
+
+    Returns
+    -------
+    u, v : np.ndarray
+        Two orthonormal vectors spanning the plane perpendicular to k.
+    """
+    ref = np.array([1.0, 0.0, 0.0])
+    if abs(np.dot(k, ref)) > 0.9:
+        ref = np.array([0.0, 1.0, 0.0])
+    u = ref - np.dot(ref, k) * k
+    u /= np.linalg.norm(u)
+    v = np.cross(k, u)
+    return u, v
+
+
+def _best_angle_for_axis(pts_c: np.ndarray, k: np.ndarray) -> float:
+    """Find the rotation angle about k that maximizes 2D projected variance.
+
+    Projects the centered points onto the plane perpendicular to k and runs
+    2D PCA to find the angle that aligns the principal axis with the
+    reference x-direction in that plane.
+
+    Parameters
+    ----------
+    pts_c : np.ndarray
+        Centered point cloud, shape (N, 3).
+    k : np.ndarray
+        Unit rotation axis, shape (3,).
+
+    Returns
+    -------
+    float
+        Optimal rotation angle in radians.
+    """
+    u, v = _perp_basis(k)
+    p2 = pts_c @ np.column_stack([u, v])
+    _, _, vt = np.linalg.svd(p2, full_matrices=False)
+    pc1 = vt[0]
+    theta = -np.arctan2(pc1[1], pc1[0])
+    # Sign convention: majority of projected points should have positive x.
+    R = _build_rotation_matrix(k, theta)
+    projected_x = (pts_c @ R.T)[:, 0]
+    if np.mean(projected_x) < 0:
+        theta += np.pi
+    return theta
+
+
+def _build_rotation_matrix(k: np.ndarray, angle: float) -> np.ndarray:
+    """Build the 3x3 Rodrigues rotation matrix for rotating by angle about k.
+
+    Parameters
+    ----------
+    k : np.ndarray
+        Unit rotation axis, shape (3,).
+    angle : float
+        Rotation angle in radians.
+
+    Returns
+    -------
+    np.ndarray
+        Shape (3, 3) rotation matrix.
+    """
+    kx, ky, kz = k
+    K = np.array(
+        [
+            [0.0, -kz, ky],
+            [kz, 0.0, -kx],
+            [-ky, kx, 0.0],
+        ]
+    )
+    return (
+        np.eye(3) * np.cos(angle)
+        + np.sin(angle) * K
+        + (1 - np.cos(angle)) * np.outer(k, k)
+    )
+
+
+def _pca_rotation_matrix(pts_c: np.ndarray) -> np.ndarray:
+    """Build the globally optimal 3x3 rotation matrix from 3D PCA.
+
+    Returns a rotation R such that R maps PC1 → x, PC2 → y, and PC3 → z,
+    where PC1/PC2/PC3 are the principal components of pts_c ordered from
+    highest to lowest variance. The result is guaranteed to have det = +1
+    (proper rotation).
+
+    Parameters
+    ----------
+    pts_c : np.ndarray
+        Centered point cloud, shape (N, 3).
+
+    Returns
+    -------
+    np.ndarray
+        Shape (3, 3) rotation matrix.
+    """
+    _, _, vt = np.linalg.svd(pts_c, full_matrices=False)
+    pc1, pc2 = vt[0], vt[1]
+    # Sign convention: majority of points should project to positive x then y.
+    if np.mean(pts_c @ pc1) < 0:
+        pc1 = -pc1
+    if np.mean(pts_c @ pc2) < 0:
+        pc2 = -pc2
+    # Build right-handed system: PC3 = PC1 × PC2 ensures det = +1.
+    pc3 = np.cross(pc1, pc2)
+    return np.vstack([pc1, pc2, pc3])
+
+
+def _build_projection_callable(
+    center: np.ndarray,
+    R: np.ndarray,
+    new_center: Optional[np.ndarray],
+    invert_y: bool,
+) -> Callable[[np.ndarray], np.ndarray]:
+    """Build the projection closure from a precomputed rotation matrix.
+
+    This is the single place where the (rotate → project → invert_y →
+    shift) closure is constructed. Both :func:`Rotation` and the full-PCA
+    branch of :func:`RotateCell` delegate here.
+
+    Parameters
+    ----------
+    center : np.ndarray
+        3D rotation center, shape (3,).
+    R : np.ndarray
+        3x3 rotation matrix.
+    new_center : np.ndarray or None
+        2D target position for the projected center, or None.
+    invert_y : bool
+        Whether to negate the y output coordinate.
+
+    Returns
+    -------
+    Callable[[np.ndarray], np.ndarray]
+        A function mapping (N, 3) → (N, 2).
+    """
+    y_sign = -1.0 if invert_y else 1.0
+
+    if new_center is not None:
+        new_center_2d = np.asarray(new_center, dtype=float)
+        center_2d_after_invert = np.array([center[0], y_sign * center[1]])
+        offset_2d = new_center_2d - center_2d_after_invert
+    else:
+        offset_2d = np.zeros(2)
+
+    def _project(pts: np.ndarray) -> np.ndarray:
+        pts = np.asarray(pts, dtype=float)
+        pts_r = (pts - center) @ R.T + center
+        out = pts_r[:, :2].copy()
+        out[:, 1] *= y_sign
+        out += offset_2d
+        return out
+
+    return _project
+
+
+def Rotation(
+    center: np.ndarray,
+    axis: Union[np.ndarray, Literal["x", "y", "z"]],
+    angle: float,
+    new_center: Optional[np.ndarray] = None,
+    invert_y: bool = True,
+) -> Callable[[np.ndarray], np.ndarray]:
+    """Return a projection callable that rotates 3D points and projects to 2D.
+
+    The callable accepts an (N, 3) array of 3D points, applies a rotation
+    about the given axis and center, projects to 2D (xy plane), optionally
+    inverts y, and optionally translates the center to a new 2D location.
+
+    Compatible with the ``projection`` parameter of all ossify plotting
+    functions.
+
+    Parameters
+    ----------
+    center : np.ndarray
+        3D point about which the rotation is performed, shape (3,). The
+        rotation center is a fixed point of the transform.
+    axis : np.ndarray or "x" | "y" | "z"
+        Rotation axis. String labels are converted to unit vectors.
+    angle : float
+        Rotation angle in degrees.
+    new_center : np.ndarray, optional
+        If provided, shifts the 2D output so that the projected rotation
+        center appears at this 2D location. Shape (2,). Useful for
+        centering a cell at the origin (``[0, 0]``) or at a specific
+        layout position.
+    invert_y : bool, default True
+        If True, negates the y coordinate of the projected output, matching
+        the image-space convention (y increases downward) used by the
+        standard string projections.
+
+    Returns
+    -------
+    Callable[[np.ndarray], np.ndarray]
+        A function mapping (N, 3) → (N, 2).
+
+    Examples
+    --------
+    Rotate 90° about the z-axis, centered at the soma:
+
+    >>> proj = Rotation(soma_xyz, "z", 90)
+    >>> plot.plot_skeleton(skel, projection=proj)
+
+    Center the projected cell at the plot origin:
+
+    >>> proj = Rotation(soma_xyz, "z", 90, new_center=np.array([0.0, 0.0]))
+    """
+    center = np.asarray(center, dtype=float)
+    k = _resolve_axis(axis)
+    angle_rad = np.deg2rad(angle)
+    R = _build_rotation_matrix(k, angle_rad)
+    return _build_projection_callable(center, R, new_center, invert_y)
+
+
+def RotateCell(
+    cell: "Cell",
+    axis: Union[np.ndarray, Literal["x", "y", "z"], Literal["best"], None] = None,
+    angle: Union[float, Literal["best"], None] = None,
+    center: Optional[np.ndarray] = None,
+    new_center: Optional[np.ndarray] = None,
+    invert_y: bool = True,
+) -> Callable[[np.ndarray], np.ndarray]:
+    """Return a projection callable for a cell, with automatic center and PCA modes.
+
+    A high-level wrapper around :func:`Rotation` that extracts the rotation
+    center from the cell's soma location and supports PCA-based automatic
+    angle optimization.
+
+    Parameters
+    ----------
+    cell : Cell
+        The cell to build a projection for. Used to extract the default
+        rotation center and skeleton vertices for PCA.
+    axis : np.ndarray or "x" | "y" | "z" or "best" or None
+        Rotation axis. String labels "x"/"y"/"z" are converted to unit
+        vectors. ``"best"`` or ``None`` triggers full PCA: the minimum-
+        variance axis of the skeleton is used (see Notes).
+    angle : float or "best" or None
+        Rotation angle in degrees, or ``"best"`` to find the optimal angle
+        about the given axis via PCA. ``None`` is treated as 0.
+    center : np.ndarray, optional
+        3D rotation center. Defaults to ``cell.skeleton.root_location``.
+    new_center : np.ndarray, optional
+        2D display position for the rotation center after projection.
+        Passed through to :func:`Rotation`.
+    invert_y : bool, default True
+        Passed through to :func:`Rotation`.
+
+    Returns
+    -------
+    Callable[[np.ndarray], np.ndarray]
+        A function mapping (N, 3) → (N, 2).
+
+    Notes
+    -----
+    Both PCA modes share the same two-step algorithm via
+    ``_best_angle_for_axis``:
+
+    - **Axis given, angle="best"**: project skeleton vertices onto the plane
+      perpendicular to the given axis, run 2D PCA, and return the angle that
+      aligns the principal axis with x.
+    - **axis="best" or None**: run 3D PCA first to find the minimum-variance
+      direction (PC3), use that as the rotation axis, then apply the same
+      constrained angle-finding step.
+
+    Examples
+    --------
+    Rotate about y to the best orientation:
+
+    >>> proj = RotateCell(cell, axis="y", angle="best")
+    >>> plot.plot_cell_2d(cell, projection=proj)
+
+    Fully automatic best view:
+
+    >>> proj = RotateCell(cell)
+    >>> plot.plot_cell_2d(cell, projection=proj)
+    """
+    # --- Resolve center ---
+    if center is None:
+        skel = cell.skeleton
+        if skel is None or skel.root_location is None:
+            raise ValueError(
+                "Cell has no skeleton root_location; supply center explicitly."
+            )
+        center = np.asarray(skel.root_location, dtype=float)
+    else:
+        center = np.asarray(center, dtype=float)
+
+    # --- Full-PCA branch: build R_pca directly (PC1→x, PC2→y, PC3→z) ---
+    if axis is None or (isinstance(axis, str) and axis == "best"):
+        skel = cell.skeleton
+        if skel is None:
+            raise ValueError(
+                "Cell has no skeleton; cannot compute PCA. Supply axis explicitly."
+            )
+        pts_c = np.asarray(skel.vertices, dtype=float) - center
+        R_pca = _pca_rotation_matrix(pts_c)
+        return _build_projection_callable(center, R_pca, new_center, invert_y)
+
+    # --- Resolve axis label / vector ---
+    k = _resolve_axis(axis)
+
+    # --- Resolve angle ---
+    if angle == "best":
+        skel = cell.skeleton
+        if skel is None:
+            raise ValueError(
+                "Cell has no skeleton; cannot compute best angle. Supply angle explicitly."
+            )
+        pts_c = np.asarray(skel.vertices, dtype=float) - center
+        theta = np.rad2deg(_best_angle_for_axis(pts_c, k))
+    else:
+        theta = float(angle) if angle is not None else 0.0
+
+    return Rotation(center, k, theta, new_center=new_center, invert_y=invert_y)
+
+
 def _plotted_bounds(
     vertices: np.ndarray,
     projection: Union[str, Callable],
@@ -438,6 +891,8 @@ def _plotted_bounds(
 def plot_skeleton(
     skel: SkeletonLayer,
     projection: Union[str, Callable] = "xy",
+    rotation_angle: Optional[Union[float, int, Literal["best"]]] = None,
+    rotation_axis: Optional[Union[str, np.ndarray]] = None,
     colors: Optional[np.ndarray] = None,
     alpha: Optional[np.ndarray] = None,
     linewidths: Optional[np.ndarray] = None,
@@ -479,10 +934,23 @@ def plot_skeleton(
     """
     if ax is None:
         ax = plt.gca()
-    do_autoscale_at_end = not ax.has_data()
+    do_autoscale_at_end = not ax.has_data() and ax.get_autoscale_on()
 
     # Store original projection for y-axis inversion detection
     orig_projection = projection
+
+    # Resolve inline rotation parameters
+    projection = _resolve_rotation_params(
+        projection,
+        rotation_angle,
+        rotation_axis,
+        vertices=skel.vertices,
+        center=np.asarray(skel.root_location, dtype=float)
+        if skel.root_location is not None
+        else None,
+        invert_y=invert_y,
+    )
+
     projection = projection_factory(proj=projection)
 
     for path in skel.cover_paths_positional:
@@ -565,6 +1033,9 @@ def plot_points(
     palette: Optional[Union[str, Dict]] = None,
     color_norm: Optional[Tuple[float, float]] = None,
     projection: Union[str, Callable] = "xy",
+    rotation_angle: Optional[Union[float, int, Literal["best"]]] = None,
+    rotation_axis: Optional[Union[str, np.ndarray]] = None,
+    rotation_center: Optional[np.ndarray] = None,
     offset_h: float = 0.0,
     offset_v: float = 0.0,
     invert_y: bool = True,
@@ -577,6 +1048,24 @@ def plot_points(
 
     # Store original projection for y-axis inversion detection
     orig_projection = projection
+
+    # Resolve inline rotation parameters
+    if rotation_angle == "best":
+        raise ValueError(
+            "rotation_angle='best' is not supported for plot_points (no skeleton data). "
+            "Use a numeric angle or pre-build a rotation callable."
+        )
+    projection = _resolve_rotation_params(
+        projection,
+        rotation_angle,
+        rotation_axis,
+        vertices=None,
+        center=np.asarray(rotation_center, dtype=float)
+        if rotation_center is not None
+        else None,
+        invert_y=invert_y,
+    )
+
     projection = projection_factory(
         proj=projection,
     )
@@ -652,6 +1141,9 @@ def plot_annotations_2d(
     size_norm: Optional[Tuple[float, float]] = None,
     sizes: Optional[np.ndarray] = (1, 30),
     projection: Union[str, Callable] = "xy",
+    rotation_angle: Optional[Union[float, int, Literal["best"]]] = None,
+    rotation_axis: Optional[Union[str, np.ndarray]] = None,
+    rotation_center: Optional[np.ndarray] = None,
     offset_h: float = 0.0,
     offset_v: float = 0.0,
     invert_y: bool = True,
@@ -681,6 +1173,9 @@ def plot_annotations_2d(
         palette=palette,
         color_norm=color_norm,
         projection=projection,
+        rotation_angle=rotation_angle,
+        rotation_axis=rotation_axis,
+        rotation_center=rotation_center,
         offset_h=offset_h,
         offset_v=offset_v,
         invert_y=invert_y,
@@ -702,6 +1197,8 @@ def plot_morphology_2d(
     linewidth_norm: Optional[Tuple[float, float]] = None,
     widths: Optional[tuple] = (1, 50),
     projection: Union[str, Callable] = "xy",
+    rotation_angle: Optional[Union[float, int, Literal["best"]]] = None,
+    rotation_axis: Optional[Union[str, np.ndarray]] = None,
     offset_h: float = 0.0,
     offset_v: float = 0.0,
     root_marker: bool = False,
@@ -747,6 +1244,18 @@ def plot_morphology_2d(
         skel = cell.skeleton
     else:
         skel = cell
+
+    # Resolve inline rotation parameters
+    projection = _resolve_rotation_params(
+        projection,
+        rotation_angle,
+        rotation_axis,
+        vertices=skel.vertices,
+        center=np.asarray(skel.root_location, dtype=float)
+        if skel.root_location is not None
+        else None,
+        invert_y=invert_y,
+    )
 
     # Resolve color parameter
     resolved_color = _resolve_color_parameter(color, skel)
@@ -875,6 +1384,8 @@ def plot_cell_2d(
     post_palette: Union[str, dict] = None,
     post_color_norm: Optional[Tuple[float, float]] = None,
     projection: Union[str, Callable] = "xy",
+    rotation_angle: Optional[Union[float, int, Literal["best"]]] = None,
+    rotation_axis: Optional[Union[str, np.ndarray]] = None,
     offset_h: float = 0.0,
     offset_v: float = 0.0,
     invert_y: bool = True,
@@ -884,6 +1395,18 @@ def plot_cell_2d(
     despine: bool = True,
     **syn_kwargs,
 ) -> Tuple[plt.Figure, plt.Axes]:
+    # Resolve inline rotation parameters at the top level
+    projection = _resolve_rotation_params(
+        projection,
+        rotation_angle,
+        rotation_axis,
+        vertices=cell.skeleton.vertices,
+        center=np.asarray(cell.skeleton.root_location, dtype=float)
+        if cell.skeleton.root_location is not None
+        else None,
+        invert_y=invert_y,
+    )
+
     if units_per_inch is not None:
         bounds = _plotted_bounds(cell.skeleton.vertices, projection, offset_h, offset_v)
         _, ax = single_panel_figure(
@@ -1082,6 +1605,7 @@ def single_panel_figure(
     ax.set_xlim(data_bounds_min[0], data_bounds_max[0])
     ax.set_ylim(data_bounds_min[1], data_bounds_max[1])
     ax.set_aspect("equal")
+    ax.set_autoscale_on(False)
 
     if despine:
         ax.spines["top"].set_visible(False)
@@ -1176,6 +1700,7 @@ def multi_panel_figure(
         xy_ax.set_xlim(data_bounds_min[0], data_bounds_max[0])
         xy_ax.set_ylim(data_bounds_min[1], data_bounds_max[1])
         xy_ax.set_aspect("equal")
+        xy_ax.set_autoscale_on(False)
 
         # zy panel (right)
         zy_left = xy_width + gap_inches
@@ -1191,6 +1716,7 @@ def multi_panel_figure(
         zy_ax.set_xlim(data_bounds_min[2], data_bounds_max[2])
         zy_ax.set_ylim(data_bounds_min[1], data_bounds_max[1])
         zy_ax.set_aspect("equal")
+        zy_ax.set_autoscale_on(False)
         if despine:
             for ax in [xy_ax, zy_ax]:
                 ax.spines["top"].set_visible(False)
@@ -1226,6 +1752,7 @@ def multi_panel_figure(
         xz_ax.set_xlim(data_bounds_min[0], data_bounds_max[0])
         xz_ax.set_ylim(data_bounds_min[2], data_bounds_max[2])
         xz_ax.set_aspect("equal")
+        xz_ax.set_autoscale_on(False)
 
         # xy panel (bottom)
         xy_left = (fig_width - xy_width) / 2  # Center horizontally
@@ -1241,6 +1768,7 @@ def multi_panel_figure(
         xy_ax.set_xlim(data_bounds_min[0], data_bounds_max[0])
         xy_ax.set_ylim(data_bounds_min[1], data_bounds_max[1])
         xy_ax.set_aspect("equal")
+        xy_ax.set_autoscale_on(False)
         if despine:
             for ax in [xy_ax, xz_ax]:
                 ax.spines["top"].set_visible(False)
@@ -1279,6 +1807,7 @@ def multi_panel_figure(
         xy_ax.set_xlim(data_bounds_min[0], data_bounds_max[0])
         xy_ax.set_ylim(data_bounds_min[1], data_bounds_max[1])
         xy_ax.set_aspect("equal")
+        xy_ax.set_autoscale_on(False)
 
         # xz panel (top-left)
         xz_left = (left_width - xz_width) / 2  # Center in left column
@@ -1294,6 +1823,7 @@ def multi_panel_figure(
         xz_ax.set_xlim(data_bounds_min[0], data_bounds_max[0])
         xz_ax.set_ylim(data_bounds_min[2], data_bounds_max[2])
         xz_ax.set_aspect("equal")
+        xz_ax.set_autoscale_on(False)
 
         # zy panel (bottom-right, aligned with xy panel)
         zy_left = left_width + gap_inches
@@ -1309,6 +1839,7 @@ def multi_panel_figure(
         zy_ax.set_xlim(data_bounds_min[2], data_bounds_max[2])
         zy_ax.set_ylim(data_bounds_min[1], data_bounds_max[1])
         zy_ax.set_aspect("equal")
+        zy_ax.set_autoscale_on(False)
         if despine:
             for ax in [xy_ax, xz_ax, zy_ax]:
                 ax.spines["top"].set_visible(False)
@@ -1426,3 +1957,272 @@ def add_scale_bar(
             color=color,
             fontsize=fontsize,
         )
+
+
+# ===========================================================================
+# plot_lineup helpers and public API
+# ===========================================================================
+
+
+def _broadcast_param(val: Any, n: int) -> List[Any]:
+    """Broadcast a scalar-or-list parameter to a list of length n.
+
+    Parameters
+    ----------
+    val : Any
+        A scalar value or a list of values.
+    n : int
+        Expected length.
+
+    Returns
+    -------
+    List[Any]
+        List of length n.
+
+    Raises
+    ------
+    ValueError
+        If val is a list with length != n.
+    """
+    if isinstance(val, list):
+        if len(val) != n:
+            raise ValueError(f"Expected list of length {n}, got length {len(val)}")
+        return val
+    return [val] * n
+
+
+def _project_point_y(point_3d: np.ndarray, projection: Callable) -> float:
+    """Project a single 3D point and return its projected y coordinate.
+
+    Parameters
+    ----------
+    point_3d : np.ndarray
+        A 3-element array representing a 3D point.
+    projection : Callable
+        Projection function mapping (N, 3) -> (N, 2).
+
+    Returns
+    -------
+    float
+        The y coordinate of the projected point.
+    """
+    result = projection(np.asarray(point_3d).reshape(1, 3))
+    return float(result[0, 1])
+
+
+def _lineup_offsets(
+    cells: List[Cell],
+    projection: Callable,
+    gap: float,
+    align: Literal["natural", "soma", "point"],
+    alignment_points: Optional[List[np.ndarray]],
+) -> List[Tuple[float, float]]:
+    """Compute (offset_h, offset_v) for each cell in a lineup.
+
+    Parameters
+    ----------
+    cells : List[Cell]
+        Cells to compute offsets for.
+    projection : Callable
+        Projection function.
+    gap : float
+        Horizontal gap between cells.
+    align : "natural", "soma", or "point"
+        Vertical alignment mode.
+    alignment_points : List[np.ndarray] or None
+        One alignment point per cell; only used when align="point".
+
+    Returns
+    -------
+    List[Tuple[float, float]]
+        List of (offset_h, offset_v) per cell.
+    """
+    offsets = []
+    cursor = 0.0
+    for i, cell in enumerate(cells):
+        skel = cell.skeleton
+        bounds = _plotted_bounds(skel.vertices, projection)
+        xmin, xmax = bounds[0]
+
+        offset_h = cursor - xmin
+        cursor += (xmax - xmin) + gap
+
+        if align == "natural":
+            offset_v = 0.0
+        elif align == "soma":
+            point = skel.root_location
+            offset_v = -_project_point_y(point, projection)
+        else:  # align == "point"
+            point = alignment_points[i]  # type: ignore[index]
+            offset_v = -_project_point_y(point, projection)
+
+        offsets.append((offset_h, offset_v))
+    return offsets
+
+
+def plot_lineup(
+    cells: List[Cell],
+    projection: Union[str, Callable] = "xy",
+    color: Optional[Union[str, np.ndarray, tuple, List]] = None,
+    palette: Union[str, dict, List[Union[str, dict]]] = "coolwarm",
+    color_norm: Optional[Union[Tuple[float, float], List]] = None,
+    alpha: Optional[Union[str, np.ndarray, float, List]] = 1.0,
+    alpha_norm: Optional[Union[Tuple[float, float], List]] = None,
+    alpha_extent: Optional[Union[Tuple[float, float], List]] = None,
+    linewidth: Optional[Union[str, np.ndarray, float, List]] = 1.0,
+    linewidth_norm: Optional[Union[Tuple[float, float], List]] = None,
+    widths: Optional[Union[tuple, List]] = (1, 50),
+    root_marker: Union[bool, List[bool]] = False,
+    root_size: Union[float, List[float]] = 100.0,
+    root_color: Optional[Union[str, tuple, List]] = None,
+    gap: float = 0.0,
+    align: Literal["natural", "soma", "point"] = "natural",
+    alignment_point: Optional[Union[np.ndarray, List[np.ndarray]]] = None,
+    invert_y: bool = True,
+    ax: Optional[plt.Axes] = None,
+    units_per_inch: Optional[float] = None,
+    dpi: Optional[float] = None,
+    despine: bool = True,
+) -> plt.Axes:
+    """Plot multiple cells side-by-side in a single figure.
+
+    Parameters
+    ----------
+    cells : List[Cell]
+        Cells to plot.
+    projection : str or Callable, default "xy"
+        Shared projection for all cells.
+    color : str, np.ndarray, tuple, or List, optional
+        Per-cell or shared color specification.
+    palette : str, dict, or List, default "coolwarm"
+        Per-cell or shared colormap.
+    color_norm : tuple or List, optional
+        Per-cell or shared (min, max) color normalization.
+    alpha : str, np.ndarray, float, or List, default 1.0
+        Per-cell or shared alpha specification.
+    alpha_norm : tuple or List, optional
+        Per-cell or shared alpha normalization range.
+    alpha_extent : tuple or List, optional
+        Per-cell or shared alpha output range.
+    linewidth : str, np.ndarray, float, or List, default 1.0
+        Per-cell or shared linewidth specification.
+    linewidth_norm : tuple or List, optional
+        Per-cell or shared linewidth normalization.
+    widths : tuple or List, optional
+        Per-cell or shared (min, max) linewidth scaling.
+    root_marker : bool or List[bool], default False
+        Per-cell or shared root marker flag.
+    root_size : float or List[float], default 100.0
+        Per-cell or shared root marker size.
+    root_color : str, tuple, or List, optional
+        Per-cell or shared root marker color.
+    gap : float, default 0.0
+        Horizontal gap between cells.
+    align : "natural", "soma", or "point", default "natural"
+        Vertical alignment mode.
+    alignment_point : np.ndarray or List[np.ndarray], optional
+        Required when align="point". A single 3D point (broadcast) or one per cell.
+    invert_y : bool, default True
+        Whether to invert the y axis.
+    ax : plt.Axes, optional
+        Existing axes to plot onto. If None, a new figure is created.
+    units_per_inch : float, optional
+        Data units per inch for auto-sizing the figure. Used only when ax=None.
+    dpi : float, optional
+        Figure DPI. Used only when ax=None and units_per_inch is given.
+    despine : bool, default True
+        Whether to remove spines when creating a new figure.
+
+    Returns
+    -------
+    plt.Axes
+        Axes with all cells plotted.
+
+    Raises
+    ------
+    ValueError
+        If cells is empty, if a list param has the wrong length, or if
+        align="point" but alignment_point is None.
+    """
+    if not cells:
+        raise ValueError("cells must be a non-empty list")
+
+    n = len(cells)
+    proj_callable = projection_factory(projection)
+
+    # Broadcast all per-cell styling params
+    color_list = _broadcast_param(color, n)
+    palette_list = _broadcast_param(palette, n)
+    color_norm_list = _broadcast_param(color_norm, n)
+    alpha_list = _broadcast_param(alpha, n)
+    alpha_norm_list = _broadcast_param(alpha_norm, n)
+    alpha_extent_list = _broadcast_param(alpha_extent, n)
+    linewidth_list = _broadcast_param(linewidth, n)
+    linewidth_norm_list = _broadcast_param(linewidth_norm, n)
+    widths_list = _broadcast_param(widths, n)
+    root_marker_list = _broadcast_param(root_marker, n)
+    root_size_list = _broadcast_param(root_size, n)
+    root_color_list = _broadcast_param(root_color, n)
+
+    # Resolve alignment points
+    if align == "point":
+        if alignment_point is None:
+            raise ValueError("alignment_point is required when align='point'")
+        alignment_points: Optional[List[np.ndarray]] = _broadcast_param(
+            alignment_point, n
+        )
+    else:
+        alignment_points = None
+
+    offsets = _lineup_offsets(cells, proj_callable, gap, align, alignment_points)
+
+    if ax is None and units_per_inch is not None:
+        # Compute combined bounds across all cells
+        all_bounds = [
+            _plotted_bounds(
+                cells[i].skeleton.vertices,
+                proj_callable,
+                offsets[i][0],
+                offsets[i][1],
+            )
+            for i in range(n)
+        ]
+        xmin = min(b[0, 0] for b in all_bounds)
+        xmax = max(b[0, 1] for b in all_bounds)
+        ymin = min(b[1, 0] for b in all_bounds)
+        ymax = max(b[1, 1] for b in all_bounds)
+        _, ax = single_panel_figure(
+            np.array([xmin, ymin]),
+            np.array([xmax, ymax]),
+            units_per_inch,
+            despine,
+            dpi,
+        )
+
+    if ax is None:
+        _, ax = plt.subplots()
+
+    for i, cell in enumerate(cells):
+        offset_h, offset_v = offsets[i]
+        plot_morphology_2d(
+            cell,
+            projection=proj_callable,
+            color=color_list[i],
+            palette=palette_list[i],
+            color_norm=color_norm_list[i],
+            alpha=alpha_list[i],
+            alpha_norm=alpha_norm_list[i],
+            alpha_extent=alpha_extent_list[i],
+            linewidth=linewidth_list[i],
+            linewidth_norm=linewidth_norm_list[i],
+            widths=widths_list[i],
+            root_marker=root_marker_list[i],
+            root_size=root_size_list[i],
+            root_color=root_color_list[i],
+            offset_h=offset_h,
+            offset_v=offset_v,
+            invert_y=invert_y,
+            ax=ax,
+        )
+
+    return ax

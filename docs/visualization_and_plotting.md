@@ -1,9 +1,6 @@
 # Visualization and Plotting
 
-!!! warning "AI-Generated Documentation"
-    This documentation was generated with assistance from AI. While we strive for accuracy, errors may be present. If you find issues, unclear explanations, or have suggestions for improvement, please [report them on GitHub](https://github.com/ceesem/ossify/issues).
-
-Ossify provides 2D visualization capabilities for morphological data analysis and publication-quality figures. Currently, plotting functions are implemented for skeleton layers, with support for other layer types planned for future releases.
+Ossify's plotting functions turn skeleton data into 2D figures where features like compartment, radius, and branching complexity map to visual properties (color, line width). The goal is publication-quality figures with precise scaling and clean styling, directly from your analysis.
 
 !!! info "Current Plotting Support"
     Visualization functions currently work with **skeleton layers only**. Support for plotting meshes, graphs, and annotations is planned for future releases. The plotting API is designed to be extensible to other layer types.

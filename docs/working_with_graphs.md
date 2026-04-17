@@ -1,9 +1,6 @@
 # Working with Graphs
 
-!!! warning "AI-Generated Documentation"
-    This documentation was generated with assistance from AI. While we strive for accuracy, errors may be present. If you find issues, unclear explanations, or have suggestions for improvement, please [report them on GitHub](https://github.com/ceesem/ossify/issues).
-
-Graph layers represent general network structures with vertices and edges. Unlike skeletons, graphs can have cycles, multiple connected components, and any connectivity pattern. They're commonly used for level-2 graph data from connectomics pipelines.
+Graphs are the fundamental representation of neuronal topology in EM analysis databases. They represent spatial connectivity without imposing a tree structure — unlike skeletons, graphs can have cycles and multiple connected components. In practice, graph layers most often hold the level-2 (L2) graph from CAVE, which carries per-vertex properties like volume and can be linked to the skeleton for feature mapping.
 
 !!! note "Shared Features"
     Graphs inherit many common features from the `PointMixin` class. For information about features, masking, transformations, spatial queries, and cross-layer mapping, see [Shared Layer Features](shared_layer_features.md).

@@ -1,9 +1,6 @@
 # Working with Annotations
 
-!!! warning "AI-Generated Documentation"
-    This documentation was generated with assistance from AI. While we strive for accuracy, errors may be present. If you find issues, unclear explanations, or have suggestions for improvement, please [report them on GitHub](https://github.com/ceesem/ossify/issues).
-
-Annotations are sparse point cloud layers that represent specific features or events in cellular morphology. Unlike the main morphological layers (mesh, graph, skeleton), annotations are designed for discrete features like synapses, spines, or markers that occur at specific locations.
+Annotations represent discrete biological features at specific locations — most commonly synapses, but also spines, branch labels, or manual markers. Unlike the main morphological layers (mesh, graph, skeleton), annotations are sparse point clouds: they don't define the neuron's shape, but they carry critical information about it. A typical neuron might have thousands of synapse annotations, each with metadata like type, size, and partner identity.
 
 !!! note "Shared Features"
     Annotations inherit many common features from the `PointMixin` class. For information about features, masking, transformations, spatial queries, and cross-layer mapping, see [Shared Layer Features](shared_layer_features.md).

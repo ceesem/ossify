@@ -554,6 +554,59 @@ class TestFigureUtilities:
         assert isinstance(axes, dict)  # Returns dict of axes
         plt.close(fig)
 
+    def test_single_panel_figure_limits_preserved_after_hlines(self):
+        """Test that single_panel_figure axis limits are not overwritten by autoscale."""
+        data_bounds_min = np.array([100, 200])
+        data_bounds_max = np.array([300, 400])
+        units_per_inch = 20.0
+
+        fig, ax = plot.single_panel_figure(
+            data_bounds_min=data_bounds_min,
+            data_bounds_max=data_bounds_max,
+            units_per_inch=units_per_inch,
+        )
+
+        # Autoscale should be off
+        assert not ax.get_autoscale_on()
+
+        # Add hlines far outside the data bounds (simulating layer boundaries)
+        ax.hlines([0, 50, 600, 800], xmin=100, xmax=300, colors="gray")
+
+        # Limits should remain unchanged despite hlines outside bounds
+        assert ax.get_xlim() == (100, 300)
+        assert ax.get_ylim() == (200, 400)
+
+        # Verify figure dimensions match data_range / units_per_inch
+        fig_width, fig_height = fig.get_size_inches()
+        np.testing.assert_allclose(fig_width, 200 / 20.0)
+        np.testing.assert_allclose(fig_height, 200 / 20.0)
+        plt.close(fig)
+
+    def test_multi_panel_figure_limits_preserved_after_hlines(self):
+        """Test that multi_panel_figure axis limits are not overwritten by autoscale."""
+        data_bounds_min = np.array([0, 0, 0])
+        data_bounds_max = np.array([100, 200, 50])
+        units_per_inch = 10.0
+
+        fig, axes = plot.multi_panel_figure(
+            data_bounds_min=data_bounds_min,
+            data_bounds_max=data_bounds_max,
+            units_per_inch=units_per_inch,
+            layout="side_by_side",
+        )
+
+        # Autoscale should be off for all panels
+        for ax in axes.values():
+            assert not ax.get_autoscale_on()
+
+        # Add hlines far outside bounds
+        axes["xy"].hlines([-500, 500], xmin=0, xmax=100, colors="gray")
+
+        # xy panel limits should be preserved
+        assert axes["xy"].get_xlim() == (0, 100)
+        assert axes["xy"].get_ylim() == (0, 200)
+        plt.close(fig)
+
     def test_add_scale_bar(self):
         """Test scale bar addition to plots."""
         fig, ax = plt.subplots(1, 1, figsize=(6, 6))
@@ -708,4 +761,612 @@ class TestErrorHandling:
         with pytest.raises((ValueError, TypeError)):
             plot.plot_skeleton(cell.skeleton, ax=ax, colors="invalid_colors")
 
+
+# ===========================================================================
+# Rotation helpers and public API
+# ===========================================================================
+
+
+def _make_cell_with_skeleton(vertices: np.ndarray, root_idx: int = 0) -> "Cell":
+    """Build a minimal Cell with a SkeletonLayer from a vertex array."""
+    n = len(vertices)
+    spatial_columns = ["x", "y", "z"]
+    vertex_indices = np.arange(n)
+    vertex_df = pd.DataFrame(vertices, columns=spatial_columns, index=vertex_indices)
+    # Linear chain edges
+    edges = np.array([[vertex_indices[i + 1], vertex_indices[i]] for i in range(n - 1)])
+    cell = Cell()
+    cell.add_skeleton(
+        vertices=vertex_df,
+        edges=edges,
+        spatial_columns=spatial_columns,
+        root=vertex_indices[root_idx],
+    )
+    return cell
+
+
+class TestRotationHelpers:
+    """Tests for the private rotation utility functions."""
+
+    # --- _resolve_axis ---
+
+    def test_resolve_axis_x(self):
+        np.testing.assert_array_equal(plot._resolve_axis("x"), [1.0, 0.0, 0.0])
+
+    def test_resolve_axis_y(self):
+        np.testing.assert_array_equal(plot._resolve_axis("y"), [0.0, 1.0, 0.0])
+
+    def test_resolve_axis_z(self):
+        np.testing.assert_array_equal(plot._resolve_axis("z"), [0.0, 0.0, 1.0])
+
+    def test_resolve_axis_array_normalizes(self):
+        result = plot._resolve_axis(np.array([2.0, 0.0, 0.0]))
+        np.testing.assert_allclose(result, [1.0, 0.0, 0.0])
+
+    def test_resolve_axis_arbitrary_array(self):
+        v = np.array([1.0, 1.0, 0.0])
+        result = plot._resolve_axis(v)
+        np.testing.assert_allclose(np.linalg.norm(result), 1.0)
+        np.testing.assert_allclose(result, v / np.sqrt(2))
+
+    def test_resolve_axis_zero_raises(self):
+        with pytest.raises(ValueError):
+            plot._resolve_axis(np.array([0.0, 0.0, 0.0]))
+
+    def test_resolve_axis_bad_string_raises(self):
+        with pytest.raises(ValueError):
+            plot._resolve_axis("w")
+
+    # --- _perp_basis ---
+
+    @pytest.mark.parametrize(
+        "axis", ["x", "y", "z", np.array([1.0, 1.0, 0.0]) / np.sqrt(2)]
+    )
+    def test_perp_basis_orthogonality(self, axis):
+        k = plot._resolve_axis(axis)
+        u, v = plot._perp_basis(k)
+        assert abs(np.dot(u, v)) < 1e-12
+        assert abs(np.dot(u, k)) < 1e-12
+        assert abs(np.dot(v, k)) < 1e-12
+
+    @pytest.mark.parametrize("axis", ["x", "y", "z"])
+    def test_perp_basis_unit_length(self, axis):
+        k = plot._resolve_axis(axis)
+        u, v = plot._perp_basis(k)
+        np.testing.assert_allclose(np.linalg.norm(u), 1.0)
+        np.testing.assert_allclose(np.linalg.norm(v), 1.0)
+
+    def test_perp_basis_near_x_does_not_degenerate(self):
+        k = plot._resolve_axis(np.array([0.999, 0.001, 0.0]))
+        u, v = plot._perp_basis(k)
+        assert np.linalg.norm(u) > 0.99
+        assert np.linalg.norm(v) > 0.99
+
+    # --- _build_rotation_matrix ---
+
+    def test_rotation_matrix_identity_at_zero(self):
+        k = plot._resolve_axis("z")
+        R = plot._build_rotation_matrix(k, 0.0)
+        np.testing.assert_allclose(R, np.eye(3), atol=1e-12)
+
+    def test_rotation_matrix_quarter_turn_z(self):
+        k = plot._resolve_axis("z")
+        R = plot._build_rotation_matrix(k, np.pi / 2)
+        result = R @ np.array([1.0, 0.0, 0.0])
+        np.testing.assert_allclose(result, [0.0, 1.0, 0.0], atol=1e-12)
+
+    def test_rotation_matrix_is_orthogonal(self):
+        k = plot._resolve_axis(np.array([1.0, 2.0, 3.0]))
+        R = plot._build_rotation_matrix(k, 1.23)
+        np.testing.assert_allclose(R @ R.T, np.eye(3), atol=1e-12)
+
+    def test_rotation_matrix_det_one(self):
+        k = plot._resolve_axis("y")
+        R = plot._build_rotation_matrix(k, np.pi / 3)
+        np.testing.assert_allclose(np.linalg.det(R), 1.0, atol=1e-12)
+
+    # --- _best_angle_for_axis ---
+
+    def test_best_angle_aligns_principal_axis(self):
+        # Point cloud elongated along [cos(a), 0, sin(a)] in xz plane.
+        # Rotation about y should find the angle that aligns this with x.
+        rng = np.random.default_rng(42)
+        a = np.pi / 5  # known angle
+        direction = np.array([np.cos(a), 0.0, np.sin(a)])
+        pts = rng.normal(scale=[5.0, 0.1, 0.1], size=(200, 3))
+        pts = (
+            pts
+            @ np.column_stack([direction, [0, 1, 0], np.cross(direction, [0, 1, 0])]).T
+        )
+        pts_c = pts - pts.mean(axis=0)
+        k = plot._resolve_axis("y")
+        theta = plot._best_angle_for_axis(pts_c, k)
+        R = plot._build_rotation_matrix(k, theta)
+        projected = pts_c @ R.T
+        # After optimal rotation the x-variance should dominate
+        assert np.var(projected[:, 0]) > np.var(projected[:, 2])
+
+
+class TestRotation:
+    """Tests for the public Rotation() factory."""
+
+    def test_identity_is_xy_projection(self):
+        pts = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+        proj = plot.Rotation([0, 0, 0], "z", 0.0, invert_y=False)
+        np.testing.assert_allclose(proj(pts), pts[:, :2], atol=1e-12)
+
+    def test_invert_y_default(self):
+        pts = np.array([[1.0, 2.0, 3.0]])
+        proj_inv = plot.Rotation([0, 0, 0], "z", 0.0, invert_y=True)
+        proj_no = plot.Rotation([0, 0, 0], "z", 0.0, invert_y=False)
+        result_inv = proj_inv(pts)
+        result_no = proj_no(pts)
+        np.testing.assert_allclose(result_inv[:, 0], result_no[:, 0])
+        np.testing.assert_allclose(result_inv[:, 1], -result_no[:, 1])
+
+    def test_half_turn_z_negates_xy(self):
+        pts = np.array([[3.0, 4.0, 0.0]])
+        proj = plot.Rotation([0, 0, 0], "z", 180, invert_y=False)
+        result = proj(pts)
+        np.testing.assert_allclose(result, [[-3.0, -4.0]], atol=1e-12)
+
+    def test_quarter_turn_z(self):
+        pts = np.array([[1.0, 0.0, 0.0]])
+        proj = plot.Rotation([0, 0, 0], "z", 90, invert_y=False)
+        np.testing.assert_allclose(proj(pts), [[0.0, 1.0]], atol=1e-12)
+
+    def test_quarter_turn_x_maps_z_to_neg_y(self):
+        # 90° about x: [0,0,1] → [0,-1,0] in 3D → projects to [0,-1]
+        pts = np.array([[0.0, 0.0, 1.0]])
+        proj = plot.Rotation([0, 0, 0], "x", 90, invert_y=False)
+        np.testing.assert_allclose(proj(pts), [[0.0, -1.0]], atol=1e-12)
+
+    def test_center_is_fixed_point(self):
+        center = np.array([10.0, 20.0, 30.0])
+        pts = np.atleast_2d(center)
+        for angle in [5.7, 28.6, 180, 114.6]:
+            proj = plot.Rotation(center, "z", angle, invert_y=False)
+            result = proj(pts)
+            np.testing.assert_allclose(result[0], center[:2], atol=1e-12)
+
+    def test_non_unit_axis_same_as_unit(self):
+        pts = np.random.default_rng(0).random((20, 3))
+        center = np.zeros(3)
+        proj_unit = plot.Rotation(center, [1, 0, 0], 57.3, invert_y=False)
+        proj_scaled = plot.Rotation(center, [3, 0, 0], 57.3, invert_y=False)
+        np.testing.assert_allclose(proj_unit(pts), proj_scaled(pts), atol=1e-12)
+
+    def test_new_center_places_pivot_at_origin(self):
+        center = np.array([100.0, 200.0, 300.0])
+        pts = np.atleast_2d(center)
+        proj = plot.Rotation(
+            center, "z", 28.6, new_center=np.array([0.0, 0.0]), invert_y=False
+        )
+        result = proj(pts)
+        np.testing.assert_allclose(result[0], [0.0, 0.0], atol=1e-12)
+
+    def test_new_center_arbitrary(self):
+        center = np.array([100.0, 200.0, 300.0])
+        pts = np.atleast_2d(center)
+        target = np.array([5.0, 7.0])
+        proj = plot.Rotation(center, "z", 28.6, new_center=target, invert_y=False)
+        result = proj(pts)
+        np.testing.assert_allclose(result[0], target, atol=1e-12)
+
+    def test_new_center_uniform_shift(self):
+        rng = np.random.default_rng(1)
+        pts = rng.random((50, 3))
+        center = np.array([0.5, 0.5, 0.5])
+        proj_none = plot.Rotation(center, "z", 40.1, new_center=None, invert_y=False)
+        target = np.array([3.0, 4.0])
+        proj_shifted = plot.Rotation(
+            center, "z", 40.1, new_center=target, invert_y=False
+        )
+        diff = proj_shifted(pts) - proj_none(pts)
+        # Every row should have the same constant offset
+        np.testing.assert_allclose(diff - diff[0], 0.0, atol=1e-12)
+
+    def test_compatible_with_plot_skeleton(self, simple_skeleton_data, spatial_columns):
+        """Rotation callable works as a drop-in for the projection parameter."""
+        vertices, edges, vertex_indices = simple_skeleton_data
+        vertex_df = pd.DataFrame(
+            vertices, columns=spatial_columns, index=vertex_indices
+        )
+        edges_wi = np.array(
+            [[vertex_indices[i + 1], vertex_indices[i]] for i in range(4)]
+        )
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=vertex_df,
+            edges=edges_wi,
+            spatial_columns=spatial_columns,
+            root=vertex_indices[0],
+        )
+        proj = plot.Rotation(np.zeros(3), "z", 45)
+        fig, ax = plt.subplots()
+        plot.plot_skeleton(cell.skeleton, projection=proj, ax=ax)
         plt.close(fig)
+
+
+class TestRotateCell:
+    """Tests for the public RotateCell() wrapper."""
+
+    @pytest.fixture
+    def elongated_cell(self):
+        """Cell with skeleton elongated along x at the origin."""
+        rng = np.random.default_rng(7)
+        pts = rng.normal(scale=[10.0, 0.5, 0.5], size=(50, 3))
+        pts[0] = [0.0, 0.0, 0.0]  # root at origin
+        return _make_cell_with_skeleton(pts, root_idx=0)
+
+    @pytest.fixture
+    def tilted_cell(self):
+        """Cell elongated along a known direction in the xz plane (45°)."""
+        rng = np.random.default_rng(13)
+        direction = np.array([1.0, 0.0, 1.0]) / np.sqrt(2)
+        pts = rng.normal(scale=[10.0, 0.1, 0.1], size=(80, 3))
+        R = np.column_stack([direction, [0, 1, 0], np.cross(direction, [0, 1, 0])])
+        pts = pts @ R.T
+        pts[0] = [0.0, 0.0, 0.0]
+        return _make_cell_with_skeleton(pts, root_idx=0)
+
+    def test_center_defaults_to_root_location(self, elongated_cell):
+        root_loc = elongated_cell.skeleton.root_location
+        proj = plot.RotateCell(elongated_cell, axis="z", angle=28.6, invert_y=False)
+        # Applying to the root location should match Rotation with the same center
+        ref = plot.Rotation(root_loc, "z", 28.6, invert_y=False)
+        pts = elongated_cell.skeleton.vertices
+        np.testing.assert_allclose(proj(pts), ref(pts), atol=1e-12)
+
+    def test_explicit_center_overrides_root(self, elongated_cell):
+        custom_center = np.array([1.0, 2.0, 3.0])
+        proj = plot.RotateCell(
+            elongated_cell, axis="z", angle=17.2, center=custom_center, invert_y=False
+        )
+        ref = plot.Rotation(custom_center, "z", 17.2, invert_y=False)
+        pts = elongated_cell.skeleton.vertices
+        np.testing.assert_allclose(proj(pts), ref(pts), atol=1e-12)
+
+    def test_no_skeleton_raises(self):
+        cell = Cell()
+        with pytest.raises(ValueError):
+            plot.RotateCell(cell, axis="z", angle=0.0)
+
+    def test_string_axis_matches_vector(self, elongated_cell):
+        pts = elongated_cell.skeleton.vertices
+        proj_str = plot.RotateCell(elongated_cell, axis="y", angle=57.3, invert_y=False)
+        proj_vec = plot.RotateCell(
+            elongated_cell, axis=np.array([0.0, 1.0, 0.0]), angle=57.3, invert_y=False
+        )
+        np.testing.assert_allclose(proj_str(pts), proj_vec(pts), atol=1e-12)
+
+    def test_explicit_angle_matches_rotation(self, elongated_cell):
+        root_loc = elongated_cell.skeleton.root_location
+        pts = elongated_cell.skeleton.vertices
+        proj = plot.RotateCell(elongated_cell, axis="x", angle=68.8, invert_y=False)
+        ref = plot.Rotation(root_loc, "x", 68.8, invert_y=False)
+        np.testing.assert_allclose(proj(pts), ref(pts), atol=1e-12)
+
+    def test_none_angle_defaults_to_zero(self, elongated_cell):
+        pts = elongated_cell.skeleton.vertices
+        proj_none = plot.RotateCell(
+            elongated_cell, axis="z", angle=None, invert_y=False
+        )
+        proj_zero = plot.RotateCell(elongated_cell, axis="z", angle=0.0, invert_y=False)
+        np.testing.assert_allclose(proj_none(pts), proj_zero(pts), atol=1e-12)
+
+    def test_new_center_passthrough(self, elongated_cell):
+        root_loc = elongated_cell.skeleton.root_location
+        pts = elongated_cell.skeleton.vertices
+        nc = np.array([0.0, 0.0])
+        proj = plot.RotateCell(
+            elongated_cell, axis="z", angle=28.6, new_center=nc, invert_y=False
+        )
+        ref = plot.Rotation(root_loc, "z", 28.6, new_center=nc, invert_y=False)
+        np.testing.assert_allclose(proj(pts), ref(pts), atol=1e-12)
+
+    def test_angle_best_maximizes_x_variance(self, tilted_cell):
+        """Best angle about y should orient the elongated axis toward x."""
+        proj = plot.RotateCell(tilted_cell, axis="y", angle="best")
+        pts = tilted_cell.skeleton.vertices
+        result = proj(pts)
+        assert np.var(result[:, 0]) > np.var(result[:, 1])
+
+    def test_axis_best_full_pca(self, tilted_cell):
+        """Full PCA mode should produce at least as much x-variance as the y-constrained mode."""
+        pts = tilted_cell.skeleton.vertices
+        proj_full = plot.RotateCell(tilted_cell)  # axis=None
+        proj_y = plot.RotateCell(tilted_cell, axis="y", angle="best")
+        var_full = np.var(proj_full(pts)[:, 0])
+        var_constrained = np.var(proj_y(pts)[:, 0])
+        # Full PCA is unconstrained, so x-variance should be >= constrained case
+        assert (
+            var_full >= var_constrained * 0.9
+        )  # small tolerance for numeric precision
+
+    def test_axis_best_string_same_as_none(self, tilted_cell):
+        """axis='best' and axis=None should produce identical results."""
+        pts = tilted_cell.skeleton.vertices
+        proj_str = plot.RotateCell(tilted_cell, axis="best")
+        proj_none = plot.RotateCell(tilted_cell, axis=None)
+        np.testing.assert_allclose(proj_str(pts), proj_none(pts), atol=1e-12)
+
+
+# ===========================================================================
+# TestRotationProjectionIntegration
+# ===========================================================================
+
+
+class TestRotationProjectionIntegration:
+    """Tests for _resolve_rotation_params and inline rotation in plotting functions."""
+
+    @pytest.fixture
+    def tilted_cell(self):
+        """Cell elongated along a known direction in the xz plane (45°)."""
+        rng = np.random.default_rng(13)
+        direction = np.array([1.0, 0.0, 1.0]) / np.sqrt(2)
+        pts = rng.normal(scale=[10.0, 0.1, 0.1], size=(80, 3))
+        R = np.column_stack([direction, [0, 1, 0], np.cross(direction, [0, 1, 0])])
+        pts = pts @ R.T
+        pts[0] = [0.0, 0.0, 0.0]
+        return _make_cell_with_skeleton(pts, root_idx=0)
+
+    # --- _resolve_rotation_params unit tests ---
+
+    def test_none_returns_projection_unchanged(self):
+        result = plot._resolve_rotation_params("xy", None, None, None, None, True)
+        assert result == "xy"
+
+    def test_numeric_angle_produces_callable(self):
+        center = np.array([0.0, 0.0, 0.0])
+        result = plot._resolve_rotation_params("xy", 45, "y", None, center, True)
+        assert callable(result)
+
+    def test_numeric_angle_without_axis_raises(self):
+        center = np.array([0.0, 0.0, 0.0])
+        with pytest.raises(ValueError, match="rotation_axis is required"):
+            plot._resolve_rotation_params("xy", 45, None, None, center, True)
+
+    def test_numeric_angle_without_center_raises(self):
+        with pytest.raises(ValueError, match="center is required"):
+            plot._resolve_rotation_params("xy", 45, "y", None, None, True)
+
+    def test_best_with_axis_maximizes_x_variance(self, tilted_cell):
+        verts = tilted_cell.skeleton.vertices
+        center = np.asarray(tilted_cell.skeleton.root_location, dtype=float)
+        result = plot._resolve_rotation_params("xy", "best", "y", verts, center, False)
+        assert callable(result)
+        projected = result(verts)
+        assert np.var(projected[:, 0]) > np.var(projected[:, 1])
+
+    def test_best_full_pca(self, tilted_cell):
+        verts = tilted_cell.skeleton.vertices
+        center = np.asarray(tilted_cell.skeleton.root_location, dtype=float)
+        result = plot._resolve_rotation_params("xy", "best", None, verts, center, False)
+        assert callable(result)
+
+    def test_non_default_projection_with_rotation_raises(self):
+        center = np.array([0.0, 0.0, 0.0])
+        with pytest.raises(ValueError, match="Cannot combine projection"):
+            plot._resolve_rotation_params("xz", 45, "y", None, center, True)
+
+    def test_callable_projection_with_rotation_raises(self):
+        center = np.array([0.0, 0.0, 0.0])
+        with pytest.raises(ValueError, match="Cannot combine a callable"):
+            plot._resolve_rotation_params(
+                lambda pts: pts[:, :2], 45, "y", None, center, True
+            )
+
+    def test_bool_rotation_angle_raises(self):
+        with pytest.raises(ValueError, match="not bool"):
+            plot._resolve_rotation_params("xy", True, "y", None, np.zeros(3), True)
+
+    # --- Integration tests with plotting functions ---
+
+    def test_plot_skeleton_with_numeric_rotation(self, tilted_cell):
+        fig, ax = plt.subplots()
+        plot.plot_skeleton(
+            tilted_cell.skeleton, rotation_angle=45, rotation_axis="y", ax=ax
+        )
+        plt.close(fig)
+
+    def test_plot_skeleton_with_best_rotation_and_axis(self, tilted_cell):
+        fig, ax = plt.subplots()
+        plot.plot_skeleton(
+            tilted_cell.skeleton, rotation_angle="best", rotation_axis="y", ax=ax
+        )
+        plt.close(fig)
+
+    def test_plot_skeleton_with_best_full_pca(self, tilted_cell):
+        fig, ax = plt.subplots()
+        plot.plot_skeleton(tilted_cell.skeleton, rotation_angle="best", ax=ax)
+        plt.close(fig)
+
+    def test_plot_morphology_2d_with_rotation(self, tilted_cell):
+        fig, ax = plt.subplots()
+        plot.plot_morphology_2d(
+            tilted_cell, rotation_angle=90, rotation_axis="z", ax=ax
+        )
+        plt.close(fig)
+
+    def test_plot_cell_2d_with_best_rotation(self, tilted_cell):
+        fig, ax = plt.subplots()
+        plot.plot_cell_2d(tilted_cell, rotation_angle="best", rotation_axis="y", ax=ax)
+        plt.close(fig)
+
+    def test_multiple_angles_same_axes(self, tilted_cell):
+        """Animation loop: multiple angles on same axes works."""
+        fig, ax = plt.subplots()
+        for angle in [0, 30, 60, 90]:
+            ax.clear()
+            plot.plot_skeleton(
+                tilted_cell.skeleton, rotation_angle=angle, rotation_axis="y", ax=ax
+            )
+        plt.close(fig)
+
+    def test_backward_compat_string_projections(self, tilted_cell):
+        """Existing string projections still work without rotation params."""
+        fig, ax = plt.subplots()
+        for proj in ["xy", "xz", "yz"]:
+            ax.clear()
+            plot.plot_skeleton(tilted_cell.skeleton, projection=proj, ax=ax)
+        plt.close(fig)
+
+    def test_plot_points_best_raises(self):
+        pts = np.array([[1.0, 2.0, 3.0]])
+        with pytest.raises(ValueError, match="not supported for plot_points"):
+            plot.plot_points(pts, rotation_angle="best")
+
+
+# ===========================================================================
+# TestPlotLineup
+# ===========================================================================
+
+
+class TestPlotLineup:
+    """Tests for plot_lineup and its private helpers."""
+
+    @pytest.fixture
+    def two_cells(self):
+        """Two minimal cells with distinct x positions."""
+        cell1 = _make_cell_with_skeleton(
+            np.array([[0.0, 0.0, 0.0], [10.0, 5.0, 0.0], [20.0, 10.0, 0.0]])
+        )
+        cell2 = _make_cell_with_skeleton(
+            np.array([[0.0, 0.0, 0.0], [10.0, -5.0, 0.0], [20.0, -10.0, 0.0]])
+        )
+        return [cell1, cell2]
+
+    # --- _broadcast_param ---
+
+    def test_broadcast_param_scalar(self):
+        assert plot._broadcast_param("blue", 3) == ["blue", "blue", "blue"]
+
+    def test_broadcast_param_list_correct_length(self):
+        lst = ["a", "b", "c"]
+        assert plot._broadcast_param(lst, 3) is lst
+
+    def test_broadcast_param_list_wrong_length_raises(self):
+        with pytest.raises(ValueError):
+            plot._broadcast_param(["a", "b"], 3)
+
+    # --- _project_point_y ---
+
+    def test_project_point_y(self):
+        proj = plot.projection_factory("xy")
+        result = plot._project_point_y(np.array([1.0, 2.0, 3.0]), proj)
+        assert result == pytest.approx(2.0)
+
+    # --- plot_lineup basic ---
+
+    def test_returns_axes(self, two_cells):
+        ax = plot.plot_lineup(two_cells, projection="xy")
+        assert isinstance(ax, plt.Axes)
+        plt.close("all")
+
+    def test_empty_cells_raises(self):
+        with pytest.raises(ValueError):
+            plot.plot_lineup([])
+
+    def test_uses_existing_ax(self, two_cells):
+        fig, existing_ax = plt.subplots()
+        returned_ax = plot.plot_lineup(two_cells, ax=existing_ax)
+        assert returned_ax is existing_ax
+        plt.close("all")
+
+    def test_creates_figure_with_units_per_inch(self, two_cells):
+        ax = plot.plot_lineup(two_cells, units_per_inch=1000)
+        fig = ax.get_figure()
+        w, h = fig.get_size_inches()
+        assert w > 0 and h > 0
+        plt.close("all")
+
+    # --- horizontal layout ---
+
+    def test_horizontal_no_overlap(self, two_cells):
+        proj = plot.projection_factory("xy")
+        offsets = plot._lineup_offsets(
+            two_cells, proj, gap=0.0, align="natural", alignment_points=None
+        )
+        bounds = [
+            plot._plotted_bounds(
+                c.skeleton.vertices, proj, offsets[i][0], offsets[i][1]
+            )
+            for i, c in enumerate(two_cells)
+        ]
+        # cell 0 xmax <= cell 1 xmin
+        assert bounds[0][0, 1] <= bounds[1][0, 0] + 1e-6
+
+    def test_gap_increases_separation(self, two_cells):
+        proj = plot.projection_factory("xy")
+        offsets_no_gap = plot._lineup_offsets(
+            two_cells, proj, gap=0.0, align="natural", alignment_points=None
+        )
+        offsets_gap = plot._lineup_offsets(
+            two_cells, proj, gap=100.0, align="natural", alignment_points=None
+        )
+        # Center of cell 1 with gap should be further right than without
+        center_no_gap = offsets_no_gap[1][0]
+        center_gap = offsets_gap[1][0]
+        assert center_gap > center_no_gap
+
+    # --- styling ---
+
+    def test_shared_style_all_cells(self, two_cells):
+        ax = plot.plot_lineup(two_cells, palette="viridis")
+        assert isinstance(ax, plt.Axes)
+        plt.close("all")
+
+    def test_per_cell_palette(self, two_cells):
+        palettes = [{"A": "red"}, "plasma"]
+        ax = plot.plot_lineup(two_cells, palette=palettes)
+        assert isinstance(ax, plt.Axes)
+        plt.close("all")
+
+    # --- alignment ---
+
+    def test_natural_align_no_vertical_offset(self, two_cells):
+        proj = plot.projection_factory("xy")
+        offsets = plot._lineup_offsets(
+            two_cells, proj, gap=0.0, align="natural", alignment_points=None
+        )
+        for _, offset_v in offsets:
+            assert offset_v == 0.0
+
+    def test_soma_align_centers_soma(self):
+        # Create a cell whose soma (root) projects to a known y via "xy"
+        root_y = 7.0
+        vertices = np.array([[5.0, root_y, 0.0], [10.0, 20.0, 0.0]])
+        cell = _make_cell_with_skeleton(vertices, root_idx=0)
+        proj = plot.projection_factory("xy")
+        offsets = plot._lineup_offsets(
+            [cell], proj, gap=0.0, align="soma", alignment_points=None
+        )
+        assert offsets[0][1] == pytest.approx(-root_y)
+
+    def test_point_align_centers_given_point(self):
+        vertices = np.array([[0.0, 0.0, 0.0], [10.0, 5.0, 0.0]])
+        cell = _make_cell_with_skeleton(vertices)
+        proj = plot.projection_factory("xy")
+        point = np.array([0.0, 3.0, 0.0])
+        offsets = plot._lineup_offsets(
+            [cell], proj, gap=0.0, align="point", alignment_points=[point]
+        )
+        assert offsets[0][1] == pytest.approx(-3.0)
+
+    def test_soma_and_point_equivalent_at_root(self):
+        vertices = np.array([[5.0, 9.0, 0.0], [10.0, 20.0, 0.0]])
+        cell = _make_cell_with_skeleton(vertices, root_idx=0)
+        proj = plot.projection_factory("xy")
+        root_loc = cell.skeleton.root_location
+        offsets_soma = plot._lineup_offsets(
+            [cell], proj, gap=0.0, align="soma", alignment_points=None
+        )
+        offsets_point = plot._lineup_offsets(
+            [cell], proj, gap=0.0, align="point", alignment_points=[root_loc]
+        )
+        assert offsets_soma[0][1] == pytest.approx(offsets_point[0][1])
+
+    def test_point_align_missing_alignment_point_raises(self, two_cells):
+        with pytest.raises(ValueError):
+            plot.plot_lineup(two_cells, align="point", alignment_point=None)

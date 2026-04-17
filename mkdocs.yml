@@ -4,19 +4,21 @@ repo_url: https://github.com/ceesem/ossify
 repo_name: ceesem/ossify
 
 nav:
-- About: index.md
+- Home: index.md
+- Core Concepts: concepts.md
+- Getting Started: getting_started.md
 - User Guide:
-    - Getting Started: getting_started.md
     - The Cell Object: cell_object.md
-    - Shared Layer Features: shared_layer_features.md
+    - Features and Data: shared_layer_features.md
+    - Linking and Mapping: linking_and_mapping.md
+    - Working with Skeletons: working_with_skeletons.md
     - Working with Meshes: working_with_meshes.md
     - Working with Graphs: working_with_graphs.md
-    - Working with Skeletons: working_with_skeletons.md
     - Working with Annotations: working_with_annotations.md
     - Masking and Filtering: masking_and_filtering.md
+    - Visualization: visualization_and_plotting.md
+    - Algorithms: algorithms_and_analysis.md
     - Data Import and Export: data_import_export.md
-    - Algorithms and Analysis: algorithms_and_analysis.md
-    - Visualization and Plotting: visualization_and_plotting.md
     - FAQ: faq.md
 - API Reference:
     - Overview: reference/index.md

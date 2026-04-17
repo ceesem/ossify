@@ -1,9 +1,22 @@
 # Frequently Asked Questions
 
-!!! warning "AI-Generated Documentation"
-    This documentation was generated with assistance from AI. While we strive for accuracy, errors may be present. If you find issues, unclear explanations, or have suggestions for improvement, please [report them on GitHub](https://github.com/ceesem/ossify/issues).
+## General
 
-This FAQ addresses common questions about using ossify effectively, including when to use different features and best practices for morphological analysis.
+### Do I need CAVE access to use ossify?
+
+No. You can load `.osy` files from local paths or URLs, build cells from raw arrays, or import legacy MeshWork files. CAVE integration via `load_cell_from_client` is convenient but not required. The [Getting Started](getting_started.md) tutorial uses a hosted file that works without any database access.
+
+### What's the difference between a layer and an annotation?
+
+**Layers** (mesh, skeleton, graph) define the neuron's shape and topology. They have edges connecting vertices. **Annotations** are sparse point clouds representing discrete events like synapses — they have coordinates and metadata but no connectivity. Both carry vertex-level features.
+
+### How do I know which layer to use as source vs target in mapping?
+
+The **source** is the layer whose data you want to move. The **target** is the layer you want to attach it to. For example, to get mesh volume onto the skeleton: source = graph (has `size_nm3`), target = skeleton. Call `source.map_features_to_layer(feature, layer=target)`.
+
+### What are level-2 (L2) graphs?
+
+In CAVE, neurons are represented as graphs of "level-2" supervoxels — chunks of the segmentation that carry per-vertex properties like volume and position. When you load a cell from CAVE, this L2 graph becomes the graph layer, linked to the skeleton. It's the bridge between the raw database representation and the skeleton you analyze.
 
 ## Choosing the Right Data Structure
 
