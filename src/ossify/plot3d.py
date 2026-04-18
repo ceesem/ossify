@@ -1,6 +1,6 @@
 """3D plotting for ossify using PyVista as the rendering backend."""
 
-from typing import List, Optional, Tuple, Union
+from typing import List, Literal, Optional, Tuple, Union
 
 import numpy as np
 
@@ -151,6 +151,7 @@ def plot_morphology_3d(
     color: Optional[Union[str, np.ndarray, tuple]] = None,
     palette: Union[str, dict] = "coolwarm",
     color_norm: Optional[Tuple[float, float]] = None,
+    color_scale: Optional[Literal["log"]] = None,
     opacity: Optional[Union[str, np.ndarray, float]] = 1.0,
     line_width: float = 2.0,
     tube_radius: Optional[Union[float, str, np.ndarray]] = None,
@@ -175,9 +176,20 @@ def plot_morphology_3d(
         An array of shape ``(N,)`` is mapped through *palette*.
         An ``(N, 3)`` or ``(N, 4)`` array is used directly as RGB/RGBA.
     palette : str or dict, default "coolwarm"
-        Colormap for mapping scalar color values to RGB.
+        Colormap for mapping scalar color values to RGB. Any name from the
+        `matplotlib colormap registry
+        <https://matplotlib.org/stable/gallery/color/colormap_reference.html>`_
+        is accepted, including colormaps registered by third-party packages
+        (e.g. cmocean, colorcet, cmcrameri) if they are installed. A dict
+        maps discrete values to colors.
     color_norm : tuple of float, optional
-        ``(min, max)`` normalization range for continuous color mapping.
+        ``(min, max)`` normalization range for continuous color mapping, in
+        the original (pre-transform) value space.
+    color_scale : {"log"} or None, optional
+        Value transform applied before colormap projection. ``"log"``
+        log-transforms the feature values so the colormap is distributed
+        linearly in log-space. *color_norm* bounds are still specified in
+        the original value space.
     opacity : str, np.ndarray, or float, default 1.0
         Opacity of the skeleton. Feature name, per-vertex array, or scalar.
     line_width : float, default 2.0
@@ -227,11 +239,20 @@ def plot_morphology_3d(
 
     # --- Resolve colors ---
     resolved_color = _resolve_color_parameter(color, skel)
+    effective_color_norm = color_norm
+    if (
+        color_scale == "log"
+        and isinstance(resolved_color, np.ndarray)
+        and resolved_color.ndim == 1
+    ):
+        resolved_color = np.log(np.asarray(resolved_color, dtype=float))
+        if color_norm is not None:
+            effective_color_norm = (np.log(color_norm[0]), np.log(color_norm[1]))
     colors_array = None
     if resolved_color is not None:
         if isinstance(resolved_color, np.ndarray) and resolved_color.ndim == 1:
             colors_array = _map_value_to_colors(
-                resolved_color, colormap=palette, color_norm=color_norm
+                resolved_color, colormap=palette, color_norm=effective_color_norm
             )
         elif isinstance(resolved_color, np.ndarray) and resolved_color.ndim == 2:
             colors_array = resolved_color
@@ -359,7 +380,12 @@ def plot_points_3d(
         ``(N, 3)`` array is used directly as RGB.  A dict maps discrete
         values to colors.
     palette : str or dict, default "coolwarm"
-        Colormap for mapping scalar color values.
+        Colormap for mapping scalar color values. Any name from the
+        `matplotlib colormap registry
+        <https://matplotlib.org/stable/gallery/color/colormap_reference.html>`_
+        is accepted, including colormaps registered by third-party packages
+        (e.g. cmocean, colorcet, cmcrameri) if they are installed. A dict
+        maps discrete values to colors.
     color_norm : tuple of float, optional
         ``(min, max)`` normalization range for continuous color mapping.
     opacity : float, default 1.0
@@ -380,6 +406,13 @@ def plot_points_3d(
     pts = np.asarray(points, dtype=float)
     cloud = pv.PolyData(pts)
 
+    # Normalize array-like inputs to ndarray so pandas Series, lists, etc.
+    # pass all isinstance(…, np.ndarray) checks below.
+    if sizes is not None and not isinstance(sizes, (int, float, np.ndarray)):
+        sizes = np.asarray(sizes, dtype=float)
+    if colors is not None and not isinstance(colors, (str, dict, np.ndarray)):
+        colors = np.asarray(colors)
+
     # --- Resolve colors ---
     mesh_kwargs: dict = {"opacity": opacity, **kwargs}
     if colors is not None:
@@ -387,9 +420,8 @@ def plot_points_3d(
             mesh_kwargs["color"] = colors
         elif isinstance(colors, np.ndarray):
             if colors.ndim == 1:
-                # Raw scalar values: let PyVista apply the colormap natively.
-                # Using cmap= here is more reliable than pre-mapping to RGB and
-                # using rgb=True, which can be ignored for point-cloud actors.
+                # Raw scalar values: store on the cloud so the glyph path can
+                # retrieve them for pre-mapping to RGB.
                 if isinstance(palette, dict):
                     # Dict palette: pre-map to RGB since PyVista has no native
                     # support for arbitrary label→color mappings.
@@ -440,39 +472,59 @@ def plot_points_3d(
             src = cloud.point_data.get(arr_name)
             if src is not None and glyphs.n_points % cloud.n_points == 0:
                 n_per = glyphs.n_points // cloud.n_points
+                if src.ndim == 1 and not mesh_kwargs.get("rgb", False):
+                    # Pre-map scalars → RGB so the correct palette is applied.
+                    # Passing raw scalars + cmap= to add_mesh is unreliable
+                    # across PyVista/VTK versions (often defaults to viridis).
+                    _cmap = mesh_kwargs.get("cmap", "coolwarm")
+                    _clim = mesh_kwargs.get("clim")
+                    src = _map_value_to_colors(
+                        src,
+                        colormap=_cmap,
+                        color_norm=tuple(_clim) if _clim is not None else None,
+                    )
+                    glyph_kwargs["rgb"] = True
+                else:
+                    for key in ("cmap", "clim", "rgb"):
+                        if key in mesh_kwargs:
+                            glyph_kwargs[key] = mesh_kwargs[key]
                 glyph_kwargs["scalars"] = np.repeat(src, n_per, axis=0)
-                for key in ("cmap", "clim", "rgb"):
-                    if key in mesh_kwargs:
-                        glyph_kwargs[key] = mesh_kwargs[key]
         plotter.add_mesh(glyphs, **glyph_kwargs)
     else:
-        # Uniform size — render as points with sphere style
         point_size = float(sizes) if sizes is not None else 5.0
-        for key in ("scalars", "rgb", "cmap", "clim"):
-            mesh_kwargs.pop(key, None)
-        mesh_kwargs["point_size"] = point_size
-        mesh_kwargs["render_points_as_spheres"] = True
-        if colors is not None and not isinstance(colors, str):
-            if isinstance(colors, np.ndarray) and colors.ndim == 1:
-                if isinstance(palette, dict):
+        if colors is not None and isinstance(colors, np.ndarray):
+            # render_points_as_spheres doesn't reliably apply per-point
+            # coloring in all PyVista/VTK versions — the PolyData has no
+            # cells, so VTK may ignore per-vertex scalars.  Use sphere
+            # glyphs (actual mesh geometry) which always respect rgb=True.
+            cloud.point_data["_r"] = np.full(len(pts), point_size)
+            geom = pv.Sphere(radius=1.0, theta_resolution=8, phi_resolution=8)
+            glyphs_uni = cloud.glyph(geom=geom, scale="_r", orient=False)
+            u_kwargs: dict = {
+                k: v
+                for k, v in mesh_kwargs.items()
+                if k not in ("scalars", "rgb", "cmap", "clim")
+            }
+            if glyphs_uni.n_points % cloud.n_points == 0:
+                n_per = glyphs_uni.n_points // cloud.n_points
+                if colors.ndim == 1:
                     mapped = _map_value_to_colors(
                         colors, colormap=palette, color_norm=color_norm
                     )
-                    cloud.point_data["colors"] = mapped
-                    mesh_kwargs["scalars"] = "colors"
-                    mesh_kwargs["rgb"] = True
                 else:
-                    cloud.point_data["pt_values"] = colors
-                    mesh_kwargs["scalars"] = "pt_values"
-                    if palette is not None:
-                        mesh_kwargs["cmap"] = palette
-                    if color_norm is not None:
-                        mesh_kwargs["clim"] = list(color_norm)
-            elif isinstance(colors, np.ndarray):
-                cloud.point_data["colors"] = colors
-                mesh_kwargs["scalars"] = "colors"
-                mesh_kwargs["rgb"] = True
-        plotter.add_mesh(cloud, **mesh_kwargs)
+                    mapped = colors
+                u_kwargs["scalars"] = np.repeat(mapped, n_per, axis=0)
+                u_kwargs["rgb"] = True
+            plotter.add_mesh(glyphs_uni, **u_kwargs)
+        else:
+            # No per-point colors — keep the lightweight render_points_as_spheres path.
+            for key in ("scalars", "rgb", "cmap", "clim"):
+                mesh_kwargs.pop(key, None)
+            mesh_kwargs["point_size"] = point_size
+            mesh_kwargs["render_points_as_spheres"] = True
+            if isinstance(colors, str):
+                mesh_kwargs["color"] = colors
+            plotter.add_mesh(cloud, **mesh_kwargs)
 
     return plotter
 
@@ -482,9 +534,11 @@ def plot_annotations_3d(
     color: Optional[Union[str, np.ndarray, tuple]] = None,
     palette: Union[str, dict] = "coolwarm",
     color_norm: Optional[Tuple[float, float]] = None,
+    color_scale: Optional[Literal["log"]] = None,
     opacity: float = 1.0,
     size: Optional[Union[str, np.ndarray, float]] = None,
     size_norm: Optional[Tuple[float, float]] = None,
+    size_scale: Optional[Literal["log", "sqrt", "cbrt"]] = None,
     sizes: Optional[Tuple[float, float]] = (1, 30),
     plotter: Optional["pv.Plotter"] = None,
 ) -> "pv.Plotter":
@@ -499,16 +553,35 @@ def plot_annotations_3d(
         per-point value array mapped through *palette*. Otherwise treated as
         a matplotlib color.
     palette : str or dict, default "coolwarm"
-        Colormap for scalar color mapping.
+        Colormap for scalar color mapping. Any name from the
+        `matplotlib colormap registry
+        <https://matplotlib.org/stable/gallery/color/colormap_reference.html>`_
+        is accepted, including colormaps registered by third-party packages
+        (e.g. cmocean, colorcet, cmcrameri) if they are installed. A dict
+        maps discrete values to colors.
     color_norm : tuple of float, optional
-        ``(min, max)`` normalization range for color mapping.
+        ``(min, max)`` clipping range for color mapping, in the original
+        (pre-transform) value space.
+    color_scale : {"log"} or None, optional
+        Value transform applied before colormap projection. ``"log"``
+        log-transforms the feature values so the colormap is distributed
+        linearly in log-space. *color_norm* bounds are still specified in
+        the original value space and are converted internally.
     opacity : float, default 1.0
         Overall opacity.
     size : str, np.ndarray, or float, optional
         Sphere radius specification. A string resolves to a feature name.
         An array or float is used directly or rescaled to *sizes*.
     size_norm : tuple of float, optional
-        ``(min, max)`` normalization range for size mapping.
+        ``(min, max)`` clipping range for size mapping, in the original
+        (pre-transform) value space.
+    size_scale : {"log", "sqrt", "cbrt"} or None, optional
+        Value transform applied before size normalization. ``"log"``
+        log-transforms values (linear spacing in log-space); ``"sqrt"``
+        takes the square root (useful when the feature is a cross-sectional
+        area and radius ∝ √area); ``"cbrt"`` takes the cube root (useful
+        when the feature is a volume and radius ∝ ∛volume). *size_norm*
+        bounds are always specified in the original value space.
     sizes : tuple of float, optional
         ``(min_radius, max_radius)`` output range for size rescaling. Default
         ``(1, 30)``.
@@ -525,28 +598,53 @@ def plot_annotations_3d(
 
     vertices = annotation.vertices
 
-    # Resolve color from feature if string, then pass through to plot_points_3d
-    # as raw scalars so PyVista applies the colormap natively (cmap=palette).
-    # Pre-mapping to RGB here and using rgb=True in add_mesh is unreliable for
-    # point-cloud rendering (render_points_as_spheres ignores rgb= in some
-    # PyVista/VTK versions, causing palette changes to have no visual effect).
+    # --- Resolve color ---
     resolved_color = _resolve_color_parameter(color, annotation)
+    effective_color_norm = color_norm
+    if (
+        color_scale == "log"
+        and isinstance(resolved_color, np.ndarray)
+        and resolved_color.ndim == 1
+    ):
+        resolved_color = np.log(np.asarray(resolved_color, dtype=float))
+        if color_norm is not None:
+            effective_color_norm = (np.log(color_norm[0]), np.log(color_norm[1]))
 
-    # Resolve size
-    resolved_size = _resolve_scalar_parameter(
-        size,
-        len(vertices),
-        norm=size_norm,
-        out_range=sizes,
-        layer=annotation,
-    )
+    # --- Resolve size ---
+    if (
+        size_scale is not None
+        and size is not None
+        and not isinstance(size, (int, float, bool))
+    ):
+        # Fetch raw values, apply transform, convert norm bounds to match.
+        if isinstance(size, str):
+            raw_size = np.asarray(annotation.get_feature(size), dtype=float)
+        else:
+            raw_size = np.asarray(size, dtype=float)
+        if size_scale == "log":
+            fn = np.log
+        elif size_scale == "sqrt":
+            fn = np.sqrt
+        elif size_scale == "cbrt":
+            fn = np.cbrt
+        transformed = fn(raw_size)
+        transformed_norm = (
+            (fn(size_norm[0]), fn(size_norm[1])) if size_norm is not None else None
+        )
+        resolved_size = _resolve_scalar_parameter(
+            transformed, len(vertices), norm=transformed_norm, out_range=sizes
+        )
+    else:
+        resolved_size = _resolve_scalar_parameter(
+            size, len(vertices), norm=size_norm, out_range=sizes, layer=annotation
+        )
 
     return plot_points_3d(
         points=vertices,
         sizes=resolved_size,
         colors=resolved_color,
         palette=palette,
-        color_norm=color_norm,
+        color_norm=effective_color_norm,
         opacity=opacity,
         plotter=plotter,
     )
@@ -554,6 +652,7 @@ def plot_annotations_3d(
 
 def plot_cell_3d(
     cell: Cell,
+    # Skeleton styling
     color: Optional[Union[str, np.ndarray, tuple]] = None,
     palette: Union[str, dict] = "coolwarm",
     color_norm: Optional[Tuple[float, float]] = None,
@@ -563,11 +662,26 @@ def plot_cell_3d(
     tube_radius_scale: Optional[float] = None,
     tube_radius_norm: Optional[Tuple[float, float]] = None,
     tube_radii: Optional[Tuple[float, float]] = None,
-    annotations: Optional[Union[str, List[str]]] = None,
-    annotation_color: Optional[Union[str, np.ndarray, tuple]] = None,
-    annotation_palette: Union[str, dict] = "coolwarm",
-    annotation_size: Optional[Union[str, float]] = None,
     root_marker: bool = False,
+    # Synapse control
+    synapses: Literal["pre", "post", "both", True, False] = False,
+    # Pre-synaptic annotation styling
+    pre_anno: str = "pre_syn",
+    pre_color: Optional[Union[str, np.ndarray, tuple]] = None,
+    pre_palette: Union[str, dict] = "coolwarm",
+    pre_color_norm: Optional[Tuple[float, float]] = None,
+    # Post-synaptic annotation styling
+    post_anno: str = "post_syn",
+    post_color: Optional[Union[str, np.ndarray, tuple]] = None,
+    post_palette: Union[str, dict] = "coolwarm",
+    post_color_norm: Optional[Tuple[float, float]] = None,
+    # Shared synapse styling
+    syn_opacity: float = 1.0,
+    syn_color_scale: Optional[Literal["log"]] = None,
+    syn_size: Optional[Union[str, np.ndarray, float]] = None,
+    syn_size_norm: Optional[Tuple[float, float]] = None,
+    syn_size_scale: Optional[Literal["log", "sqrt", "cbrt"]] = None,
+    syn_sizes: Optional[Tuple[float, float]] = (1, 30),
     plotter: Optional["pv.Plotter"] = None,
 ) -> "pv.Plotter":
     """Render a :class:`Cell` — skeleton and optional annotations — in 3D.
@@ -579,7 +693,12 @@ def plot_cell_3d(
     color : str, np.ndarray, or tuple, optional
         Skeleton color specification (see :func:`plot_morphology_3d`).
     palette : str or dict, default "coolwarm"
-        Colormap for skeleton color mapping.
+        Colormap for skeleton color mapping. Any name from the
+        `matplotlib colormap registry
+        <https://matplotlib.org/stable/gallery/color/colormap_reference.html>`_
+        is accepted, including colormaps registered by third-party packages
+        (e.g. cmocean, colorcet, cmcrameri) if they are installed. A dict
+        maps discrete values to colors.
     color_norm : tuple of float, optional
         ``(min, max)`` normalization range for skeleton color.
     opacity : float, default 1.0
@@ -594,17 +713,42 @@ def plot_cell_3d(
         ``(min, max)`` input range / cap for per-vertex tube radii.
     tube_radii : tuple of float, optional
         ``(min_radius, max_radius)`` output range for per-vertex tube radii.
-    annotations : str or list of str, optional
-        Names of annotation layers to render. If ``None``, no annotations
-        are added. Use ``"all"`` or a list of names.
-    annotation_color : str, np.ndarray, or tuple, optional
-        Color specification for all annotations.
-    annotation_palette : str or dict, default "coolwarm"
-        Colormap for annotation color mapping.
-    annotation_size : str or float, optional
-        Size/radius for annotation spheres.
     root_marker : bool, default False
         If ``True``, mark the root vertex with a sphere.
+    synapses : {"pre", "post", "both"} or bool, default False
+        Which synapse layers to render. ``False`` renders none; ``True`` or
+        ``"both"`` renders both pre- and post-synaptic; ``"pre"``/``"post"``
+        renders only that side.
+    pre_anno : str, default "pre_syn"
+        Name of the pre-synaptic annotation layer in *cell*.
+    pre_color : str, np.ndarray, or tuple, optional
+        Color specification for the pre-synaptic layer.
+    pre_palette : str or dict, default "coolwarm"
+        Colormap for pre-synaptic scalar color mapping (see *palette*).
+    pre_color_norm : tuple of float, optional
+        ``(min, max)`` clipping range for pre-synaptic color mapping.
+    post_anno : str, default "post_syn"
+        Name of the post-synaptic annotation layer in *cell*.
+    post_color : str, np.ndarray, or tuple, optional
+        Color specification for the post-synaptic layer.
+    post_palette : str or dict, default "coolwarm"
+        Colormap for post-synaptic scalar color mapping (see *palette*).
+    post_color_norm : tuple of float, optional
+        ``(min, max)`` clipping range for post-synaptic color mapping.
+    syn_opacity : float, default 1.0
+        Opacity for all synapse spheres.
+    syn_color_scale : {"log"} or None, optional
+        Value transform for synapse color mapping (see
+        :func:`plot_annotations_3d`).
+    syn_size : str, np.ndarray, or float, optional
+        Sphere radius for all synapse layers.
+    syn_size_norm : tuple of float, optional
+        ``(min, max)`` clipping range for synapse size mapping.
+    syn_size_scale : {"log", "sqrt", "cbrt"} or None, optional
+        Value transform for synapse size mapping (see
+        :func:`plot_annotations_3d`).
+    syn_sizes : tuple of float, default (1, 30)
+        ``(min_radius, max_radius)`` output range for synapse sizes.
     plotter : pv.Plotter, optional
         Existing plotter to add actors to.
 
@@ -631,23 +775,36 @@ def plot_cell_3d(
         plotter=plotter,
     )
 
-    if annotations is not None:
-        anno_names: List[str]
-        if annotations == "all":
-            anno_names = list(cell.annotations.names)
-        elif isinstance(annotations, str):
-            anno_names = [annotations]
-        else:
-            anno_names = list(annotations)
+    if synapses is not False:
+        _syn_kwargs: dict = dict(
+            opacity=syn_opacity,
+            color_scale=syn_color_scale,
+            size=syn_size,
+            size_norm=syn_size_norm,
+            size_scale=syn_size_scale,
+            sizes=syn_sizes,
+            plotter=plotter,
+        )
 
-        for name in anno_names:
-            if name in cell.annotations.names:
+        if synapses in ("pre", "both") or synapses is True:
+            if pre_anno in cell.annotations.names:
                 plotter = plot_annotations_3d(
-                    annotation=cell.annotations[name],
-                    color=annotation_color,
-                    palette=annotation_palette,
-                    size=annotation_size,
-                    plotter=plotter,
+                    cell.annotations[pre_anno],
+                    color=pre_color,
+                    palette=pre_palette,
+                    color_norm=pre_color_norm,
+                    **_syn_kwargs,
+                )
+                _syn_kwargs["plotter"] = plotter
+
+        if synapses in ("post", "both") or synapses is True:
+            if post_anno in cell.annotations.names:
+                plotter = plot_annotations_3d(
+                    cell.annotations[post_anno],
+                    color=post_color,
+                    palette=post_palette,
+                    color_norm=post_color_norm,
+                    **_syn_kwargs,
                 )
 
     return plotter

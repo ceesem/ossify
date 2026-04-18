@@ -1,6 +1,7 @@
 """Tests for ossify.plot3d — 3D plotting via PyVista."""
 
 import numpy as np
+import pandas as pd
 import pytest
 import pyvista as pv
 
@@ -73,6 +74,28 @@ class TestPlotSkeleton3d:
 class TestPlotMorphology3d:
     def test_default(self, nrn):
         pl = plot_morphology_3d(nrn)
+        assert _has_actors(pl)
+
+    def test_color_scale_log(self, nrn):
+        skel = nrn.skeleton
+        feature_names = skel.feature_names
+        if not feature_names:
+            pytest.skip("no features on skeleton")
+        pl = plot_morphology_3d(nrn, color=feature_names[0], color_scale="log")
+        assert _has_actors(pl)
+
+    def test_color_scale_log_with_norm(self, nrn):
+        skel = nrn.skeleton
+        feature_names = skel.feature_names
+        if not feature_names:
+            pytest.skip("no features on skeleton")
+        vals = skel.get_feature(feature_names[0]).astype(float)
+        vmin, vmax = float(np.nanmin(vals)), float(np.nanmax(vals))
+        if vmin <= 0:
+            pytest.skip("feature has non-positive values, log scale not applicable")
+        pl = plot_morphology_3d(
+            nrn, color=feature_names[0], color_scale="log", color_norm=(vmin, vmax)
+        )
         assert _has_actors(pl)
 
     def test_with_skeleton_layer_directly(self, nrn):
@@ -229,6 +252,56 @@ class TestPlotPoints3d:
         result = plot_points_3d(pts, plotter=pl)
         assert result is pl
 
+    # --- array-like input normalization ---
+    # plot_points_3d should accept any object that numpy can convert via
+    # __array__ (pandas Series, polars Series, plain lists, etc.).
+
+    @pytest.mark.parametrize(
+        "make_colors",
+        [
+            pytest.param(lambda v: v, id="ndarray"),
+            pytest.param(lambda v: v.tolist(), id="list"),
+            pytest.param(lambda v: pd.Series(v), id="pandas_Series"),
+        ],
+    )
+    def test_array_like_colors(self, nrn, make_colors):
+        """colors accepts any array-like, not just ndarray."""
+        pts = nrn.skeleton.vertices[:10]
+        values = make_colors(np.arange(len(pts), dtype=float))
+        pl = plot_points_3d(pts, colors=values)
+        assert _has_actors(pl)
+
+    @pytest.mark.parametrize(
+        "make_colors",
+        [
+            pytest.param(lambda v: v, id="ndarray"),
+            pytest.param(lambda v: v.tolist(), id="list"),
+            pytest.param(lambda v: pd.Series(v), id="pandas_Series"),
+        ],
+    )
+    def test_array_like_colors_glyph_path(self, nrn, make_colors):
+        """array-like colors work on the glyph (per-point sizes) path too."""
+        pts = nrn.skeleton.vertices[:10]
+        values = make_colors(np.arange(len(pts), dtype=float))
+        radii = np.linspace(50.0, 200.0, len(pts))
+        pl = plot_points_3d(pts, colors=values, sizes=radii, palette="viridis")
+        assert _has_actors(pl)
+
+    @pytest.mark.parametrize(
+        "make_sizes",
+        [
+            pytest.param(lambda v: v, id="ndarray"),
+            pytest.param(lambda v: v.tolist(), id="list"),
+            pytest.param(lambda v: pd.Series(v), id="pandas_Series"),
+        ],
+    )
+    def test_array_like_sizes(self, nrn, make_sizes):
+        """sizes accepts any array-like, not just ndarray."""
+        pts = nrn.skeleton.vertices[:10]
+        radii = make_sizes(np.linspace(50.0, 200.0, len(pts)))
+        pl = plot_points_3d(pts, sizes=radii)
+        assert _has_actors(pl)
+
 
 # ===========================================================================
 # plot_annotations_3d
@@ -277,6 +350,57 @@ class TestPlotAnnotations3d:
         result = plot_annotations_3d(anno, plotter=pl)
         assert result is pl
 
+    def _get_positive_feature(self, nrn):
+        """Return (anno, feature_name) where feature values are all positive."""
+        for name in nrn.annotations.names:
+            anno = nrn.annotations[name]
+            for feat in anno.feature_names:
+                vals = anno.get_feature(feat).astype(float)
+                if np.all(vals > 0):
+                    return anno, feat
+        return None, None
+
+    def test_color_scale_log(self, nrn):
+        anno, feat = self._get_positive_feature(nrn)
+        if anno is None:
+            pytest.skip("no annotation with all-positive feature")
+        pl = plot_annotations_3d(anno, color=feat, color_scale="log")
+        assert _has_actors(pl)
+
+    def test_color_scale_log_with_norm(self, nrn):
+        anno, feat = self._get_positive_feature(nrn)
+        if anno is None:
+            pytest.skip("no annotation with all-positive feature")
+        vals = anno.get_feature(feat).astype(float)
+        pl = plot_annotations_3d(
+            anno,
+            color=feat,
+            color_scale="log",
+            color_norm=(float(np.nanmin(vals)), float(np.nanmax(vals))),
+        )
+        assert _has_actors(pl)
+
+    def test_size_scale_sqrt(self, nrn):
+        anno, feat = self._get_positive_feature(nrn)
+        if anno is None:
+            pytest.skip("no annotation with all-positive feature")
+        pl = plot_annotations_3d(anno, size=feat, size_scale="sqrt")
+        assert _has_actors(pl)
+
+    def test_size_scale_cbrt(self, nrn):
+        anno, feat = self._get_positive_feature(nrn)
+        if anno is None:
+            pytest.skip("no annotation with all-positive feature")
+        pl = plot_annotations_3d(anno, size=feat, size_scale="cbrt")
+        assert _has_actors(pl)
+
+    def test_size_scale_log(self, nrn):
+        anno, feat = self._get_positive_feature(nrn)
+        if anno is None:
+            pytest.skip("no annotation with all-positive feature")
+        pl = plot_annotations_3d(anno, size=feat, size_scale="log")
+        assert _has_actors(pl)
+
 
 # ===========================================================================
 # plot_cell_3d
@@ -288,17 +412,6 @@ class TestPlotCell3d:
         pl = plot_cell_3d(nrn)
         assert _has_actors(pl)
 
-    def test_with_annotations_all(self, nrn):
-        pl = plot_cell_3d(nrn, annotations="all")
-        assert _has_actors(pl)
-
-    def test_with_specific_annotation(self, nrn):
-        anno_names = nrn.annotations.names
-        if not anno_names:
-            pytest.skip("no annotations on cell")
-        pl = plot_cell_3d(nrn, annotations=anno_names[0])
-        assert _has_actors(pl)
-
     def test_with_root_marker(self, nrn):
         pl = plot_cell_3d(nrn, root_marker=True)
         assert _has_actors(pl)
@@ -308,9 +421,95 @@ class TestPlotCell3d:
         result = plot_cell_3d(nrn, plotter=pl)
         assert result is pl
 
-    def test_missing_annotation_ignored(self, nrn):
-        # Should not raise even if annotation name doesn't exist
-        pl = plot_cell_3d(nrn, annotations="nonexistent_annotation_xyz")
+    def _anno_count(self, pl: pv.Plotter) -> int:
+        return len(pl.renderer.actors)
+
+    def test_synapses_false_renders_no_annotations(self, nrn):
+        pl_no = plot_cell_3d(nrn, synapses=False)
+        pl_pre = plot_cell_3d(nrn, synapses="pre")
+        anno_names = nrn.annotations.names
+        if "pre_syn" not in anno_names:
+            pytest.skip("no pre_syn annotation")
+        assert self._anno_count(pl_pre) > self._anno_count(pl_no)
+
+    def test_synapses_pre(self, nrn):
+        if "pre_syn" not in nrn.annotations.names:
+            pytest.skip("no pre_syn annotation")
+        pl = plot_cell_3d(nrn, synapses="pre")
+        assert _has_actors(pl)
+
+    def test_synapses_post(self, nrn):
+        if "post_syn" not in nrn.annotations.names:
+            pytest.skip("no post_syn annotation")
+        pl = plot_cell_3d(nrn, synapses="post")
+        assert _has_actors(pl)
+
+    def test_synapses_both(self, nrn):
+        anno_names = nrn.annotations.names
+        if "pre_syn" not in anno_names and "post_syn" not in anno_names:
+            pytest.skip("no pre_syn or post_syn annotation")
+        pl = plot_cell_3d(nrn, synapses="both")
+        assert _has_actors(pl)
+
+    def test_synapses_true_alias(self, nrn):
+        anno_names = nrn.annotations.names
+        if "pre_syn" not in anno_names and "post_syn" not in anno_names:
+            pytest.skip("no pre_syn or post_syn annotation")
+        pl = plot_cell_3d(nrn, synapses=True)
+        assert _has_actors(pl)
+
+    def test_pre_post_separate_colors(self, nrn):
+        anno_names = nrn.annotations.names
+        if "pre_syn" not in anno_names or "post_syn" not in anno_names:
+            pytest.skip("need both pre_syn and post_syn")
+        pl = plot_cell_3d(
+            nrn,
+            synapses="both",
+            pre_color="red",
+            post_color="blue",
+        )
+        assert _has_actors(pl)
+
+    def test_missing_pre_anno_ignored(self, nrn):
+        pl = plot_cell_3d(nrn, synapses="pre", pre_anno="nonexistent_xyz")
+        assert _has_actors(pl)
+
+    def test_missing_post_anno_ignored(self, nrn):
+        pl = plot_cell_3d(nrn, synapses="post", post_anno="nonexistent_xyz")
+        assert _has_actors(pl)
+
+    def test_custom_pre_anno_name(self, nrn):
+        anno_names = nrn.annotations.names
+        if not anno_names:
+            pytest.skip("no annotations on cell")
+        pl = plot_cell_3d(nrn, synapses="pre", pre_anno=anno_names[0])
+        assert _has_actors(pl)
+
+    def test_syn_size_and_opacity(self, nrn):
+        if "pre_syn" not in nrn.annotations.names:
+            pytest.skip("no pre_syn annotation")
+        pl = plot_cell_3d(nrn, synapses="pre", syn_size=50.0, syn_opacity=0.5)
+        assert _has_actors(pl)
+
+    def test_syn_size_scale_log(self, nrn):
+        anno_names = nrn.annotations.names
+        if not anno_names:
+            pytest.skip("no annotations on cell")
+        anno = nrn.annotations[anno_names[0]]
+        feat_names = anno.feature_names
+        if not feat_names:
+            pytest.skip("no features on annotation")
+        feat = feat_names[0]
+        vals = anno.get_feature(feat).astype(float)
+        if not np.all(vals > 0):
+            pytest.skip("feature has non-positive values")
+        pl = plot_cell_3d(
+            nrn,
+            synapses="pre",
+            pre_anno=anno_names[0],
+            syn_size=feat,
+            syn_size_scale="log",
+        )
         assert _has_actors(pl)
 
 
