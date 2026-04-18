@@ -11,6 +11,8 @@ from ossify import plot3d
 from ossify.plot3d import (
     plot_annotations_3d,
     plot_cell_3d,
+    plot_graph_3d,
+    plot_mesh_3d,
     plot_morphology_3d,
     plot_points_3d,
     plot_skeleton_3d,
@@ -510,6 +512,197 @@ class TestPlotCell3d:
             syn_size=feat,
             syn_size_scale="log",
         )
+        assert _has_actors(pl)
+
+    def test_mesh_false_no_extra_actors(self, cell_with_mesh):
+        baseline = plot_cell_3d(cell_with_mesh)
+        pl = plot_cell_3d(cell_with_mesh, mesh=False)
+        assert len(pl.renderer.actors) == len(baseline.renderer.actors)
+
+    def test_mesh_rendered(self, cell_with_mesh):
+        baseline = plot_cell_3d(cell_with_mesh)
+        pl = plot_cell_3d(cell_with_mesh, mesh=True)
+        assert len(pl.renderer.actors) > len(baseline.renderer.actors)
+
+    def test_mesh_feature_color(self, cell_with_mesh):
+        feat_names = cell_with_mesh.mesh.feature_names
+        if not feat_names:
+            pytest.skip("mesh has no features")
+        pl = plot_cell_3d(cell_with_mesh, mesh=True, mesh_color=feat_names[0])
+        assert _has_actors(pl)
+
+    def test_mesh_opacity(self, cell_with_mesh):
+        pl = plot_cell_3d(cell_with_mesh, mesh=True, mesh_opacity=0.5)
+        assert _has_actors(pl)
+
+
+# ===========================================================================
+# plot_graph_3d
+# ===========================================================================
+
+
+class TestPlotGraph3d:
+    def test_returns_plotter(self, graph):
+        pl = plot_graph_3d(graph)
+        assert isinstance(pl, pv.Plotter)
+
+    def test_has_actors(self, graph):
+        pl = plot_graph_3d(graph)
+        assert _has_actors(pl)
+
+    def test_nodes_only(self, graph):
+        pl = plot_graph_3d(graph, show_edges=False)
+        assert _has_actors(pl)
+
+    def test_edges_only(self, graph):
+        pl = plot_graph_3d(graph, show_nodes=False)
+        assert _has_actors(pl)
+
+    def test_uses_provided_plotter(self, graph):
+        pl = pv.Plotter()
+        result = plot_graph_3d(graph, plotter=pl)
+        assert result is pl
+
+    def test_node_string_color(self, graph):
+        pl = plot_graph_3d(graph, node_color="red")
+        assert _has_actors(pl)
+
+    def test_node_feature_color(self, graph):
+        pl = plot_graph_3d(graph, node_color="weight", node_palette="viridis")
+        assert _has_actors(pl)
+
+    def test_node_feature_color_with_norm(self, graph):
+        pl = plot_graph_3d(
+            graph,
+            node_color="weight",
+            node_color_norm=(100.0, 500.0),
+            node_palette="plasma",
+        )
+        assert _has_actors(pl)
+
+    def test_node_color_scale_log(self, graph):
+        pl = plot_graph_3d(
+            graph,
+            node_color="weight",
+            node_color_scale="log",
+            node_color_norm=(100.0, 500.0),
+        )
+        assert _has_actors(pl)
+
+    def test_node_uniform_size(self, graph):
+        pl = plot_graph_3d(graph, node_size=10.0)
+        assert _has_actors(pl)
+
+    def test_node_feature_size(self, graph):
+        pl = plot_graph_3d(graph, node_size="weight")
+        assert _has_actors(pl)
+
+    def test_node_size_scale_sqrt(self, graph):
+        pl = plot_graph_3d(graph, node_size="weight", node_size_scale="sqrt")
+        assert _has_actors(pl)
+
+    def test_node_size_scale_cbrt(self, graph):
+        pl = plot_graph_3d(graph, node_size="weight", node_size_scale="cbrt")
+        assert _has_actors(pl)
+
+    def test_edge_string_color(self, graph):
+        pl = plot_graph_3d(graph, edge_color="blue")
+        assert _has_actors(pl)
+
+    def test_edge_feature_color(self, graph):
+        """Edge tubes colored by vertex feature — gradient between endpoints."""
+        pl = plot_graph_3d(graph, edge_color="weight", edge_palette="coolwarm")
+        assert _has_actors(pl)
+
+    def test_edge_feature_color_with_scale(self, graph):
+        pl = plot_graph_3d(
+            graph,
+            edge_color="weight",
+            edge_color_scale="log",
+            edge_color_norm=(100.0, 500.0),
+        )
+        assert _has_actors(pl)
+
+    def test_edge_uniform_radius(self, graph):
+        pl = plot_graph_3d(graph, edge_radius=2.0)
+        assert _has_actors(pl)
+
+    def test_edge_feature_radius(self, graph):
+        """Edge tube radius varies by vertex feature — interpolated along tube."""
+        pl = plot_graph_3d(graph, edge_radius="weight", edge_radii=(0.5, 5.0))
+        assert _has_actors(pl)
+
+    def test_edge_feature_radius_with_scale(self, graph):
+        pl = plot_graph_3d(
+            graph,
+            edge_radius="weight",
+            edge_radius_scale="sqrt",
+            edge_radius_norm=(100.0, 500.0),
+        )
+        assert _has_actors(pl)
+
+    def test_feature_color_and_radius_together(self, graph):
+        """Both color and radius driven by feature — the key use case."""
+        pl = plot_graph_3d(
+            graph,
+            node_color="weight",
+            node_size="weight",
+            node_size_scale="sqrt",
+            edge_color="weight",
+            edge_radius="weight",
+            edge_radius_scale="sqrt",
+        )
+        assert _has_actors(pl)
+
+
+# ===========================================================================
+# plot_mesh_3d
+# ===========================================================================
+
+
+class TestPlotMesh3d:
+    """Tests for plot_mesh_3d."""
+
+    def test_returns_plotter(self, mesh):
+        pl = plot_mesh_3d(mesh)
+        assert isinstance(pl, pv.Plotter)
+
+    def test_has_actors(self, mesh):
+        pl = plot_mesh_3d(mesh)
+        assert _has_actors(pl)
+
+    def test_uniform_string_color(self, mesh):
+        pl = plot_mesh_3d(mesh, color="red")
+        assert _has_actors(pl)
+
+    def test_feature_color(self, mesh):
+        pl = plot_mesh_3d(mesh, color="value")
+        assert _has_actors(pl)
+
+    def test_feature_color_with_norm(self, mesh):
+        pl = plot_mesh_3d(mesh, color="value", color_norm=(0.5, 5.0))
+        assert _has_actors(pl)
+
+    def test_color_scale_log(self, mesh):
+        pl = plot_mesh_3d(mesh, color="value", color_scale="log")
+        assert _has_actors(pl)
+
+    def test_color_scale_log_with_norm(self, mesh):
+        pl = plot_mesh_3d(mesh, color="value", color_scale="log", color_norm=(0.5, 5.0))
+        assert _has_actors(pl)
+
+    def test_opacity(self, mesh):
+        pl = plot_mesh_3d(mesh, opacity=0.3)
+        assert _has_actors(pl)
+
+    def test_show_edges(self, mesh):
+        pl = plot_mesh_3d(mesh, show_edges=True)
+        assert _has_actors(pl)
+
+    def test_uses_provided_plotter(self, mesh):
+        existing = pv.Plotter()
+        pl = plot_mesh_3d(mesh, plotter=existing)
+        assert pl is existing
         assert _has_actors(pl)
 
 

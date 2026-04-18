@@ -4,7 +4,7 @@ from typing import List, Literal, Optional, Tuple, Union
 
 import numpy as np
 
-from .base import Cell, PointCloudLayer, SkeletonLayer
+from .base import Cell, GraphLayer, MeshLayer, PointCloudLayer, SkeletonLayer
 from .plot_utils import (
     _map_value_to_colors,
     _resolve_color_parameter,
@@ -25,6 +25,8 @@ __all__ = [
     "plot_morphology_3d",
     "plot_points_3d",
     "plot_annotations_3d",
+    "plot_mesh_3d",
+    "plot_graph_3d",
     "plot_cell_3d",
 ]
 
@@ -650,6 +652,379 @@ def plot_annotations_3d(
     )
 
 
+def plot_mesh_3d(
+    mesh: MeshLayer,
+    color: Optional[Union[str, np.ndarray, tuple]] = None,
+    palette: Union[str, dict] = "coolwarm",
+    color_norm: Optional[Tuple[float, float]] = None,
+    color_scale: Optional[Literal["log"]] = None,
+    opacity: float = 1.0,
+    show_edges: bool = False,
+    plotter: Optional["pv.Plotter"] = None,
+) -> "pv.Plotter":
+    """Render a :class:`MeshLayer` as a 3D surface using PyVista.
+
+    Parameters
+    ----------
+    mesh : MeshLayer
+        Mesh to render.
+    color : str, np.ndarray, or tuple, optional
+        Color specification. May be:
+
+        - A matplotlib color string (e.g. ``"steelblue"``) for a uniform surface color.
+        - A tuple ``(r, g, b)`` or ``(r, g, b, a)`` for a uniform RGBA color.
+        - A 1-D array of length ``n_vertices`` for per-vertex scalar coloring
+          (mapped through *palette*).
+        - A 2-D ``(n_vertices, 3)`` uint8 RGB array for direct per-vertex colors.
+        - A feature name string present in the mesh to use those values for coloring.
+
+        If ``None``, PyVista's default surface color is used.
+    palette : str or dict, default "coolwarm"
+        Colormap for scalar color mapping. Any name from the
+        `matplotlib colormap registry
+        <https://matplotlib.org/stable/gallery/color/colormap_reference.html>`_
+        is accepted, including colormaps registered by third-party packages
+        (e.g. cmocean, colorcet, cmcrameri) if they are installed.
+    color_norm : tuple of float, optional
+        ``(min, max)`` normalization range for scalar color mapping. Values
+        outside this range are clamped.
+    color_scale : {"log"} or None, optional
+        Transform applied to scalar values before color mapping.
+        ``"log"`` applies a natural-log transform; *color_norm* bounds are
+        interpreted in the **original** (pre-transform) space and converted
+        internally.
+    opacity : float, default 1.0
+        Surface opacity. Values less than 1.0 make the mesh semi-transparent,
+        useful when rendering alongside a skeleton.
+    show_edges : bool, default False
+        If ``True``, draw the mesh wireframe edges on top of the surface.
+    plotter : pv.Plotter, optional
+        Existing plotter to add the mesh to. If ``None``, a new plotter is
+        created.
+
+    Returns
+    -------
+    pv.Plotter
+        Plotter with the mesh surface rendered.
+    """
+    if plotter is None:
+        plotter = pv.Plotter()
+
+    vertices = mesh.vertices.astype(float)
+    faces_pos = mesh.faces_positional  # shape (M, 3)
+
+    # Build VTK face connectivity array: [3, f0, f1, f2, 3, g0, g1, g2, ...]
+    M = len(faces_pos)
+    vtk_faces = np.empty(M * 4, dtype=np.intp)
+    vtk_faces[0::4] = 3
+    vtk_faces[1::4] = faces_pos[:, 0]
+    vtk_faces[2::4] = faces_pos[:, 1]
+    vtk_faces[3::4] = faces_pos[:, 2]
+    poly = pv.PolyData(vertices, faces=vtk_faces)
+
+    # --- Resolve colors ---
+    resolved_color = _resolve_color_parameter(color, mesh)
+    effective_color_norm = color_norm
+    if (
+        color_scale == "log"
+        and isinstance(resolved_color, np.ndarray)
+        and resolved_color.ndim == 1
+    ):
+        resolved_color = np.log(np.asarray(resolved_color, dtype=float))
+        if color_norm is not None:
+            effective_color_norm = (np.log(color_norm[0]), np.log(color_norm[1]))
+
+    mesh_kwargs: dict = {"opacity": opacity, "show_edges": show_edges}
+
+    if isinstance(resolved_color, np.ndarray) and resolved_color.ndim == 1:
+        rgb = _map_value_to_colors(
+            resolved_color, colormap=palette, color_norm=effective_color_norm
+        )
+        poly.point_data["colors"] = rgb
+        mesh_kwargs["scalars"] = "colors"
+        mesh_kwargs["rgb"] = True
+    elif isinstance(resolved_color, np.ndarray) and resolved_color.ndim == 2:
+        poly.point_data["colors"] = resolved_color
+        mesh_kwargs["scalars"] = "colors"
+        mesh_kwargs["rgb"] = True
+    elif resolved_color is not None:
+        mesh_kwargs["color"] = resolved_color
+
+    plotter.add_mesh(poly, **mesh_kwargs)
+    return plotter
+
+
+def plot_graph_3d(
+    graph: GraphLayer,
+    # Node (vertex) styling
+    node_color: Optional[Union[str, np.ndarray, tuple]] = None,
+    node_palette: Union[str, dict] = "coolwarm",
+    node_color_norm: Optional[Tuple[float, float]] = None,
+    node_color_scale: Optional[Literal["log"]] = None,
+    node_size: Optional[Union[str, np.ndarray, float]] = None,
+    node_size_norm: Optional[Tuple[float, float]] = None,
+    node_size_scale: Optional[Literal["log", "sqrt", "cbrt"]] = None,
+    node_sizes: Optional[Tuple[float, float]] = (1, 30),
+    node_opacity: float = 1.0,
+    show_nodes: bool = True,
+    # Edge styling
+    edge_color: Optional[Union[str, np.ndarray, tuple]] = None,
+    edge_palette: Union[str, dict] = "coolwarm",
+    edge_color_norm: Optional[Tuple[float, float]] = None,
+    edge_color_scale: Optional[Literal["log"]] = None,
+    edge_radius: Optional[Union[str, float]] = None,
+    edge_radius_norm: Optional[Tuple[float, float]] = None,
+    edge_radius_scale: Optional[Literal["log", "sqrt", "cbrt"]] = None,
+    edge_radii: Optional[Tuple[float, float]] = (0.5, 5.0),
+    edge_opacity: float = 1.0,
+    line_width: float = 2.0,
+    show_edges: bool = True,
+    plotter: Optional["pv.Plotter"] = None,
+) -> "pv.Plotter":
+    """Render a :class:`GraphLayer` as sphere glyphs at nodes with edges as
+    lines or tubes.
+
+    All color and size features are per-vertex.  When a feature name is given
+    for an edge property, PyVista interpolates that value along each tube,
+    creating a smooth gradient between the two endpoint values.
+
+    Parameters
+    ----------
+    graph : GraphLayer
+        Graph to render.
+    node_color : str, np.ndarray, or tuple, optional
+        Color specification for node spheres. A feature name string resolves
+        to per-vertex values mapped through *node_palette*. Otherwise treated
+        as a matplotlib color.
+    node_palette : str or dict, default "coolwarm"
+        Colormap for node scalar color mapping. Any name from the
+        `matplotlib colormap registry
+        <https://matplotlib.org/stable/gallery/color/colormap_reference.html>`_
+        is accepted, including colormaps registered by third-party packages
+        (e.g. cmocean, colorcet, cmcrameri) if they are installed. A dict
+        maps discrete values to colors.
+    node_color_norm : tuple of float, optional
+        ``(min, max)`` clipping range for node color mapping, in the original
+        (pre-transform) value space.
+    node_color_scale : {"log"} or None, optional
+        Value transform before node colormap projection. ``"log"``
+        log-transforms values; *node_color_norm* stays in original space.
+    node_size : str, np.ndarray, or float, optional
+        Sphere radius for each node. A feature name string resolves to
+        per-vertex values rescaled to *node_sizes*.
+    node_size_norm : tuple of float, optional
+        ``(min, max)`` clipping range for node size mapping, in the original
+        (pre-transform) value space.
+    node_size_scale : {"log", "sqrt", "cbrt"} or None, optional
+        Value transform before node size normalization.
+    node_sizes : tuple of float, default (1, 30)
+        ``(min_radius, max_radius)`` output range for node sphere radii.
+    node_opacity : float, default 1.0
+        Opacity for node spheres.
+    show_nodes : bool, default True
+        If ``False``, suppress node sphere rendering.
+    edge_color : str, np.ndarray, or tuple, optional
+        Color specification for edges. A feature name string resolves to
+        per-vertex values; each tube is then colored by smoothly
+        interpolating between the two endpoint values. Otherwise treated as
+        a uniform matplotlib color.
+    edge_palette : str or dict, default "coolwarm"
+        Colormap for edge scalar color mapping (see *node_palette*).
+    edge_color_norm : tuple of float, optional
+        ``(min, max)`` clipping range for edge color mapping.
+    edge_color_scale : {"log"} or None, optional
+        Value transform before edge colormap projection.
+    edge_radius : str or float, optional
+        Tube radius for edges. A scalar float gives a uniform tube radius.
+        A feature name string resolves to per-vertex values rescaled to
+        *edge_radii*; the tube radius interpolates between the two endpoint
+        values along each edge. When ``None``, edges are rendered as lines
+        of *line_width* pixels.
+    edge_radius_norm : tuple of float, optional
+        ``(min, max)`` clipping range for edge radius mapping.
+    edge_radius_scale : {"log", "sqrt", "cbrt"} or None, optional
+        Value transform before edge radius normalization.
+    edge_radii : tuple of float, default (0.5, 5.0)
+        ``(min_radius, max_radius)`` output range for per-vertex edge radii.
+    edge_opacity : float, default 1.0
+        Opacity for edges.
+    line_width : float, default 2.0
+        Line width in pixels. Used only when *edge_radius* is ``None``.
+    show_edges : bool, default True
+        If ``False``, suppress edge rendering.
+    plotter : pv.Plotter, optional
+        Existing plotter to add actors to.
+
+    Returns
+    -------
+    pv.Plotter
+        Plotter with the graph rendered.
+    """
+    if plotter is None:
+        plotter = pv.Plotter()
+
+    vertices = graph.vertices
+    N = len(vertices)
+
+    # ------------------------------------------------------------------ nodes
+    if show_nodes:
+        resolved_node_color = _resolve_color_parameter(node_color, graph)
+        effective_node_color_norm = node_color_norm
+        if (
+            node_color_scale == "log"
+            and isinstance(resolved_node_color, np.ndarray)
+            and resolved_node_color.ndim == 1
+        ):
+            resolved_node_color = np.log(np.asarray(resolved_node_color, dtype=float))
+            if node_color_norm is not None:
+                effective_node_color_norm = (
+                    np.log(node_color_norm[0]),
+                    np.log(node_color_norm[1]),
+                )
+
+        if (
+            node_size_scale is not None
+            and node_size is not None
+            and not isinstance(node_size, (int, float, bool))
+        ):
+            if isinstance(node_size, str):
+                raw_ns = np.asarray(graph.get_feature(node_size), dtype=float)
+            else:
+                raw_ns = np.asarray(node_size, dtype=float)
+            if node_size_scale == "log":
+                fn_ns = np.log
+            elif node_size_scale == "sqrt":
+                fn_ns = np.sqrt
+            else:
+                fn_ns = np.cbrt
+            transformed_ns = fn_ns(raw_ns)
+            ns_norm = (
+                (fn_ns(node_size_norm[0]), fn_ns(node_size_norm[1]))
+                if node_size_norm is not None
+                else None
+            )
+            resolved_node_size = _resolve_scalar_parameter(
+                transformed_ns, N, norm=ns_norm, out_range=node_sizes
+            )
+        else:
+            resolved_node_size = _resolve_scalar_parameter(
+                node_size, N, norm=node_size_norm, out_range=node_sizes, layer=graph
+            )
+
+        plotter = plot_points_3d(
+            points=vertices,
+            sizes=resolved_node_size,
+            colors=resolved_node_color,
+            palette=node_palette,
+            color_norm=effective_node_color_norm,
+            opacity=node_opacity,
+            plotter=plotter,
+        )
+
+    # ------------------------------------------------------------------ edges
+    if show_edges:
+        edge_idx = graph.edges_positional  # (M, 2)
+        M = len(edge_idx)
+        if M == 0:
+            return plotter
+
+        # Build VTK line connectivity: [2, i0, j0, 2, i1, j1, ...]
+        lines = np.empty(M * 3, dtype=np.intp)
+        lines[0::3] = 2
+        lines[1::3] = edge_idx[:, 0]
+        lines[2::3] = edge_idx[:, 1]
+        poly = pv.PolyData(vertices.astype(float), lines=lines)
+
+        # Resolve edge color — per-vertex values get pre-mapped to RGB so the
+        # tube filter can interpolate them naturally between endpoints.
+        edge_mesh_kwargs: dict = {"opacity": edge_opacity}
+        resolved_edge_color = _resolve_color_parameter(edge_color, graph)
+        effective_edge_color_norm = edge_color_norm
+        if (
+            isinstance(resolved_edge_color, np.ndarray)
+            and resolved_edge_color.ndim == 1
+        ):
+            if edge_color_scale == "log":
+                resolved_edge_color = np.log(
+                    np.asarray(resolved_edge_color, dtype=float)
+                )
+                if edge_color_norm is not None:
+                    effective_edge_color_norm = (
+                        np.log(edge_color_norm[0]),
+                        np.log(edge_color_norm[1]),
+                    )
+            edge_colors_rgb = _map_value_to_colors(
+                resolved_edge_color,
+                colormap=edge_palette,
+                color_norm=effective_edge_color_norm,
+            )
+            poly.point_data["colors"] = edge_colors_rgb
+        elif isinstance(resolved_edge_color, str):
+            edge_mesh_kwargs["color"] = resolved_edge_color
+
+        # Resolve edge radius
+        resolved_edge_radius: Optional[Union[float, np.ndarray]] = None
+        if edge_radius is not None:
+            if isinstance(edge_radius, (int, float)):
+                resolved_edge_radius = float(edge_radius)
+            else:
+                if isinstance(edge_radius, str):
+                    raw_er = np.asarray(graph.get_feature(edge_radius), dtype=float)
+                else:
+                    raw_er = np.asarray(edge_radius, dtype=float)
+                if edge_radius_scale is not None:
+                    if edge_radius_scale == "log":
+                        fn_er = np.log
+                    elif edge_radius_scale == "sqrt":
+                        fn_er = np.sqrt
+                    else:
+                        fn_er = np.cbrt
+                    raw_er = fn_er(raw_er)
+                    er_norm = (
+                        (fn_er(edge_radius_norm[0]), fn_er(edge_radius_norm[1]))
+                        if edge_radius_norm is not None
+                        else None
+                    )
+                else:
+                    er_norm = edge_radius_norm
+                resolved_edge_radius = _resolve_scalar_parameter(
+                    raw_er, N, norm=er_norm, out_range=edge_radii
+                )
+
+        # Render
+        if resolved_edge_radius is not None:
+            if isinstance(resolved_edge_radius, np.ndarray):
+                r_min = float(np.min(resolved_edge_radius))
+                r_max = float(np.max(resolved_edge_radius))
+                if r_min <= 0:
+                    r_min = max(r_max * 0.01, 1e-9)
+                    resolved_edge_radius = np.clip(resolved_edge_radius, r_min, None)
+                if r_max <= r_min:
+                    poly = poly.tube(radius=r_min, n_sides=12)
+                else:
+                    poly.point_data["tube_radius"] = resolved_edge_radius
+                    poly = poly.tube(
+                        radius=r_min,
+                        scalars="tube_radius",
+                        radius_factor=r_max / r_min,
+                        n_sides=12,
+                    )
+            else:
+                poly = poly.tube(radius=resolved_edge_radius, n_sides=12)
+
+            if "colors" in poly.point_data:
+                edge_mesh_kwargs["scalars"] = "colors"
+                edge_mesh_kwargs["rgb"] = True
+            plotter.add_mesh(poly, **edge_mesh_kwargs)
+        else:
+            if "colors" in poly.point_data:
+                edge_mesh_kwargs["scalars"] = "colors"
+                edge_mesh_kwargs["rgb"] = True
+            plotter.add_mesh(poly, line_width=line_width, **edge_mesh_kwargs)
+
+    return plotter
+
+
 def plot_cell_3d(
     cell: Cell,
     # Skeleton styling
@@ -663,6 +1038,14 @@ def plot_cell_3d(
     tube_radius_norm: Optional[Tuple[float, float]] = None,
     tube_radii: Optional[Tuple[float, float]] = None,
     root_marker: bool = False,
+    # Mesh styling
+    mesh: bool = False,
+    mesh_color: Optional[Union[str, np.ndarray, tuple]] = None,
+    mesh_palette: Union[str, dict] = "coolwarm",
+    mesh_color_norm: Optional[Tuple[float, float]] = None,
+    mesh_color_scale: Optional[Literal["log"]] = None,
+    mesh_opacity: float = 0.3,
+    mesh_show_edges: bool = False,
     # Synapse control
     synapses: Literal["pre", "post", "both", True, False] = False,
     # Pre-synaptic annotation styling
@@ -715,6 +1098,21 @@ def plot_cell_3d(
         ``(min_radius, max_radius)`` output range for per-vertex tube radii.
     root_marker : bool, default False
         If ``True``, mark the root vertex with a sphere.
+    mesh : bool, default False
+        If ``True`` and *cell* has a mesh layer, render the mesh surface.
+    mesh_color : str, np.ndarray, or tuple, optional
+        Color specification for the mesh surface (see :func:`plot_mesh_3d`).
+    mesh_palette : str or dict, default "coolwarm"
+        Colormap for mesh scalar color mapping (see *palette*).
+    mesh_color_norm : tuple of float, optional
+        ``(min, max)`` clipping range for mesh color mapping.
+    mesh_color_scale : {"log"} or None, optional
+        Value transform for mesh color mapping (see :func:`plot_mesh_3d`).
+    mesh_opacity : float, default 0.3
+        Opacity of the mesh surface. Defaults to semi-transparent so the
+        skeleton remains visible underneath.
+    mesh_show_edges : bool, default False
+        If ``True``, draw wireframe edges on the mesh surface.
     synapses : {"pre", "post", "both"} or bool, default False
         Which synapse layers to render. ``False`` renders none; ``True`` or
         ``"both"`` renders both pre- and post-synaptic; ``"pre"``/``"post"``
@@ -774,6 +1172,18 @@ def plot_cell_3d(
         root_marker=root_marker,
         plotter=plotter,
     )
+
+    if mesh and cell.mesh is not None:
+        plotter = plot_mesh_3d(
+            cell.mesh,
+            color=mesh_color,
+            palette=mesh_palette,
+            color_norm=mesh_color_norm,
+            color_scale=mesh_color_scale,
+            opacity=mesh_opacity,
+            show_edges=mesh_show_edges,
+            plotter=plotter,
+        )
 
     if synapses is not False:
         _syn_kwargs: dict = dict(

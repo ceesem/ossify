@@ -2,8 +2,7 @@
 
 Ossify's plotting functions turn skeleton data into 2D figures where features like compartment, radius, and branching complexity map to visual properties (color, line width). The goal is publication-quality figures with precise scaling and clean styling, directly from your analysis.
 
-!!! info "Current Plotting Support"
-    Visualization functions currently work with **skeleton layers only**. Support for plotting meshes, graphs, and annotations is planned for future releases. The plotting API is designed to be extensible to other layer types.
+Ossify supports both **2D** plotting (via matplotlib) and **3D** interactive rendering (via PyVista).  The 3D functions require an optional dependency — install it with `pip install ossify[viz]`.
 
 ## Basic Skeleton Plotting
 
@@ -575,7 +574,7 @@ def plot_masked_comparison(cell, mask, mask_name="Mask"):
 - `root_marker` - Show root vertex marker
 - `invert_y` - Invert y-axis for projections containing 'y'
 
-!!! tip "Plotting Best Practices"
+!!! tip "2D Plotting Best Practices"
     - Use `units_per_inch` for consistent scaling across figures
     - Apply coordinate conversions (nm → μm) for appropriate scale bars
     - Use `despine=True` for clean publication figures
@@ -583,10 +582,143 @@ def plot_masked_comparison(cell, mask, mask_name="Mask"):
     - Color by meaningful biological properties (compartment, Strahler order)
     - Add scale bars with appropriate units for the data scale
 
-!!! note "Future Plotting Support"
-    The plotting framework is designed to be extensible. Future releases will add support for:
-    - Mesh surface rendering
-    - Graph network visualization  
-    - Annotation scatter plots
-    - 3D interactive visualization
-    - Animation capabilities
+---
+
+## 3D Visualization
+
+The 3D functions use [PyVista](https://docs.pyvista.org) as the rendering backend and return a `pv.Plotter` that can be displayed interactively or embedded in a notebook.  Install the extra with:
+
+```bash
+pip install ossify[viz]
+```
+
+### Full Cell — plot_cell_3d
+
+Renders skeleton, optional mesh surface, and optional synapses in a single call:
+
+```python
+import ossify
+from ossify.plot3d import plot_cell_3d
+
+cell = ossify.load_cell("neuron.osy")
+
+# Skeleton only
+pl = plot_cell_3d(cell, color="compartment", palette="coolwarm")
+
+# Skeleton + semi-transparent mesh
+pl = plot_cell_3d(
+    cell,
+    color="strahler_order",
+    mesh=True,
+    mesh_opacity=0.3,          # semi-transparent so skeleton shows through
+    mesh_color="white",
+)
+
+# Skeleton + synapses with per-synapse coloring
+pl = plot_cell_3d(
+    cell,
+    synapses="both",
+    pre_color="red",
+    post_color="blue",
+    syn_size="size",           # radius mapped from a feature
+    syn_sizes=(50, 500),       # output radius range
+    syn_size_scale="log",      # log-transform size values
+)
+
+pl.show()
+```
+
+### Mesh Surface — plot_mesh_3d
+
+Renders a `MeshLayer` as a colored surface:
+
+```python
+from ossify.plot3d import plot_mesh_3d
+
+# Uniform color
+pl = plot_mesh_3d(cell.mesh, color="lightgray", opacity=0.5)
+
+# Feature-driven coloring
+pl = plot_mesh_3d(
+    cell.mesh,
+    color="area",              # per-vertex feature name
+    palette="plasma",
+    color_norm=(0, 10000),     # clamp to 5th–95th percentile range
+)
+
+# Log-scale coloring
+pl = plot_mesh_3d(
+    cell.mesh,
+    color="area",
+    color_scale="log",         # log-transform before colormap
+    color_norm=(100, 50000),   # bounds in original space
+)
+pl.show()
+```
+
+### Skeleton Morphology — plot_morphology_3d
+
+Feature-driven coloring and variable-radius tubes on a skeleton or cell:
+
+```python
+from ossify.plot3d import plot_morphology_3d
+
+pl = plot_morphology_3d(
+    cell,
+    color="strahler_order",
+    palette="viridis",
+    tube_radius="radius",      # per-vertex tube radius from feature
+    tube_radius_scale=1/1000,  # nm → μm
+    tube_radii=(0.1, 5.0),    # output radius range (μm)
+)
+pl.show()
+```
+
+### Annotations — plot_annotations_3d
+
+Renders a `PointCloudLayer` as sphere glyphs:
+
+```python
+from ossify.plot3d import plot_annotations_3d
+
+pl = plot_annotations_3d(
+    cell.annotations["pre_syn"],
+    color="size",
+    color_scale="log",
+    color_norm=(275, 5771),    # 5th–95th percentile, original space
+    size="size",
+    size_scale="log",
+    sizes=(50, 500),
+)
+pl.show()
+```
+
+### Graph Networks — plot_graph_3d
+
+Renders a `GraphLayer` as node glyphs and edge tubes.  All properties live on vertices; tube colors and radii are interpolated between the two endpoint values:
+
+```python
+from ossify.plot3d import plot_graph_3d
+
+pl = plot_graph_3d(
+    cell.graph,
+    node_color="weight",
+    node_palette="coolwarm",
+    node_size="weight",
+    node_sizes=(20, 200),
+    edge_color="weight",       # interpolated along each tube
+    edge_radius=5.0,
+)
+pl.show()
+```
+
+### Compositing layers
+
+All 3D functions accept a `plotter=` keyword so you can compose multiple layers into one scene:
+
+```python
+pl = plot_morphology_3d(cell, color="compartment")
+pl = plot_mesh_3d(cell.mesh, opacity=0.2, plotter=pl)
+pl = plot_annotations_3d(cell.annotations["pre_syn"], color="red", plotter=pl)
+pl.show()
+```
