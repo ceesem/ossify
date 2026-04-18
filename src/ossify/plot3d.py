@@ -764,7 +764,7 @@ def plot_graph_3d(
     node_size: Optional[Union[str, np.ndarray, float]] = None,
     node_size_norm: Optional[Tuple[float, float]] = None,
     node_size_scale: Optional[Literal["log", "sqrt", "cbrt"]] = None,
-    node_sizes: Optional[Tuple[float, float]] = (1, 30),
+    node_sizes: Optional[Tuple[float, float]] = None,
     node_opacity: float = 1.0,
     show_nodes: bool = True,
     # Edge styling
@@ -775,7 +775,7 @@ def plot_graph_3d(
     edge_radius: Optional[Union[str, float]] = None,
     edge_radius_norm: Optional[Tuple[float, float]] = None,
     edge_radius_scale: Optional[Literal["log", "sqrt", "cbrt"]] = None,
-    edge_radii: Optional[Tuple[float, float]] = (0.5, 5.0),
+    edge_radii: Optional[Tuple[float, float]] = None,
     edge_opacity: float = 1.0,
     line_width: float = 2.0,
     show_edges: bool = True,
@@ -817,8 +817,11 @@ def plot_graph_3d(
         (pre-transform) value space.
     node_size_scale : {"log", "sqrt", "cbrt"} or None, optional
         Value transform before node size normalization.
-    node_sizes : tuple of float, default (1, 30)
-        ``(min_radius, max_radius)`` output range for node sphere radii.
+    node_sizes : tuple of float, optional
+        ``(min_radius, max_radius)`` output range for node sphere radii, in
+        the same world units as the vertex coordinates.  When ``None``
+        (default), a sensible range is estimated from the graph's bounding
+        box (approximately 0.5 %–3 % of the smallest spatial extent).
     node_opacity : float, default 1.0
         Opacity for node spheres.
     show_nodes : bool, default True
@@ -844,8 +847,10 @@ def plot_graph_3d(
         ``(min, max)`` clipping range for edge radius mapping.
     edge_radius_scale : {"log", "sqrt", "cbrt"} or None, optional
         Value transform before edge radius normalization.
-    edge_radii : tuple of float, default (0.5, 5.0)
-        ``(min_radius, max_radius)`` output range for per-vertex edge radii.
+    edge_radii : tuple of float, optional
+        ``(min_radius, max_radius)`` output range for per-vertex edge radii,
+        in world units.  When ``None`` (default), estimated from the graph's
+        bounding box (approximately 0.1 %–1 % of the smallest extent).
     edge_opacity : float, default 1.0
         Opacity for edges.
     line_width : float, default 2.0
@@ -865,6 +870,18 @@ def plot_graph_3d(
 
     vertices = graph.vertices
     N = len(vertices)
+
+    # Auto-compute size ranges from the bounding box when not provided.
+    # This ensures defaults are appropriate regardless of coordinate scale
+    # (nm, µm, voxels, etc.).
+    if node_sizes is None or edge_radii is None:
+        bbox = vertices.max(0) - vertices.min(0)
+        positive_dims = bbox[bbox > 0]
+        ref = float(positive_dims.min()) if len(positive_dims) > 0 else 1.0
+        if node_sizes is None:
+            node_sizes = (ref * 0.005, ref * 0.03)
+        if edge_radii is None:
+            edge_radii = (ref * 0.001, ref * 0.01)
 
     # ------------------------------------------------------------------ nodes
     if show_nodes:
