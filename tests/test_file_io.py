@@ -369,3 +369,322 @@ class TestLegacyMeshworkImport:
 
         # Verify node_mask is boolean array
         assert node_mask.dtype == bool
+
+
+# ============================================================================
+# SWC Import / Export
+# ============================================================================
+
+
+@pytest.fixture
+def swc_cell(simple_skeleton_data, spatial_columns):
+    """Cell with skeleton that has compartment and radius features."""
+    vertices, edges, vertex_indices = simple_skeleton_data
+    vertex_df = pd.DataFrame(vertices, columns=spatial_columns, index=vertex_indices)
+    edges_with_indices = np.array(
+        [
+            [vertex_indices[1], vertex_indices[0]],
+            [vertex_indices[2], vertex_indices[1]],
+            [vertex_indices[3], vertex_indices[2]],
+            [vertex_indices[4], vertex_indices[3]],
+        ]
+    )
+    cell = Cell(name="test_swc")
+    cell.add_skeleton(
+        vertices=vertex_df,
+        edges=edges_with_indices,
+        spatial_columns=spatial_columns,
+        root=vertex_indices[0],
+        features={
+            "compartment": np.array([1, 3, 3, 2, 2]),
+            "radius": np.array([5.0, 1.0, 1.5, 0.8, 0.5]),
+        },
+    )
+    return cell
+
+
+@pytest.fixture
+def branched_swc_cell(branched_skeleton_data, spatial_columns):
+    """Cell with a branched skeleton."""
+    vertices, edges, vertex_indices = branched_skeleton_data
+    vertex_df = pd.DataFrame(vertices, columns=spatial_columns, index=vertex_indices)
+    edges_with_indices = np.array(
+        [[vertex_indices[e[0]], vertex_indices[e[1]]] for e in edges]
+    )
+    cell = Cell(name="branched_swc")
+    cell.add_skeleton(
+        vertices=vertex_df,
+        edges=edges_with_indices,
+        spatial_columns=spatial_columns,
+        root=vertex_indices[0],
+        features={
+            "compartment": np.array([1, 3, 3, 2, 3]),
+            "radius": np.array([5.0, 2.0, 1.0, 1.0, 0.5]),
+        },
+    )
+    return cell
+
+
+class TestExportSWCDataframe:
+    def test_basic_output_columns(self, swc_cell):
+        df = file_io.export_swc_dataframe(swc_cell.skeleton)
+        assert list(df.columns) == ["id", "type", "x", "y", "z", "radius", "parent"]
+
+    def test_row_count_matches_vertices(self, swc_cell):
+        df = file_io.export_swc_dataframe(swc_cell.skeleton)
+        assert len(df) == swc_cell.skeleton.n_vertices
+
+    def test_root_is_first_with_parent_neg1(self, swc_cell):
+        df = file_io.export_swc_dataframe(swc_cell.skeleton)
+        assert df.iloc[0]["parent"] == -1
+        assert df.iloc[0]["id"] == 1
+
+    def test_ids_are_sequential_1_based(self, swc_cell):
+        df = file_io.export_swc_dataframe(swc_cell.skeleton)
+        np.testing.assert_array_equal(df["id"].values, np.arange(1, len(df) + 1))
+
+    def test_parents_defined_before_children(self, swc_cell):
+        """Every parent ID appears as an id in an earlier row."""
+        df = file_io.export_swc_dataframe(swc_cell.skeleton)
+        seen = set()
+        for _, row in df.iterrows():
+            if row["parent"] != -1:
+                assert row["parent"] in seen, (
+                    f"Parent {row['parent']} not yet defined for node {row['id']}"
+                )
+            seen.add(row["id"])
+
+    def test_compartment_feature_used(self, swc_cell):
+        df = file_io.export_swc_dataframe(swc_cell.skeleton, compartment="compartment")
+        assert df.iloc[0]["type"] == 1
+
+    def test_default_compartment_when_no_feature(self, swc_cell):
+        df = file_io.export_swc_dataframe(
+            swc_cell.skeleton, default_compartment_label=7
+        )
+        assert (df["type"] == 7).all()
+
+    def test_compartment_mapping(self, swc_cell):
+        mapping = {1: 1, 2: 4, 3: 3}
+        df = file_io.export_swc_dataframe(
+            swc_cell.skeleton, compartment="compartment", compartment_mapping=mapping
+        )
+        assert set(df["type"].values).issubset({1, 3, 4})
+
+    def test_radius_feature_used(self, swc_cell):
+        df = file_io.export_swc_dataframe(swc_cell.skeleton, radius="radius")
+        assert df.iloc[0]["radius"] == pytest.approx(5.0)
+
+    def test_default_radius(self, swc_cell):
+        df = file_io.export_swc_dataframe(swc_cell.skeleton, default_radius=2.5)
+        np.testing.assert_allclose(df["radius"].values, 2.5)
+
+    def test_rescale_coordinates(self, swc_cell):
+        df_orig = file_io.export_swc_dataframe(swc_cell.skeleton)
+        df_scaled = file_io.export_swc_dataframe(swc_cell.skeleton, rescale=0.001)
+        np.testing.assert_allclose(df_scaled["x"].values, df_orig["x"].values * 0.001)
+
+    def test_rescale_radius(self, swc_cell):
+        df = file_io.export_swc_dataframe(
+            swc_cell.skeleton, radius="radius", rescale=0.001
+        )
+        assert df.iloc[0]["radius"] == pytest.approx(0.005)
+
+    def test_rescale_radius_disabled(self, swc_cell):
+        df = file_io.export_swc_dataframe(
+            swc_cell.skeleton, radius="radius", rescale=0.001, rescale_radius=False
+        )
+        assert df.iloc[0]["radius"] == pytest.approx(5.0)
+
+    def test_branched_topo_order(self, branched_swc_cell):
+        """All parents defined before children even with branches."""
+        df = file_io.export_swc_dataframe(branched_swc_cell.skeleton)
+        seen = set()
+        for _, row in df.iterrows():
+            if row["parent"] != -1:
+                assert row["parent"] in seen
+            seen.add(row["id"])
+
+    def test_no_root_raises(self, simple_skeleton_data, spatial_columns):
+        """Skeleton without a root should raise."""
+        vertices, edges, _ = simple_skeleton_data
+        cell = Cell(name="no_root")
+        cell.add_skeleton(
+            vertices=vertices, edges=edges, spatial_columns=spatial_columns
+        )
+        sk = cell.skeleton
+        sk._root = None
+        with pytest.raises(ValueError, match="no root"):
+            file_io.export_swc_dataframe(sk)
+
+
+class TestExportSWC:
+    def test_writes_file(self, swc_cell, tmp_path):
+        out = tmp_path / "test.swc"
+        file_io.export_swc(
+            swc_cell, file=out, compartment="compartment", radius="radius"
+        )
+        assert out.exists()
+        text = out.read_text()
+        lines = [l for l in text.strip().splitlines() if not l.startswith("#")]
+        assert len(lines) == swc_cell.skeleton.n_vertices
+
+    def test_default_filename(self, swc_cell, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        file_io.export_swc(swc_cell)
+        assert (tmp_path / "test_swc.swc").exists()
+
+    def test_header_written(self, swc_cell, tmp_path):
+        out = tmp_path / "test.swc"
+        file_io.export_swc(swc_cell, file=out, header="Created by ossify\nVersion 1.0")
+        text = out.read_text()
+        assert text.startswith("# Created by ossify\n# Version 1.0\n")
+
+    def test_file_object(self, swc_cell):
+        buf = io.StringIO()
+        file_io.export_swc(swc_cell, file=buf)
+        text = buf.getvalue()
+        lines = [l for l in text.strip().splitlines() if not l.startswith("#")]
+        assert len(lines) == swc_cell.skeleton.n_vertices
+
+    def test_resample_distance(self, swc_cell, tmp_path):
+        out = tmp_path / "resampled.swc"
+        file_io.export_swc(swc_cell, file=out, resample_distance=0.5)
+        text = out.read_text()
+        lines = [l for l in text.strip().splitlines() if not l.startswith("#")]
+        assert len(lines) >= swc_cell.skeleton.n_vertices
+
+    def test_no_skeleton_raises(self):
+        cell = Cell(name="empty")
+        with pytest.raises(ValueError, match="no skeleton"):
+            file_io.export_swc(cell)
+
+
+class TestLoadSWC:
+    def test_load_from_file(self, tmp_path):
+        swc_text = (
+            "# comment\n"
+            "1 1 0.0 0.0 0.0 5.0 -1\n"
+            "2 3 1.0 0.0 0.0 1.0 1\n"
+            "3 3 2.0 0.0 0.0 1.5 2\n"
+            "4 2 3.0 0.0 0.0 0.8 3\n"
+        )
+        swc_file = tmp_path / "test.swc"
+        swc_file.write_text(swc_text)
+
+        sk = file_io.load_swc(swc_file)
+        assert sk.n_vertices == 4
+        assert sk.name == "test"
+        assert sk.root is not None
+
+    def test_load_from_string_io(self):
+        swc_text = (
+            "1 1 0.0 0.0 0.0 5.0 -1\n2 3 1.0 0.0 0.0 1.0 1\n3 3 2.0 1.0 0.0 1.5 2\n"
+        )
+        sk = file_io.load_swc(io.StringIO(swc_text), name="from_stream")
+        assert sk.n_vertices == 3
+        assert sk.name == "from_stream"
+
+    def test_coordinates_correct(self, tmp_path):
+        swc_text = "1 0 10.0 20.0 30.0 1.0 -1\n"
+        swc_file = tmp_path / "coords.swc"
+        swc_file.write_text(swc_text)
+
+        sk = file_io.load_swc(swc_file)
+        np.testing.assert_allclose(sk.vertices[0], [10.0, 20.0, 30.0])
+
+    def test_features_loaded(self, tmp_path):
+        swc_text = "1 1 0 0 0 5.0 -1\n2 3 1 0 0 1.0 1\n"
+        swc_file = tmp_path / "feats.swc"
+        swc_file.write_text(swc_text)
+
+        sk = file_io.load_swc(swc_file)
+        np.testing.assert_array_equal(sk.get_feature("compartment"), [1, 3])
+        np.testing.assert_allclose(sk.get_feature("radius"), [5.0, 1.0])
+
+    def test_rescale(self, tmp_path):
+        swc_text = "1 0 1.0 2.0 3.0 0.5 -1\n"
+        swc_file = tmp_path / "scale.swc"
+        swc_file.write_text(swc_text)
+
+        sk = file_io.load_swc(swc_file, rescale=1000.0)
+        np.testing.assert_allclose(sk.vertices[0], [1000.0, 2000.0, 3000.0])
+        np.testing.assert_allclose(sk.get_feature("radius"), [500.0])
+
+    def test_nonsequential_ids(self, tmp_path):
+        swc_text = "10 1 0 0 0 1.0 -1\n20 3 1 0 0 1.0 10\n30 3 2 0 0 1.0 20\n"
+        swc_file = tmp_path / "gaps.swc"
+        swc_file.write_text(swc_text)
+
+        sk = file_io.load_swc(swc_file)
+        assert sk.n_vertices == 3
+        assert sk.root is not None
+
+    def test_branched_structure(self, tmp_path):
+        swc_text = (
+            "1 1 0 0 0 5.0 -1\n2 3 1 0 0 2.0 1\n3 3 2 1 0 1.0 2\n4 2 2 -1 0 1.0 2\n"
+        )
+        swc_file = tmp_path / "branch.swc"
+        swc_file.write_text(swc_text)
+
+        sk = file_io.load_swc(swc_file)
+        assert sk.n_vertices == 4
+        assert 1 in sk.branch_points_positional
+
+    def test_undefined_parent_raises(self, tmp_path):
+        swc_text = "1 0 0 0 0 1.0 -1\n2 0 1 0 0 1.0 99\n"
+        swc_file = tmp_path / "bad.swc"
+        swc_file.write_text(swc_text)
+
+        with pytest.raises(ValueError, match="undefined parent"):
+            file_io.load_swc(swc_file)
+
+    def test_empty_file_raises(self, tmp_path):
+        swc_file = tmp_path / "empty.swc"
+        swc_file.write_text("# only comments\n")
+
+        with pytest.raises(ValueError, match="No data points"):
+            file_io.load_swc(swc_file)
+
+
+class TestSWCRoundtrip:
+    def test_roundtrip_linear(self, swc_cell, tmp_path):
+        """Export then re-import should preserve structure."""
+        out = tmp_path / "roundtrip.swc"
+        file_io.export_swc(
+            swc_cell, file=out, compartment="compartment", radius="radius"
+        )
+
+        sk = file_io.load_swc(out)
+        assert sk.n_vertices == swc_cell.skeleton.n_vertices
+        np.testing.assert_allclose(sk.vertices, swc_cell.skeleton.vertices, atol=1e-5)
+        np.testing.assert_array_equal(
+            sk.get_feature("compartment"),
+            swc_cell.skeleton.get_feature("compartment"),
+        )
+        np.testing.assert_allclose(
+            sk.get_feature("radius"),
+            swc_cell.skeleton.get_feature("radius"),
+            atol=1e-5,
+        )
+
+    def test_roundtrip_branched(self, branched_swc_cell, tmp_path):
+        """Branched skeleton roundtrip preserves topology."""
+        out = tmp_path / "branched_rt.swc"
+        file_io.export_swc(
+            branched_swc_cell, file=out, compartment="compartment", radius="radius"
+        )
+
+        sk = file_io.load_swc(out)
+        assert sk.n_vertices == branched_swc_cell.skeleton.n_vertices
+        assert len(sk.branch_points_positional) == len(
+            branched_swc_cell.skeleton.branch_points_positional
+        )
+
+    def test_roundtrip_with_rescale(self, swc_cell, tmp_path):
+        """Export with rescale, import with inverse rescale."""
+        out = tmp_path / "scaled.swc"
+        file_io.export_swc(swc_cell, file=out, radius="radius", rescale=0.001)
+
+        sk = file_io.load_swc(out, rescale=1000.0)
+        np.testing.assert_allclose(sk.vertices, swc_cell.skeleton.vertices, atol=1e-3)

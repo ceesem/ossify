@@ -9,6 +9,8 @@ pv.OFF_SCREEN = True
 
 from ossify import plot3d
 from ossify.plot3d import (
+    add_colorbar_3d,
+    orbit_3d,
     plot_annotations_3d,
     plot_cell_3d,
     plot_graph_3d,
@@ -759,3 +761,81 @@ class TestResolveScalarParameter:
 
         with pytest.raises(ValueError, match="layer is required"):
             _resolve_scalar_parameter("some_feature", 10, layer=None)
+
+
+# ===========================================================================
+# add_colorbar_3d
+# ===========================================================================
+
+
+class TestAddColorbar3d:
+    def test_returns_same_plotter(self):
+        pl = pv.Plotter()
+        result = add_colorbar_3d(pl, palette="viridis", color_norm=(0, 10))
+        assert result is pl
+
+    def test_adds_actor(self):
+        pl = pv.Plotter()
+        n_before = len(pl.renderer.actors)
+        add_colorbar_3d(pl, palette="coolwarm", color_norm=(0, 100))
+        assert len(pl.renderer.actors) > n_before
+
+    def test_default_color_norm(self):
+        pl = pv.Plotter()
+        # Should not raise when color_norm is omitted (defaults to [0, 1])
+        add_colorbar_3d(pl, palette="viridis")
+        assert len(pl.renderer.actors) > 0
+
+    def test_with_label(self):
+        pl = pv.Plotter()
+        add_colorbar_3d(pl, palette="plasma", color_norm=(1, 7), label="Strahler")
+        assert len(pl.renderer.actors) > 0
+
+    def test_with_existing_actors(self, nrn):
+        pl = plot_morphology_3d(nrn, color="red")
+        n_before = len(pl.renderer.actors)
+        add_colorbar_3d(pl, palette="coolwarm", color_norm=(0, 1), label="Test")
+        assert len(pl.renderer.actors) > n_before
+
+    def test_custom_position(self):
+        pl = pv.Plotter()
+        add_colorbar_3d(
+            pl,
+            palette="viridis",
+            color_norm=(0, 1),
+            position_x=0.1,
+            position_y=0.1,
+            width=0.05,
+            height=0.5,
+        )
+        assert len(pl.renderer.actors) > 0
+
+    def test_screenshot_with_colorbar(self, nrn):
+        pl = plot_morphology_3d(nrn, color="red")
+        add_colorbar_3d(pl, palette="coolwarm", color_norm=(0, 1))
+        img = pl.screenshot(return_img=True)
+        assert img.shape[0] > 0 and img.shape[1] > 0
+
+
+# ===========================================================================
+# orbit_3d
+# ===========================================================================
+
+
+class TestOrbit3d:
+    def test_returns_plotter(self, nrn):
+        pl = plot_morphology_3d(nrn, color="red")
+        result = orbit_3d(pl, n_frames=5)
+        assert result is pl
+
+    def test_with_elevation(self, nrn):
+        pl = plot_morphology_3d(nrn, color="red")
+        orbit_3d(pl, n_frames=5, elevation=30.0)
+
+    def test_with_viewup(self, nrn):
+        pl = plot_morphology_3d(nrn, color="red")
+        orbit_3d(pl, n_frames=5, viewup=(0, 0, 1))
+
+    def test_with_factor(self, nrn):
+        pl = plot_morphology_3d(nrn, color="red")
+        orbit_3d(pl, n_frames=5, factor=3.0)

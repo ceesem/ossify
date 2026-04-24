@@ -58,8 +58,8 @@ profile = [
     "pyinstrument",
 ]
 viz = [
+    "imageio",
     "pyvista",
-    "seaborn>=0.13.2",
 ]
 
 

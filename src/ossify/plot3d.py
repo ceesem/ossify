@@ -19,6 +19,7 @@ except ImportError as e:
     ) from e
 
 import matplotlib.colors as mcolors
+from matplotlib.colors import Colormap
 
 __all__ = [
     "plot_skeleton_3d",
@@ -28,6 +29,8 @@ __all__ = [
     "plot_mesh_3d",
     "plot_graph_3d",
     "plot_cell_3d",
+    "add_colorbar_3d",
+    "orbit_3d",
 ]
 
 
@@ -323,6 +326,22 @@ def plot_morphology_3d(
             else:
                 opacity_out = resolved_opacity
 
+    # When root_marker is shown, replace the root vertex's tube radius with
+    # the average of its immediate children so the tube doesn't bulge at the
+    # soma (the sphere handles the visual root marker instead).
+    if (
+        root_marker
+        and isinstance(resolved_tube_radius, np.ndarray)
+        and skel.root_positional is not None
+    ):
+        root_pos = skel.root_positional
+        child_mask = skel.parent_node_array == root_pos
+        if np.any(child_mask):
+            resolved_tube_radius = resolved_tube_radius.copy()
+            resolved_tube_radius[root_pos] = float(
+                np.mean(resolved_tube_radius[child_mask])
+            )
+
     plotter = plot_skeleton_3d(
         skel=skel,
         colors=colors_array,
@@ -336,8 +355,10 @@ def plot_morphology_3d(
         # Determine sphere radius
         if root_radius is not None:
             r = float(root_radius)
-        elif isinstance(resolved_tube_radius, float):
-            r = resolved_tube_radius
+        elif isinstance(resolved_tube_radius, np.ndarray):
+            r = float(resolved_tube_radius[skel.root_positional])
+        elif isinstance(resolved_tube_radius, (int, float)):
+            r = float(resolved_tube_radius)
         else:
             r = 1.0
 
@@ -451,8 +472,21 @@ def plot_points_3d(
             mesh_kwargs["scalars"] = "colors"
             mesh_kwargs["rgb"] = True
 
+    # --- Normalize sizes to an array ---
+    # Ensure we always have a per-point radius array so there is a single
+    # glyph rendering path.  When no size is provided, derive a sensible
+    # default from the bounding box so spheres are visible regardless of
+    # coordinate scale (nm, µm, voxels, etc.).
+    if sizes is None:
+        bbox = pts.max(0) - pts.min(0)
+        positive_dims = bbox[bbox > 0]
+        ref = float(positive_dims.min()) if len(positive_dims) > 0 else 1.0
+        sizes = np.full(len(pts), ref * 0.01)
+    elif not isinstance(sizes, np.ndarray):
+        sizes = np.full(len(pts), float(sizes))
+
     # --- Render ---
-    if sizes is not None and isinstance(sizes, np.ndarray):
+    if colors is not None and isinstance(colors, np.ndarray):
         # Per-point radius via glyph
         cloud.point_data["radius"] = sizes.astype(float)
         # radius=1.0 ensures the glyph scale factor equals the output sphere
@@ -493,40 +527,14 @@ def plot_points_3d(
                 glyph_kwargs["scalars"] = np.repeat(src, n_per, axis=0)
         plotter.add_mesh(glyphs, **glyph_kwargs)
     else:
-        point_size = float(sizes) if sizes is not None else 5.0
-        if colors is not None and isinstance(colors, np.ndarray):
-            # render_points_as_spheres doesn't reliably apply per-point
-            # coloring in all PyVista/VTK versions — the PolyData has no
-            # cells, so VTK may ignore per-vertex scalars.  Use sphere
-            # glyphs (actual mesh geometry) which always respect rgb=True.
-            cloud.point_data["_r"] = np.full(len(pts), point_size)
-            geom = pv.Sphere(radius=1.0, theta_resolution=8, phi_resolution=8)
-            glyphs_uni = cloud.glyph(geom=geom, scale="_r", orient=False)
-            u_kwargs: dict = {
-                k: v
-                for k, v in mesh_kwargs.items()
-                if k not in ("scalars", "rgb", "cmap", "clim")
-            }
-            if glyphs_uni.n_points % cloud.n_points == 0:
-                n_per = glyphs_uni.n_points // cloud.n_points
-                if colors.ndim == 1:
-                    mapped = _map_value_to_colors(
-                        colors, colormap=palette, color_norm=color_norm
-                    )
-                else:
-                    mapped = colors
-                u_kwargs["scalars"] = np.repeat(mapped, n_per, axis=0)
-                u_kwargs["rgb"] = True
-            plotter.add_mesh(glyphs_uni, **u_kwargs)
-        else:
-            # No per-point colors — keep the lightweight render_points_as_spheres path.
-            for key in ("scalars", "rgb", "cmap", "clim"):
-                mesh_kwargs.pop(key, None)
-            mesh_kwargs["point_size"] = point_size
-            mesh_kwargs["render_points_as_spheres"] = True
-            if isinstance(colors, str):
-                mesh_kwargs["color"] = colors
-            plotter.add_mesh(cloud, **mesh_kwargs)
+        # No per-point colors — use the lightweight render_points_as_spheres path.
+        for key in ("scalars", "rgb", "cmap", "clim"):
+            mesh_kwargs.pop(key, None)
+        mesh_kwargs["point_size"] = float(sizes.mean())
+        mesh_kwargs["render_points_as_spheres"] = True
+        if isinstance(colors, str):
+            mesh_kwargs["color"] = colors
+        plotter.add_mesh(cloud, **mesh_kwargs)
 
     return plotter
 
@@ -1048,6 +1056,7 @@ def plot_cell_3d(
     color: Optional[Union[str, np.ndarray, tuple]] = None,
     palette: Union[str, dict] = "coolwarm",
     color_norm: Optional[Tuple[float, float]] = None,
+    color_scale: Optional[Literal["log"]] = None,
     opacity: float = 1.0,
     line_width: float = 2.0,
     tube_radius: Optional[Union[float, str, np.ndarray]] = None,
@@ -1101,6 +1110,9 @@ def plot_cell_3d(
         maps discrete values to colors.
     color_norm : tuple of float, optional
         ``(min, max)`` normalization range for skeleton color.
+    color_scale : {"log"} or None, optional
+        Value transform applied before skeleton colormap projection (see
+        :func:`plot_morphology_3d`).
     opacity : float, default 1.0
         Skeleton opacity.
     line_width : float, default 2.0
@@ -1180,6 +1192,7 @@ def plot_cell_3d(
         color=color,
         palette=palette,
         color_norm=color_norm,
+        color_scale=color_scale,
         opacity=opacity,
         line_width=line_width,
         tube_radius=tube_radius,
@@ -1233,5 +1246,165 @@ def plot_cell_3d(
                     color_norm=post_color_norm,
                     **_syn_kwargs,
                 )
+
+    return plotter
+
+
+def add_colorbar_3d(
+    plotter: "pv.Plotter",
+    palette: Union[str, Colormap] = "coolwarm",
+    color_norm: Optional[Tuple[float, float]] = None,
+    label: Optional[str] = None,
+    position_x: float = 0.85,
+    position_y: float = 0.05,
+    width: float = 0.1,
+    height: float = 0.9,
+    **scalar_bar_kwargs,
+) -> "pv.Plotter":
+    """Add a colorbar to a 3D plotter.
+
+    Because ossify's plot functions pre-map scalars to RGB, PyVista has no
+    colormap information to build a scalar bar from.  This function injects a
+    tiny invisible helper mesh that carries the desired colormap and range,
+    which triggers PyVista's native scalar bar rendering.
+
+    Parameters
+    ----------
+    plotter : pv.Plotter
+        Plotter to add the colorbar to.
+    palette : str or Colormap, default "coolwarm"
+        Colormap name (any matplotlib-registered name) or Colormap object.
+    color_norm : tuple of float, optional
+        ``(min, max)`` range for the colorbar.  When ``None``, the bar spans
+        ``[0, 1]``.
+    label : str, optional
+        Title text displayed alongside the colorbar.
+    position_x : float, default 0.85
+        Horizontal position of the colorbar (0 = left edge, 1 = right edge).
+    position_y : float, default 0.05
+        Vertical position of the colorbar bottom (0 = bottom, 1 = top).
+    width : float, default 0.1
+        Width of the colorbar as a fraction of the window.
+    height : float, default 0.9
+        Height of the colorbar as a fraction of the window.
+    **scalar_bar_kwargs
+        Additional keyword arguments forwarded to PyVista's
+        ``scalar_bar_args`` dict (e.g. ``n_labels``, ``fmt``).
+
+    Returns
+    -------
+    pv.Plotter
+        The same plotter, with the colorbar added.
+
+    Examples
+    --------
+    >>> pl = plot_morphology_3d(cell, color="strahler_order", palette="viridis")
+    >>> add_colorbar_3d(pl, palette="viridis", color_norm=(1, 7), label="Strahler order")
+    """
+    vmin, vmax = color_norm if color_norm is not None else (0.0, 1.0)
+
+    # Place the dummy geometry far from any realistic data so it never
+    # appears visually — even if point_size=0 is ignored on some backends.
+    far = 1e12
+    dummy = pv.PolyData(np.array([[far, far, far], [far, far, far + 1.0]]))
+    dummy.point_data["_cbar"] = np.array([vmin, vmax])
+
+    sbar_args = {
+        "title": label or "",
+        "position_x": position_x,
+        "position_y": position_y,
+        "width": width,
+        "height": height,
+    }
+    sbar_args.update(scalar_bar_kwargs)
+
+    plotter.add_mesh(
+        dummy,
+        scalars="_cbar",
+        cmap=palette,
+        clim=[vmin, vmax],
+        point_size=0,
+        show_scalar_bar=True,
+        scalar_bar_args=sbar_args,
+    )
+    return plotter
+
+
+def orbit_3d(
+    plotter: "pv.Plotter",
+    output: Optional[str] = None,
+    n_frames: int = 60,
+    elevation: float = 0.0,
+    factor: float = 2.0,
+    framerate: int = 24,
+    viewup: Optional[Tuple[float, float, float]] = None,
+) -> "pv.Plotter":
+    """Orbit the camera around the scene, optionally saving to a file.
+
+    Generates a circular orbital path and either plays the orbit
+    interactively or writes frames to a GIF / MP4 file.
+
+    Parameters
+    ----------
+    plotter : pv.Plotter
+        Plotter with actors already added.
+    output : str, optional
+        Path to write the animation to (``.gif`` or ``.mp4``).  Requires
+        ``imageio`` to be installed.  When ``None``, the orbit is displayed
+        interactively (or runs off-screen silently).
+    n_frames : int, default 60
+        Number of frames in the full orbit.
+    elevation : float, default 0.0
+        Camera elevation angle in degrees above the XY plane.
+    factor : float, default 2.0
+        Orbit radius factor relative to the scene bounding box.  Larger
+        values move the camera further from the scene center.
+    framerate : int, default 24
+        Frames per second for file output.  Ignored when *output* is
+        ``None``.
+    viewup : tuple of float, optional
+        Camera "up" direction as ``(x, y, z)``.  When ``None``, PyVista's
+        default is used.
+
+    Returns
+    -------
+    pv.Plotter
+        The same plotter after the orbit completes.
+
+    Examples
+    --------
+    Interactive orbit:
+
+    >>> pl = plot_cell_3d(cell, color="red", tube_radius=500)
+    >>> orbit_3d(pl)
+
+    Save to GIF:
+
+    >>> pl = plot_cell_3d(cell, color="red", tube_radius=500)
+    >>> orbit_3d(pl, output="neuron_orbit.gif", n_frames=90)
+    """
+    path_kwargs: dict = {"factor": factor, "n_points": n_frames}
+    if viewup is not None:
+        path_kwargs["viewup"] = viewup
+
+    # Set camera elevation before generating the orbital path so the
+    # path is computed at the desired viewing angle.
+    if elevation != 0.0:
+        plotter.camera.elevation = elevation
+
+    path = plotter.generate_orbital_path(**path_kwargs)
+
+    if output is not None:
+        ext = output.rsplit(".", 1)[-1].lower()
+        if ext == "gif":
+            plotter.open_gif(output)
+        else:
+            plotter.open_movie(output, framerate=framerate)
+        plotter.orbit_on_path(path, write_frames=True)
+        plotter.close()
+    else:
+        plotter.show(auto_close=False)
+        plotter.orbit_on_path(path, write_frames=False)
+        plotter.close()
 
     return plotter

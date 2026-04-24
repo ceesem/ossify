@@ -667,3 +667,29 @@ ax.set_title("Distance to Nearest Branch Point")
         show_signature_annotations: true
         separate_signature: true
         show_source: false
+
+---
+
+## 3D Utilities {: .doc-heading}
+
+### add_colorbar_3d
+
+::: ossify.plot3d.add_colorbar_3d
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+### orbit_3d
+
+::: ossify.plot3d.orbit_3d
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false

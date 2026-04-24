@@ -722,3 +722,60 @@ pl = plot_mesh_3d(cell.mesh, opacity=0.2, plotter=pl)
 pl = plot_annotations_3d(cell.annotations["pre_syn"], color="red", plotter=pl)
 pl.show()
 ```
+
+### Colorbars — add_colorbar_3d
+
+Because ossify pre-maps scalar values to RGB colors, PyVista has no colormap
+information to generate a scalar bar automatically.  `add_colorbar_3d` adds
+one explicitly:
+
+```python
+from ossify.plot3d import plot_morphology_3d, add_colorbar_3d
+
+pl = plot_morphology_3d(cell, color="strahler_order", palette="viridis")
+add_colorbar_3d(pl, palette="viridis", color_norm=(1, 7), label="Strahler order")
+pl.show()
+```
+
+Multiple colorbars can be added to the same plotter — adjust `position_x` to
+avoid overlap:
+
+```python
+pl = plot_morphology_3d(cell, color="depth", palette="plasma")
+pl = plot_annotations_3d(
+    cell.annotations["pre_syn"], color="size", palette="coolwarm", plotter=pl,
+)
+add_colorbar_3d(pl, palette="plasma", color_norm=(0, 500), label="Depth (µm)",
+                position_x=0.85)
+add_colorbar_3d(pl, palette="coolwarm", color_norm=(275, 5771), label="Syn size",
+                position_x=0.72)
+pl.show()
+```
+
+### Orbit Animations — orbit_3d
+
+`orbit_3d` spins the camera around the scene — either interactively or saved
+to a file:
+
+```python
+from ossify.plot3d import plot_cell_3d, orbit_3d
+
+pl = plot_cell_3d(cell, color="red", tube_radius=500)
+
+# Interactive orbit
+orbit_3d(pl)
+
+# Save to GIF
+orbit_3d(pl, output="neuron.gif", n_frames=90, elevation=20.0)
+
+# Save to MP4 (higher quality, smaller file)
+orbit_3d(pl, output="neuron.mp4", n_frames=120, framerate=30)
+```
+
+Use `elevation` to tilt the camera above the XY plane, `factor` to control
+how far the camera sits from the scene, and `viewup` to fix the "up"
+direction (e.g. `viewup=(0, 0, 1)` to keep Z pointing up):
+
+```python
+orbit_3d(pl, elevation=30.0, factor=3.0, viewup=(0, 0, 1))
+```
