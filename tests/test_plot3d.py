@@ -527,9 +527,11 @@ class TestPlotCell3d:
         assert len(pl.renderer.actors) > len(baseline.renderer.actors)
 
     def test_mesh_feature_color(self, cell_with_mesh):
+        if not cell_with_mesh.mesh.feature_names:
+            v0 = cell_with_mesh.mesh.vertices[0]
+            dist = np.linalg.norm(cell_with_mesh.mesh.vertices - v0, axis=1)
+            cell_with_mesh.mesh.add_feature(dist, name="dist_to_v0")
         feat_names = cell_with_mesh.mesh.feature_names
-        if not feat_names:
-            pytest.skip("mesh has no features")
         pl = plot_cell_3d(cell_with_mesh, mesh=True, mesh_color=feat_names[0])
         assert _has_actors(pl)
 
