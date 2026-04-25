@@ -1588,12 +1588,6 @@ class GraphLayer(PointMixin, EdgeMixin):
             Size of processing chunks for memory efficiency. Default 1000.
         validate : bool, optional
             Whether to validate mapping consistency. Default False.
-        agg_direction : str, optional
-            Direction along the skeleton to consider for aggregation. Options are 'undirected', 'upstream', 'downstream'.
-            "undirected" considers all neighbors within the distance threshold.
-            "upstream" considers only neighbors towards the root.
-            "downstream" considers only neighbors away from the root.
-            Default is 'undirected'.
 
         Returns
         -------
@@ -2389,6 +2383,9 @@ class SkeletonLayer(GraphLayer):
 
         Returns
         -------
+        Tuple[List[np.ndarray], np.ndarray]
+            Capped segment arrays and a map from each capped segment to its
+            original segment index.
         """
         segments = self.segments_positional
         capped_segs, capped_seg_map = gf.build_capped_segments(

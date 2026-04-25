@@ -15,7 +15,13 @@ This page contains the complete API reference for all ossify functions and class
 
 ## Complete Module Documentation
 
-::: ossify
-    options:
-        show_source: false
-        heading_level: 2
+The full API is documented across the individual reference pages:
+
+| Module | Reference Page |
+|--------|---------------|
+| Core Classes (`Cell`, `Link`) | [Core Classes](core.md) |
+| Data Layers (`SkeletonLayer`, `GraphLayer`, `MeshLayer`, `PointCloudLayer`) | [Data Layers](layers.md) |
+| Algorithms (`strahler_number`, `label_axon_*`, `smooth_features`) | [Algorithms](algorithms.md) |
+| Plotting (`plot_cell_*`, `plot_morphology_*`, `add_colorbar_3d`, `orbit_3d`) | [Plotting](plotting.md) |
+| File I/O (`load_cell`, `save_cell`, `CellFiles`) | [File I/O](io.md) |
+| External Integrations (`load_cell_from_client`) | [External](external.md) |

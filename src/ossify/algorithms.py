@@ -178,7 +178,7 @@ def label_axon_from_synapse_flow(
     ntimes: int = 1,
     return_segregation_index: bool = False,
     segregation_index_threshold: float = 0,
-    as_postitional: bool = False,
+    as_positional: bool = False,
 ) -> Union[np.ndarray, Tuple[np.ndarray, float]]:
     """Split a neuron into axon and dendrite compartments using synapse locations.
 
@@ -187,13 +187,9 @@ def label_axon_from_synapse_flow(
     cell : Union[Cell, SkeletonLayer]
         The neuron to split.
     pre_syn : Union[str, np.ndarray], optional
-        The annotation associated with presynaptic sites or a list of skeleton vertex ids (see as_postitional).
+        The annotation associated with presynaptic sites or a list of skeleton vertex ids (see as_positional).
     post_syn : Union[str, np.ndarray], optional
-        The annotation associated with postsynaptic sites or a list of skeleton vertex ids (see as_postitional).
-    how : Literal["synapse_flow", "spectral"], optional
-        The method to use for splitting.
-    n_splits : int, optional
-        The number of splits to perform. Only applies to the "synapse_flow" method.
+        The annotation associated with postsynaptic sites or a list of skeleton vertex ids (see as_positional).
     extend_feature_to_segment : bool, optional
         Whether to propagate the is_axon feature to the whole segment, rather than a specific vertex.
         This is likely more biologically accurate, but potentially a less optimal split.
@@ -220,7 +216,7 @@ def label_axon_from_synapse_flow(
             "skeleton", as_positional=True
         )
     else:
-        if not as_postitional:
+        if not as_positional:
             pre_syn_inds = np.array(
                 [np.flatnonzero(skel.vertex_index == vid)[0] for vid in pre_syn]
             )
@@ -233,7 +229,7 @@ def label_axon_from_synapse_flow(
             "skeleton", as_positional=True
         )
     else:
-        if not as_postitional:
+        if not as_positional:
             post_syn_inds = np.array(
                 [np.flatnonzero(skel.vertex_index == vid)[0] for vid in post_syn]
             )
@@ -477,14 +473,12 @@ def synapse_betweenness(
 
     Parameters
     ----------
-    sk : Skeleton
-        Skeleton to measure
+    skel : SkeletonLayer
+        Skeleton to measure.
     pre_inds : list or array
         Collection of skeleton vertex indices, each representing one output synapse (i.e. target of a path).
     post_inds : list or array
-        Collection of skeleton certex indices, each representing one input synapse (i.e. source of a path).
-    use_entropy : bool, optional
-        If True, also returns the entropic segregatation index if one were to cut at a given vertex, by default False
+        Collection of skeleton vertex indices, each representing one input synapse (i.e. source of a path).
 
     Returns
     -------
