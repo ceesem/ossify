@@ -910,6 +910,13 @@ def export_swc_dataframe(
     """
     from collections import deque
 
+    if isinstance(skeleton, Cell):
+        skeleton = skeleton.skeleton
+        if skeleton is None:
+            raise ValueError("Cell has no skeleton layer.")
+    elif not isinstance(skeleton, SkeletonLayer):
+        raise ValueError("Object must be a Cell or a SkeletonLayer")
+
     n = skeleton.n_vertices
     verts = skeleton.vertices.copy()
     parent_arr = skeleton.parent_node_array
@@ -1009,7 +1016,7 @@ def export_swc_dataframe(
 
 
 def export_swc(
-    cell: Cell,
+    cell: Union[Cell, SkeletonLayer],
     file: Union[str, os.PathLike, BinaryIO, None] = None,
     resample_distance: Optional[float] = None,
     compartment: Optional[Union[str, list]] = None,
@@ -1057,9 +1064,14 @@ def export_swc(
         Comment text prepended to the file (each line gets ``# `` prefix
         if not already present).
     """
-    sk = cell.skeleton
-    if sk is None:
-        raise ValueError("Cell has no skeleton layer.")
+    if isinstance(cell, Cell):
+        sk = cell.skeleton
+        if sk is None:
+            raise ValueError("Cell has no skeleton layer.")
+    elif not isinstance(cell, SkeletonLayer):
+        raise ValueError("Object must be a Cell or a SkeletonLayer")
+    else:
+        sk = cell
 
     if resample_distance is not None:
         sk = sk.resample(spacing=resample_distance)
