@@ -18,7 +18,7 @@ dependencies = [
     "orjson>=3.10.15",
     "cloud-files>=5.8.0",
     "matplotlib>=3.10.6",
-    "morphsync==0.1.0",
+    "fastremap>=1.15.1",
 ]
 authors = [
     { name = "Casey Schneider-Mizell", email = "caseysm@gmail.com" },
@@ -31,6 +31,11 @@ classifiers = [
 [project.optional-dependencies]
 legacy = [
     "h5py>=3.14.0",
+]
+viz = [
+    "pyvista[jupyter]>=0.46",
+    "trame>=3.10",
+    "imageio>=2.34",
 ]
 
 [dependency-groups]
@@ -55,8 +60,8 @@ profile = [
     "pyinstrument",
 ]
 viz = [
+    "imageio",
     "pyvista",
-    "seaborn>=0.13.2",
 ]
 
 

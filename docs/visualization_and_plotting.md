@@ -2,8 +2,7 @@
 
 Ossify's plotting functions turn skeleton data into 2D figures where features like compartment, radius, and branching complexity map to visual properties (color, line width). The goal is publication-quality figures with precise scaling and clean styling, directly from your analysis.
 
-!!! info "Current Plotting Support"
-    Visualization functions currently work with **skeleton layers only**. Support for plotting meshes, graphs, and annotations is planned for future releases. The plotting API is designed to be extensible to other layer types.
+Ossify supports both **2D** plotting (via matplotlib) and **3D** interactive rendering (via PyVista).  The 3D functions require an optional dependency — install it with `pip install ossify[viz]`.
 
 ## Basic Skeleton Plotting
 
@@ -229,6 +228,86 @@ ossify.plot_morphology_2d(
 )
 ```
 
+### Value Transforms (log, sqrt, cbrt)
+
+When a feature spans several orders of magnitude — synapse counts, branch
+radii, depth — a linear colormap mapping wastes most of the dynamic range
+on the largest values. Use `color_scale` (or `size_scale` on annotations)
+to transform values before they hit the colormap. The `color_norm` /
+`size_norm` bounds stay in original units, so you can think and write in
+the data's native space:
+
+```python
+# Log color scale for radius (handles thin axon → thick soma sweep)
+fig, ax = plt.subplots(figsize=(10, 8))
+ossify.plot_morphology_2d(
+    cell,
+    color="radius",
+    palette="viridis",
+    color_scale="log",            # log-transform values before colormap
+    color_norm=(100, 5000),       # bounds in original (nm) units
+    ax=ax,
+)
+
+# Log size scale for synapse counts
+fig, ax = plt.subplots(figsize=(10, 8))
+ossify.plot_annotations_2d(
+    cell.annotations["pre_syn"],
+    color="count",
+    color_scale="log",            # color also log-transformed
+    color_norm=(1, 1000),
+    size="count",
+    size_scale="log",
+    sizes=(5, 80),                # output marker size range
+    ax=ax,
+)
+
+# Sqrt size scale for area-like features (radius ∝ √area)
+fig, ax = plt.subplots(figsize=(10, 8))
+ossify.plot_annotations_2d(
+    cell.annotations["synapses"],
+    size="cross_section_area",
+    size_scale="sqrt",
+    sizes=(2, 50),
+    ax=ax,
+)
+
+# In plot_cell_2d, the synapse transforms have separate keywords so the
+# skeleton and synapses can be transformed independently.
+ossify.plot_cell_2d(
+    cell,
+    color="radius",
+    color_scale="log",            # skeleton color transform
+    synapses="both",
+    pre_color="count",
+    syn_color_scale="log",        # synapse color transform
+    syn_size="count",
+    syn_size_scale="log",         # synapse size transform
+)
+```
+
+These transforms match the corresponding 3D functions (`plot_morphology_3d`,
+`plot_annotations_3d`, `plot_cell_3d`), so the same call pattern works in
+either rendering backend.
+
+!!! note "`size` and `sizes` in 2D vs. 3D"
+
+    The 2D and 3D synapse-sizing APIs share keyword names but the
+    *output units differ between backends*:
+
+    - **2D** (`plot_annotations_2d`, `plot_cell_2d`): `sizes` is in
+      matplotlib marker units (points², following `scatter(s=…)`). The
+      defaults `(1, 30)` or `(5, 80)` are points² regardless of what
+      units your data is in.
+    - **3D** (`plot_annotations_3d`, `plot_cell_3d`): `sizes` is in
+      **world units** — the same units as your cell's vertex coordinates
+      (nm/µm/voxels). When `sizes=None` the 3D backend auto-scales from
+      the annotation's bounding box.
+
+    The *input* keywords (`size`, `size_norm`, `size_scale`) behave the
+    same in both backends and live in the feature's units. See the 3D
+    section below for the full table.
+
 ### Projection Customization
 
 ```python
@@ -385,6 +464,83 @@ for proj, ax in axes.items():
 plt.savefig("multiview_figure.pdf", dpi=300, bbox_inches="tight")
 plt.show()
 ```
+
+### Styling labels in lineups and layer guides
+
+`plot_lineup_grid` and `add_layer_lines` both accept a `*_kwargs` dict
+that is forwarded directly to matplotlib's `Axes.text` call. Anything
+`text(...)` accepts works — font family, size, weight, style, color,
+custom `FontProperties`, even mathtext / LaTeX strings.
+
+```python
+from ossify.plot import plot_lineup_grid, add_layer_lines, LineupGroup
+
+# Group labels: pass a dict to `group_label_kwargs`.
+ax = plot_lineup_grid(
+    [
+        LineupGroup(cells_l2a, label="L2a", **L2A_STYLE),
+        LineupGroup(cells_l2b, label="L2b", **L2B_STYLE),
+    ],
+    inter_cell_gap=10_000,
+    inter_group_gap=30_000,
+    units_per_inch=200_000,
+    group_label_offset=20_000,
+    group_label_kwargs=dict(
+        fontfamily="serif",
+        fontsize=14,
+        fontweight="bold",
+        color="#222222",
+    ),
+    layer_lines={0: "L1", 250_000: "L2/3", 500_000: "L4"},
+    layer_line_kwargs=dict(
+        # `add_layer_lines` keyword args go in here:
+        label_kwargs=dict(
+            fontfamily="serif",
+            fontsize=11,
+            fontstyle="italic",
+            color="gray",
+        ),
+        line_kwargs=dict(
+            linestyle=":",
+            color="lightgray",
+            linewidth=0.4,
+        ),
+        label_pad=0.02,           # left margin between axis edge and label
+    ),
+)
+```
+
+Each `*_kwargs` dict is merged *on top of* the function's own defaults,
+so you only need to specify what you want to change. The convenience
+shortcut args on `add_layer_lines` (`color`, `linestyle`, `linewidth`,
+`label_fontsize`) seed the defaults; the `label_kwargs` / `line_kwargs`
+dicts override them where they overlap.
+
+A few practical notes:
+
+- **Mathtext / TeX** — label strings go through `ax.text` so
+  `label=r"$\mathrm{L2/3}$"` works without extra setup. Set
+  `matplotlib.rcParams["text.usetex"] = True` first if you want true
+  LaTeX rendering (slower; pulls in your system TeX installation).
+- **`fontfamily`** is a soft match — matplotlib looks for a generic
+  family (`"serif"`, `"sans-serif"`, `"monospace"`) or a specific
+  installed font. For exact control, build a
+  `matplotlib.font_manager.FontProperties(family="...", size=...,
+  weight=...)` once and pass it as
+  `fontproperties=fp` in the same `*_kwargs` dict.
+- **Common style applied to both labels** — there's no single
+  master-style knob; if you want identical fonts for group labels and
+  layer labels, define the dict once and pass it to both:
+
+    ```python
+    LABEL_FONT = dict(fontfamily="serif", fontsize=12, color="#222")
+    plot_lineup_grid(
+        groups,
+        group_label_kwargs=LABEL_FONT,
+        layer_lines={...},
+        layer_line_kwargs=dict(label_kwargs=LABEL_FONT),
+    )
+    ```
 
 ## Working with Real Data
 
@@ -575,7 +731,7 @@ def plot_masked_comparison(cell, mask, mask_name="Mask"):
 - `root_marker` - Show root vertex marker
 - `invert_y` - Invert y-axis for projections containing 'y'
 
-!!! tip "Plotting Best Practices"
+!!! tip "2D Plotting Best Practices"
     - Use `units_per_inch` for consistent scaling across figures
     - Apply coordinate conversions (nm → μm) for appropriate scale bars
     - Use `despine=True` for clean publication figures
@@ -583,10 +739,283 @@ def plot_masked_comparison(cell, mask, mask_name="Mask"):
     - Color by meaningful biological properties (compartment, Strahler order)
     - Add scale bars with appropriate units for the data scale
 
-!!! note "Future Plotting Support"
-    The plotting framework is designed to be extensible. Future releases will add support for:
-    - Mesh surface rendering
-    - Graph network visualization  
-    - Annotation scatter plots
-    - 3D interactive visualization
-    - Animation capabilities
+---
+
+## 3D Visualization
+
+The 3D functions use [PyVista](https://docs.pyvista.org) as the rendering backend and return a `pv.Plotter` that can be displayed interactively or embedded in a notebook.  Install the extra with:
+
+```bash
+pip install ossify[viz]
+```
+
+### Full Cell — plot_cell_3d
+
+Renders skeleton, optional mesh surface, and optional synapses in a single call:
+
+```python
+import ossify
+from ossify.plot3d import plot_cell_3d
+
+cell = ossify.load_cell("neuron.osy")
+
+# Skeleton only
+pl = plot_cell_3d(cell, color="compartment", palette="coolwarm")
+
+# Skeleton + semi-transparent mesh
+pl = plot_cell_3d(
+    cell,
+    color="strahler_order",
+    mesh=True,
+    mesh_opacity=0.3,          # semi-transparent so skeleton shows through
+    mesh_color="white",
+)
+
+# Skeleton + synapses with per-synapse coloring
+pl = plot_cell_3d(
+    cell,
+    synapses="both",
+    pre_color="red",
+    post_color="blue",
+    syn_size="size",           # radius mapped from a feature
+    syn_sizes=(50, 500),       # output radius range (world units!)
+    syn_size_scale="log",      # log-transform size values
+)
+
+pl.show()
+```
+
+!!! warning "`syn_size` and `syn_sizes` are in **different units**"
+
+    This trips up almost everyone the first time. The synapse-sizing
+    keywords on `plot_cell_3d` (and the matching `size`/`sizes` on
+    `plot_annotations_3d`) split cleanly into *input* and *output*:
+
+    | Keyword                          | Role          | Units                                                                      |
+    | -------------------------------- | ------------- | -------------------------------------------------------------------------- |
+    | `syn_size` (`size`)              | input feature | whatever your feature is stored in (e.g. voxel counts, raw size values)    |
+    | `syn_size_norm` (`size_norm`)    | input clip    | same units as the feature                                                  |
+    | `syn_size_scale` (`size_scale`)  | input xform   | — (`"log"` / `"sqrt"` / `"cbrt"`)                                          |
+    | `syn_sizes` (`sizes`)            | output radius | **world units — same as your cell's vertex coordinates** (nm/µm/voxels)    |
+
+    For a cell stored in **nm**, `syn_sizes=(300, 2000)` gives spheres
+    of 0.3–2 µm radius. For a cell in **µm**, write `syn_sizes=(0.3, 2.0)`
+    for the same physical size. Pass `syn_sizes=None` (the default) and
+    ossify auto-scales from the synapse bounding box — works at any unit.
+    `syn_size_norm` is always in the input feature's units regardless of
+    what the cell coordinates are in.
+
+### Mesh Surface — plot_mesh_3d
+
+Renders a `MeshLayer` as a colored surface:
+
+```python
+from ossify.plot3d import plot_mesh_3d
+
+# Uniform color
+pl = plot_mesh_3d(cell.mesh, color="lightgray", opacity=0.5)
+
+# Feature-driven coloring
+pl = plot_mesh_3d(
+    cell.mesh,
+    color="area",              # per-vertex feature name
+    palette="plasma",
+    color_norm=(0, 10000),     # clamp to 5th–95th percentile range
+)
+
+# Log-scale coloring
+pl = plot_mesh_3d(
+    cell.mesh,
+    color="area",
+    color_scale="log",         # log-transform before colormap
+    color_norm=(100, 50000),   # bounds in original space
+)
+pl.show()
+```
+
+### Skeleton Morphology — plot_morphology_3d
+
+Feature-driven coloring and variable-radius tubes on a skeleton or cell:
+
+```python
+from ossify.plot3d import plot_morphology_3d
+
+pl = plot_morphology_3d(
+    cell,
+    color="strahler_order",
+    palette="viridis",
+    tube_radius="radius",      # per-vertex tube radius from feature
+    tube_radius_scale=1/1000,  # nm → μm
+    tube_radii=(0.1, 5.0),    # output radius range (μm)
+)
+pl.show()
+```
+
+### Annotations — plot_annotations_3d
+
+Renders a `PointCloudLayer` as sphere glyphs:
+
+```python
+from ossify.plot3d import plot_annotations_3d
+
+pl = plot_annotations_3d(
+    cell.annotations["pre_syn"],
+    color="size",
+    color_scale="log",
+    color_norm=(275, 5771),    # 5th–95th percentile, in feature units
+    size="size",
+    size_scale="log",
+    sizes=(50, 500),           # output radius range in WORLD units (nm here)
+)
+pl.show()
+```
+
+!!! note "`size` vs `sizes` units"
+
+    `size` (the input feature) lives in whatever units the feature
+    stores. `sizes` (the output radius range) lives in **world units —
+    the same units as the annotation's vertex coordinates**. See the
+    [`plot_cell_3d` section](#full-cell-plot_cell_3d) for a full table.
+    When in doubt, leave `sizes=None` and let ossify auto-scale from the
+    annotation bounding box.
+
+### Graph Networks — plot_graph_3d
+
+Renders a `GraphLayer` as node glyphs and edge tubes.  All properties live on vertices; tube colors and radii are interpolated between the two endpoint values:
+
+```python
+from ossify.plot3d import plot_graph_3d
+
+pl = plot_graph_3d(
+    cell.graph,
+    node_color="weight",
+    node_palette="coolwarm",
+    node_size="weight",
+    node_sizes=(20, 200),
+    edge_color="weight",       # interpolated along each tube
+    edge_radius=5.0,
+)
+pl.show()
+```
+
+### Compositing layers
+
+All 3D functions accept a `plotter=` keyword so you can compose multiple layers into one scene:
+
+```python
+pl = plot_morphology_3d(cell, color="compartment")
+pl = plot_mesh_3d(cell.mesh, opacity=0.2, plotter=pl)
+pl = plot_annotations_3d(cell.annotations["pre_syn"], color="red", plotter=pl)
+pl.show()
+```
+
+### Colorbars — add_colorbar_3d
+
+Because ossify pre-maps scalar values to RGB colors, PyVista has no colormap
+information to generate a scalar bar automatically.  `add_colorbar_3d` adds
+one explicitly:
+
+```python
+from ossify.plot3d import plot_morphology_3d, add_colorbar_3d
+
+pl = plot_morphology_3d(cell, color="strahler_order", palette="viridis")
+add_colorbar_3d(pl, palette="viridis", color_norm=(1, 7), label="Strahler order")
+pl.show()
+```
+
+Multiple colorbars can be added to the same plotter — adjust `position_x` to
+avoid overlap:
+
+```python
+pl = plot_morphology_3d(cell, color="depth", palette="plasma")
+pl = plot_annotations_3d(
+    cell.annotations["pre_syn"], color="size", palette="coolwarm", plotter=pl,
+)
+add_colorbar_3d(pl, palette="plasma", color_norm=(0, 500), label="Depth (µm)",
+                position_x=0.85)
+add_colorbar_3d(pl, palette="coolwarm", color_norm=(275, 5771), label="Syn size",
+                position_x=0.72)
+pl.show()
+```
+
+### Orbit Animations — orbit_3d
+
+`orbit_3d` spins the camera around the scene — either interactively or saved
+to a file:
+
+```python
+from ossify.plot3d import plot_cell_3d, orbit_3d
+
+pl = plot_cell_3d(cell, color="red", tube_radius=500)
+
+# Interactive orbit
+orbit_3d(pl)
+
+# Save to GIF
+orbit_3d(pl, output="neuron.gif", n_frames=90, elevation=20.0)
+
+# Save to MP4 (higher quality, smaller file)
+orbit_3d(pl, output="neuron.mp4", n_frames=120, framerate=30)
+```
+
+Use `elevation` to tilt the camera, `factor` to control how far the
+camera sits from the scene, and `viewup` to choose the orbital axis:
+
+```python
+orbit_3d(pl, elevation=30.0, factor=3.0, viewup=(0, 0, 1))
+```
+
+!!! warning "`viewup` is the orbital axis"
+
+    `viewup` is both **the rotation axis** (the orbital plane normal) and
+    the camera's up direction during the orbit. The two are tied
+    together intentionally — decoupling them causes the camera to flip
+    midway through the orbit, which visually reads as a 180° back-and-
+    forth oscillation instead of a full circle.
+
+    Common values:
+
+    - `viewup=(0, 0, 1)` — orbit in the xy plane around the z axis (PyVista's default).
+    - `viewup=(0, 1, 0)` or `(0, -1, 0)` — orbit in the xz plane around the y axis. Useful when y is your depth axis (typical for cortical neurons).
+    - `viewup=(1, 0, 0)` — orbit in the yz plane around the x axis.
+
+    When `viewup=None` (default), `orbit_3d` reads the plotter's current
+    camera up vector. So if you've already set up the camera, that
+    orientation is preserved.
+
+### Higher-resolution output
+
+`orbit_3d` accepts a `window_size=(width, height)` argument that
+resizes the plotter's render window before recording. Useful for
+publication-quality GIFs/MP4s:
+
+```python
+pl = plot_cell_3d(cell, color="compartment", tube_radius="radius")
+orbit_3d(
+    pl,
+    output="neuron_hires.mp4",
+    n_frames=120,
+    framerate=30,
+    viewup=(0, 1, 0),                # rotate around the depth axis
+    window_size=(1920, 1440),        # 4:3 HD frames
+)
+```
+
+By default the plotter uses 1024 × 768 (or whatever was specified at
+`pv.Plotter(...)` construction time). For static screenshots
+(`pl.screenshot(...)`), you can pass `scale=2` etc. to multiply the
+window size further.
+
+### Reusing the plotter after orbiting
+
+By default `orbit_3d` closes the plotter when the animation finishes, so
+the returned plotter is no longer usable. Pass `close=False` to keep it
+alive — useful when you want to add more actors after orbiting, capture
+a still screenshot, or run another orbit:
+
+```python
+pl = plot_cell_3d(cell, color="red", tube_radius=500)
+orbit_3d(pl, output="neuron.gif", n_frames=60, close=False)
+pl.screenshot("final_frame.png")              # still works
+orbit_3d(pl, output="neuron_slow.mp4", n_frames=120, framerate=30)
+```

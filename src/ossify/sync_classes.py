@@ -1,9 +1,10 @@
 import dataclasses
 from typing import Optional, Union
 
-import morphsync as sync
 import numpy as np
 import pandas as pd
+
+from . import _sync as sync
 
 __all__ = [
     "MorphSync",

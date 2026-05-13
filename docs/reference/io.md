@@ -8,6 +8,7 @@ Ossify provides robust file I/O capabilities supporting local files, cloud stora
 |-------------------|-----------|---------|
 | **[Core Functions](#core-functions)** | `load_cell`, `save_cell` | Primary interface for loading and saving cells |
 | **[File Management](#file-management)** | `CellFiles` | Advanced file operations and cloud storage |
+| **[SWC Format](#swc-format)** | `load_swc`, `export_swc`, `export_swc_dataframe` | Read and write the neuromorphology SWC format |
 
 ---
 
@@ -174,6 +175,123 @@ mem_files = ossify.CellFiles("mem://test-storage/")
 # Check write permissions
 if not s3_files.saveable:
     print("Cannot write to this location")
+```
+
+---
+
+## SWC Format {: .doc-heading}
+
+Read and write the seven-column SWC format used by the neuromorphology
+community ([specification](https://swc-specification.readthedocs.io/en/latest/swc.html)).
+Compatible with NEURON, NeuTu, Vaa3D, and most morphology databases.
+
+### load_swc
+
+::: ossify.load_swc
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+**Read an SWC text file into a `SkeletonLayer` with `compartment` and `radius` features.**
+
+#### Usage Examples
+
+```python
+import ossify
+
+# Basic load
+skel = ossify.load_swc("neuron.swc")
+print(f"{skel.n_vertices} vertices, root at {skel.root_positional}")
+
+# Convert SWC's µm to nm at load time (CAVE convention)
+skel_nm = ossify.load_swc("neuron.swc", rescale=1000.0)
+
+# Custom name (otherwise derived from filename stem)
+skel = ossify.load_swc("neuron.swc", name="purkinje_1")
+```
+
+### export_swc
+
+::: ossify.export_swc
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+**Write a `Cell` or `SkeletonLayer` as an SWC file.**
+
+#### Usage Examples
+
+```python
+# Simplest form — writes "<cell.name>.swc"
+ossify.export_swc(cell)
+
+# Explicit path + feature mapping + unit conversion
+ossify.export_swc(
+    cell,
+    file="neuron.swc",
+    compartment="compartment",       # feature name → SWC `type` column
+    radius="radius",
+    rescale=0.001,                   # nm → µm coordinates
+)
+
+# Remap compartment values to SWC type codes
+ossify.export_swc(
+    cell,
+    file="neuron.swc",
+    compartment="compartment",
+    compartment_mapping={"soma": 1, "axon": 2, "dendrite": 3},
+    default_compartment_label=0,
+)
+
+# Resample to ~2 µm vertex spacing (in native units, before rescale)
+ossify.export_swc(
+    cell,
+    file="neuron.swc",
+    resample_distance=2000.0,
+    rescale=0.001,
+)
+
+# Export a SkeletonLayer directly (no enclosing Cell required)
+ossify.export_swc(cell.skeleton, file="skeleton.swc")
+```
+
+### export_swc_dataframe
+
+::: ossify.export_swc_dataframe
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+**Build the SWC-format DataFrame without writing to a file** — useful for
+inspection or programmatic adjustments before persistence.
+
+#### Usage Examples
+
+```python
+# Get the table that export_swc would write
+df = ossify.export_swc_dataframe(
+    cell.skeleton,
+    compartment="compartment",
+    radius="radius",
+    rescale=0.001,
+)
+df.columns.tolist()
+# ['id', 'type', 'x', 'y', 'z', 'radius', 'parent']
+
+# Rows are in topological order: each row's parent appears before it.
+# This is the same order export_swc writes to disk.
 ```
 
 ---

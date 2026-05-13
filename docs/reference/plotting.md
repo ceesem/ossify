@@ -1,14 +1,16 @@
 # Visualization & Plotting
 
-Ossify provides comprehensive 2D plotting capabilities for neuromorphological data with precise unit control, flexible styling, and publication-ready output.
+Ossify supports 2D plotting (via matplotlib) and 3D interactive rendering (via PyVista, install with `pip install ossify[viz]`).
 
 ## Overview
 
 | Function Category | Functions | Purpose |
 |-------------------|-----------|---------|
-| **[Cell Plotting](#cell-plotting)** | `plot_cell_2d`, `plot_cell_multiview` | Integrated visualization of complete cells |
-| **[Layer Plotting](#layer-plotting)** | `plot_morphology_2d`, `plot_annotations_2d`, `plot_skeleton`, `plot_points` | Individual layer visualization |
+| **[Cell Plotting](#cell-plotting)** | `plot_cell_2d`, `plot_cell_multiview` | 2D integrated visualization of complete cells |
+| **[Layer Plotting](#layer-plotting)** | `plot_morphology_2d`, `plot_annotations_2d`, `plot_skeleton`, `plot_points` | 2D individual layer visualization |
 | **[Figure Management](#figure-management)** | `single_panel_figure`, `multi_panel_figure`, `add_scale_bar` | Layout and annotation utilities |
+| **[3D Cell Plotting](#3d-cell-plotting)** | `plot_cell_3d` | 3D integrated visualization of complete cells |
+| **[3D Layer Plotting](#3d-layer-plotting)** | `plot_morphology_3d`, `plot_annotations_3d`, `plot_mesh_3d`, `plot_graph_3d` | 3D individual layer visualization |
 
 ---
 
@@ -599,3 +601,95 @@ ax.set_title("Distance to Nearest Branch Point")
     - **Resolution**: Set `dpi=300` for publication figures
     - **Aspect Ratios**: Use `units_per_inch` for consistent scaling across different data sizes
     - **Layering**: Use `zorder` to control drawing order when combining multiple plot elements
+
+---
+
+## 3D Cell Plotting {: .doc-heading}
+
+!!! note "Installation"
+    3D plotting requires PyVista.  Install with `pip install ossify[viz]`.
+
+### plot_cell_3d
+
+::: ossify.plot3d.plot_cell_3d
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+---
+
+## 3D Layer Plotting {: .doc-heading}
+
+### plot_morphology_3d
+
+::: ossify.plot3d.plot_morphology_3d
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+### plot_annotations_3d
+
+::: ossify.plot3d.plot_annotations_3d
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+### plot_mesh_3d
+
+::: ossify.plot3d.plot_mesh_3d
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+### plot_graph_3d
+
+::: ossify.plot3d.plot_graph_3d
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+---
+
+## 3D Utilities {: .doc-heading}
+
+### add_colorbar_3d
+
+::: ossify.plot3d.add_colorbar_3d
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+### orbit_3d
+
+::: ossify.plot3d.orbit_3d
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false

@@ -205,7 +205,7 @@ class TestfeatureAxonFromSynapseFlow:
             nrn.skeleton,
             pre_syn=pre_syn_inds,
             post_syn=post_syn_inds,
-            as_postitional=True,
+            as_positional=True,
         )
 
         # Should work without error

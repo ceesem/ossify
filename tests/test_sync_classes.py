@@ -230,11 +230,11 @@ class TestMorphSync:
         morphsync.add_link("skeleton", "graph", mapping=skel_to_graph)
         morphsync.add_link("graph", "mesh", mapping=graph_to_mesh)
 
-        # Test link graph
-        link_graph = morphsync.link_graph
-        assert "skeleton" in link_graph.nodes
-        assert "graph" in link_graph.nodes
-        assert "mesh" in link_graph.nodes
+        # Test link adjacency
+        link_adj = morphsync._link_adjacency
+        assert "skeleton" in link_adj
+        assert "graph" in link_adj
+        assert "mesh" in link_adj
 
         # Test path finding
         path = morphsync.get_link_path("skeleton", "mesh")

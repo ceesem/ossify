@@ -1,6 +1,7 @@
 import io
 import os
 import tarfile
+from enum import IntEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, Optional, Union
 from urllib import parse
@@ -21,7 +22,22 @@ from .data_layers import GraphLayer, Link, MeshLayer, PointCloudLayer, SkeletonL
 if TYPE_CHECKING:
     import scipy
 
-__all__ = ["load_cell", "save_cell", "CellFiles", "import_legacy_meshwork"]
+__all__ = [
+    "load_cell",
+    "save_cell",
+    "CellFiles",
+    "import_legacy_meshwork",
+    "export_swc",
+    "export_swc_dataframe",
+    "load_swc",
+    "SWCCompartment",
+    "SWC_UNDEFINED",
+    "SWC_SOMA",
+    "SWC_AXON",
+    "SWC_DENDRITE",
+    "SWC_APICAL_DENDRITE",
+    "SWC_CUSTOM",
+]
 
 PUTABLE_SCHEMES = ["s3", "gs", "file", "mem"]
 METADATA_FILENAME = "metadata.json"
@@ -29,6 +45,47 @@ OSSIFY_EXTENSION = "osy"
 FILE_VERSION = (
     2.0  # Version 2.0: added dtype optimization (float64→float32, int64→int32)
 )
+
+
+class SWCCompartment(IntEnum):
+    """SWC ``type`` column values, per the SWC format specification.
+
+    See https://swc-specification.readthedocs.io/en/latest/swc.html.
+
+    Members are :class:`int` subclasses, so they can be used as dict keys
+    alongside integer feature values — useful when building palettes for
+    plotting functions:
+
+    >>> palette = {SWCCompartment.SOMA: "black",
+    ...            SWCCompartment.DENDRITE: "tomato",
+    ...            SWCCompartment.AXON: "steelblue"}
+    >>> ossify.plot_cell_2d(cell, color="compartment", palette=palette)
+
+    The module also exports flat ``SWC_<NAME>`` aliases for the same
+    members so the dict literal stays compact:
+
+    >>> palette = {SWC_SOMA: "black", SWC_DENDRITE: "tomato"}
+
+    Values 5 and above are conventionally "custom" / user-defined in the
+    SWC spec; ossify only defines ``CUSTOM = 5`` as a named member but
+    will round-trip any integer value through ``load_swc``/``export_swc``.
+    """
+
+    UNDEFINED = 0
+    SOMA = 1
+    AXON = 2
+    DENDRITE = 3
+    APICAL_DENDRITE = 4
+    CUSTOM = 5
+
+
+# Flat aliases for ergonomic palette dict literals.
+SWC_UNDEFINED = SWCCompartment.UNDEFINED
+SWC_SOMA = SWCCompartment.SOMA
+SWC_AXON = SWCCompartment.AXON
+SWC_DENDRITE = SWCCompartment.DENDRITE
+SWC_APICAL_DENDRITE = SWCCompartment.APICAL_DENDRITE
+SWC_CUSTOM = SWCCompartment.CUSTOM
 
 
 def load_cell(source: Union[str, BinaryIO]) -> Cell:
@@ -854,8 +911,161 @@ def _process_pcg_skel_import(cell: Cell) -> Cell:
     return cell
 
 
+def export_swc_dataframe(
+    skeleton: SkeletonLayer,
+    compartment: Optional[Union[str, list]] = None,
+    compartment_mapping: Optional[dict] = None,
+    radius: Optional[Union[str, list]] = None,
+    rescale: Optional[float] = None,
+    rescale_radius: bool = True,
+    default_compartment_label: int = 0,
+    default_radius: float = 1.0,
+) -> pd.DataFrame:
+    """Build a SWC-format DataFrame from a :class:`SkeletonLayer`.
+
+    See https://swc-specification.readthedocs.io/en/latest/swc.html for
+    the SWC format specification.
+
+    Parameters
+    ----------
+    skeleton : SkeletonLayer
+        Skeleton to export.
+    compartment : str, list, or None, optional
+        Feature name(s) to use for SWC type labels. If a string, looks up
+        a single feature; if a list, tries each in order and uses the first
+        found. If None, uses *default_compartment_label* for all nodes.
+    compartment_mapping : dict, optional
+        Mapping from original compartment values to SWC type integers.
+        Applied after reading the feature. Unmapped values fall back to
+        *default_compartment_label*.
+    radius : str, list, or None, optional
+        Feature name(s) to use for radius values. Same lookup rules as
+        *compartment*. If None, uses *default_radius* for all nodes.
+    rescale : float, optional
+        Factor to multiply all coordinates by (e.g., 0.001 to convert
+        nm → µm). Applied to radii as well unless *rescale_radius* is False.
+    rescale_radius : bool, default True
+        Whether to apply *rescale* to radius values.
+    default_compartment_label : int, default 0
+        SWC type code for nodes without a compartment annotation.
+    default_radius : float, default 1.0
+        Radius for nodes without a radius feature.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with columns ``["id", "type", "x", "y", "z", "radius",
+        "parent"]`` in topological order (parents before children).
+    """
+    from collections import deque
+
+    if isinstance(skeleton, Cell):
+        skeleton = skeleton.skeleton
+        if skeleton is None:
+            raise ValueError("Cell has no skeleton layer.")
+    elif not isinstance(skeleton, SkeletonLayer):
+        raise ValueError("Object must be a Cell or a SkeletonLayer")
+
+    n = skeleton.n_vertices
+    verts = skeleton.vertices.copy()
+    parent_arr = skeleton.parent_node_array
+
+    # --- BFS from root for topological ordering ---
+    root_pos = skeleton.root_positional
+    if root_pos is None:
+        raise ValueError("Skeleton has no root node.")
+
+    children: list[list[int]] = [[] for _ in range(n)]
+    for child_pos in range(n):
+        p = parent_arr[child_pos]
+        if p >= 0:
+            children[p].append(child_pos)
+
+    topo_order: list[int] = []
+    queue: deque[int] = deque([root_pos])
+    while queue:
+        node = queue.popleft()
+        topo_order.append(node)
+        queue.extend(children[node])
+
+    # Map positional index → 1-based SWC id in topo order
+    pos_to_swc_id = np.empty(n, dtype=int)
+    for swc_id_minus1, pos_idx in enumerate(topo_order):
+        pos_to_swc_id[pos_idx] = swc_id_minus1 + 1
+
+    # --- Resolve compartment ---
+    comp_values = np.full(n, default_compartment_label, dtype=int)
+    if compartment is not None:
+        if isinstance(compartment, str):
+            compartment = [compartment]
+        for feat_name in compartment:
+            try:
+                raw = skeleton.get_feature(feat_name)
+                if compartment_mapping is not None:
+                    comp_values = np.array(
+                        [
+                            compartment_mapping.get(v, default_compartment_label)
+                            for v in raw
+                        ],
+                        dtype=int,
+                    )
+                else:
+                    comp_values = np.asarray(raw, dtype=int)
+                break
+            except KeyError:
+                continue
+
+    # --- Resolve radius ---
+    rad_values = np.full(n, default_radius, dtype=float)
+    if radius is not None:
+        if isinstance(radius, str):
+            radius = [radius]
+        for feat_name in radius:
+            try:
+                rad_values = np.asarray(skeleton.get_feature(feat_name), dtype=float)
+                break
+            except KeyError:
+                continue
+
+    # --- Apply rescaling ---
+    if rescale is not None:
+        verts = verts * rescale
+        if rescale_radius:
+            rad_values = rad_values * rescale
+
+    # --- Build output rows in topo order ---
+    swc_ids = np.arange(1, n + 1)
+    swc_parents = np.empty(n, dtype=int)
+    swc_types = np.empty(n, dtype=int)
+    swc_x = np.empty(n)
+    swc_y = np.empty(n)
+    swc_z = np.empty(n)
+    swc_r = np.empty(n)
+
+    for out_idx, pos_idx in enumerate(topo_order):
+        swc_types[out_idx] = comp_values[pos_idx]
+        swc_x[out_idx] = verts[pos_idx, 0]
+        swc_y[out_idx] = verts[pos_idx, 1]
+        swc_z[out_idx] = verts[pos_idx, 2]
+        swc_r[out_idx] = rad_values[pos_idx]
+        p = parent_arr[pos_idx]
+        swc_parents[out_idx] = -1 if p < 0 else pos_to_swc_id[p]
+
+    return pd.DataFrame(
+        {
+            "id": swc_ids,
+            "type": swc_types,
+            "x": swc_x,
+            "y": swc_y,
+            "z": swc_z,
+            "radius": swc_r,
+            "parent": swc_parents,
+        }
+    )
+
+
 def export_swc(
-    cell: Cell,
+    cell: Union[Cell, SkeletonLayer],
     file: Union[str, os.PathLike, BinaryIO, None] = None,
     resample_distance: Optional[float] = None,
     compartment: Optional[Union[str, list]] = None,
@@ -867,7 +1077,202 @@ def export_swc(
     default_radius: float = 1.0,
     header: Optional[str] = None,
 ) -> None:
-    pass
+    """Export the skeleton layer of a Cell as an SWC file.
+
+    See https://swc-specification.readthedocs.io/en/latest/swc.html for
+    the SWC format specification.
+
+    Parameters
+    ----------
+    cell : Cell
+        The Cell object containing the skeleton to export.
+    file : str, path-like, binary file object, or None, optional
+        Destination. If None, writes to ``"<cell.name>.swc"`` in the
+        current directory. Strings and path-like objects are treated as
+        file paths; anything else is treated as a writable file object.
+    resample_distance : float, optional
+        If provided, resample the skeleton to approximately this vertex
+        spacing before export. Uses :meth:`SkeletonLayer.resample`.
+        The distance is in the skeleton's native coordinate units
+        (before any *rescale* is applied).
+    compartment : str, list, or None, optional
+        Feature name(s) to use for SWC type labels.
+    compartment_mapping : dict, optional
+        Mapping from feature values to SWC type integers.
+    radius : str, list, or None, optional
+        Feature name(s) to use for radius values.
+    rescale : float, optional
+        Factor to multiply coordinates by (e.g., 0.001 for nm → µm).
+    rescale_radius : bool, default True
+        Whether to apply *rescale* to radius values.
+    default_compartment_label : int, default 0
+        SWC type for nodes without compartment annotation.
+    default_radius : float, default 1.0
+        Radius for nodes without radius feature.
+    header : str, optional
+        Comment text prepended to the file (each line gets ``# `` prefix
+        if not already present).
+    """
+    if isinstance(cell, Cell):
+        sk = cell.skeleton
+        if sk is None:
+            raise ValueError("Cell has no skeleton layer.")
+    elif not isinstance(cell, SkeletonLayer):
+        raise ValueError("Object must be a Cell or a SkeletonLayer")
+    else:
+        sk = cell
+
+    if resample_distance is not None:
+        sk = sk.resample(spacing=resample_distance)
+
+    df = export_swc_dataframe(
+        sk,
+        compartment=compartment,
+        compartment_mapping=compartment_mapping,
+        radius=radius,
+        rescale=rescale,
+        rescale_radius=rescale_radius,
+        default_compartment_label=default_compartment_label,
+        default_radius=default_radius,
+    )
+
+    lines: list[str] = []
+    if header is not None:
+        for line in header.splitlines():
+            if not line.startswith("#"):
+                line = f"# {line}"
+            lines.append(line)
+
+    for row in df.itertuples(index=False):
+        lines.append(
+            f"{row.id} {row.type} {row.x:.6g} {row.y:.6g} {row.z:.6g} "
+            f"{row.radius:.6g} {row.parent}"
+        )
+
+    text = "\n".join(lines) + "\n"
+
+    if file is None:
+        file = f"{cell.name}.swc"
+
+    try:
+        path_str = os.fspath(file)
+        with open(path_str, "w") as f:
+            f.write(text)
+    except TypeError:
+        if hasattr(file, "write"):
+            if "b" in getattr(file, "mode", ""):
+                file.write(text.encode("utf-8"))
+            else:
+                file.write(text)
+        else:
+            raise TypeError(f"Cannot write to {type(file)}")
+
+
+def load_swc(
+    source: Union[str, os.PathLike, BinaryIO],
+    name: Optional[str] = None,
+    rescale: Optional[float] = None,
+) -> SkeletonLayer:
+    """Load an SWC file and return a :class:`SkeletonLayer`.
+
+    See https://swc-specification.readthedocs.io/en/latest/swc.html for
+    the SWC format specification.
+
+    Parameters
+    ----------
+    source : str, path-like, or binary/text file object
+        Path to an ``.swc`` file or an open file object.
+    name : str, optional
+        Name for the resulting skeleton layer. Defaults to the filename
+        stem (without extension) or ``"swc"``.
+    rescale : float, optional
+        Factor to multiply coordinates and radii by after reading (e.g.,
+        1000.0 to convert the standard SWC µm to nm).
+
+    Returns
+    -------
+    SkeletonLayer
+        Skeleton with ``"compartment"`` and ``"radius"`` features.
+    """
+    # --- Read lines ---
+    if isinstance(source, (str, os.PathLike)):
+        path = Path(source)
+        if name is None:
+            name = path.stem
+        with open(path, "r") as f:
+            raw_lines = f.readlines()
+    else:
+        raw_lines = source.read()
+        if isinstance(raw_lines, bytes):
+            raw_lines = raw_lines.decode("utf-8")
+        raw_lines = raw_lines.splitlines(keepends=True)
+        if name is None:
+            name = "swc"
+
+    # --- Parse data lines (skip comments) ---
+    ids: list[int] = []
+    types: list[int] = []
+    xs: list[float] = []
+    ys: list[float] = []
+    zs: list[float] = []
+    radii: list[float] = []
+    parents: list[int] = []
+
+    for line in raw_lines:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) < 7:
+            continue
+        ids.append(int(parts[0]))
+        types.append(int(parts[1]))
+        xs.append(float(parts[2]))
+        ys.append(float(parts[3]))
+        zs.append(float(parts[4]))
+        radii.append(float(parts[5]))
+        parents.append(int(parts[6]))
+
+    n = len(ids)
+    if n == 0:
+        raise ValueError("No data points found in SWC file.")
+
+    vertices = np.column_stack([xs, ys, zs])
+    radii_arr = np.array(radii, dtype=float)
+
+    # --- Map SWC IDs → positional indices ---
+    id_to_pos = {swc_id: pos for pos, swc_id in enumerate(ids)}
+
+    # --- Build edges as [child_positional, parent_positional] ---
+    edge_list: list[list[int]] = []
+    root_pos: Optional[int] = None
+    for pos, parent_id in enumerate(parents):
+        if parent_id == -1:
+            root_pos = pos
+        else:
+            if parent_id not in id_to_pos:
+                raise ValueError(
+                    f"SWC node {ids[pos]} references undefined parent {parent_id}."
+                )
+            edge_list.append([pos, id_to_pos[parent_id]])
+
+    edges = np.array(edge_list, dtype=int) if edge_list else np.empty((0, 2), dtype=int)
+
+    # --- Apply rescaling ---
+    if rescale is not None:
+        vertices = vertices * rescale
+        radii_arr = radii_arr * rescale
+
+    return SkeletonLayer(
+        name=name,
+        vertices=vertices,
+        edges=edges,
+        root=root_pos,
+        features={
+            "compartment": np.array(types, dtype=int),
+            "radius": radii_arr,
+        },
+    )
 
 
 class MeshworkImporter:

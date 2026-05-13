@@ -7,8 +7,9 @@ from typing import Callable, Optional, Union
 import fastremap
 import numpy as np
 import pandas as pd
-from morphsync.base import DEFAULT_SPATIAL_COLUMNS
 from scipy import sparse, stats
+
+from ._sync.base import DEFAULT_SPATIAL_COLUMNS
 
 
 def majority_agg() -> Callable:

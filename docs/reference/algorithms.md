@@ -8,7 +8,7 @@ Ossify provides computational methods for analyzing neuromorphological structure
 |--------------------|-----------|---------|
 | **[Morphological Analysis](#morphological-analysis)** | `strahler_number` | Tree structure characterization |
 | **[Synapse Analysis](#synapse-analysis)** | `synapse_betweenness`, `label_axon_from_*`, `segregation_index` | Connectivity and compartmentalization |
-| **[Smoothing & Filtering](#smoothing-and-filtering)** | `smooth_features` | Signal processing on graphs |
+| **[Smoothing & Filtering](#smoothing-filtering)** | `smooth_features` | Signal processing on graphs |
 
 ---
 
@@ -47,6 +47,7 @@ fig, ax = osy.plot.plot_morphology_2d(
     color="strahler_order",
     palette="viridis"
 )
+```
 
 #### Interpretation
 

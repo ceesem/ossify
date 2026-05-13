@@ -184,3 +184,37 @@ def mock_features():
         "compartment": ["soma", "dendrite", "dendrite", "dendrite", "axon"],
         "distance_to_root": [0.0, 1.0, 2.0, 3.0, 4.0],
     }
+
+
+@pytest.fixture
+def graph(simple_graph_data):
+    """Small GraphLayer with a numeric feature on every vertex."""
+    from ossify.data_layers import GraphLayer
+
+    vertices, edges, vertex_indices = simple_graph_data
+    rng = np.random.default_rng(0)
+    feat = rng.uniform(100.0, 500.0, len(vertices))
+    return GraphLayer(
+        "test_graph",
+        vertices,
+        edges,
+        spatial_columns=["x", "y", "z"],
+        features={"weight": feat},
+    )
+
+
+@pytest.fixture
+def mesh(simple_mesh_data):
+    """Small MeshLayer (tetrahedron) with a numeric feature on every vertex."""
+    from ossify.data_layers import MeshLayer
+
+    vertices, faces, vertex_indices = simple_mesh_data
+    rng = np.random.default_rng(1)
+    feat = rng.uniform(0.5, 5.0, len(vertices))
+    return MeshLayer(
+        "test_mesh",
+        vertices,
+        faces,
+        spatial_columns=["x", "y", "z"],
+        features={"value": feat},
+    )
