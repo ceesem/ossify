@@ -1,11 +1,18 @@
 """Tests for ossify.plot3d — 3D plotting via PyVista."""
 
+import sys
+
 import numpy as np
 import pandas as pd
 import pytest
 import pyvista as pv
 
 pv.OFF_SCREEN = True
+if sys.platform.startswith("linux"):
+    try:
+        pv.start_xvfb()
+    except OSError:
+        pass
 
 from ossify import plot3d
 from ossify.plot3d import (
