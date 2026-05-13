@@ -9,6 +9,8 @@ Ossify supports 2D plotting (via matplotlib) and 3D interactive rendering (via P
 | **[Cell Plotting](#cell-plotting)** | `plot_cell_2d`, `plot_cell_multiview` | 2D integrated visualization of complete cells |
 | **[Layer Plotting](#layer-plotting)** | `plot_morphology_2d`, `plot_annotations_2d`, `plot_skeleton`, `plot_points` | 2D individual layer visualization |
 | **[Figure Management](#figure-management)** | `single_panel_figure`, `multi_panel_figure`, `add_scale_bar` | Layout and annotation utilities |
+| **[Lineups](#lineups)** | `plot_lineup`, `plot_lineup_grid`, `LineupGroup`, `add_layer_lines` | Side-by-side cell arrays for comparison |
+| **[Projections and Rotations](#projections-and-rotations)** | `Rotation`, `RotateCell` | Build custom projection callables |
 | **[3D Cell Plotting](#3d-cell-plotting)** | `plot_cell_3d` | 3D integrated visualization of complete cells |
 | **[3D Layer Plotting](#3d-layer-plotting)** | `plot_morphology_3d`, `plot_annotations_3d`, `plot_mesh_3d`, `plot_graph_3d` | 3D individual layer visualization |
 
@@ -601,6 +603,91 @@ ax.set_title("Distance to Nearest Branch Point")
     - **Resolution**: Set `dpi=300` for publication figures
     - **Aspect Ratios**: Use `units_per_inch` for consistent scaling across different data sizes
     - **Layering**: Use `zorder` to control drawing order when combining multiple plot elements
+
+---
+
+## Lineups {: .doc-heading}
+
+Lineups arrange multiple cells side-by-side on a single axis — useful for
+comparing morphologies across a small group, or for figure panels that show
+several example cells. See the
+[visualization guide](../visualization_and_plotting.md) for a walkthrough.
+
+### plot_lineup
+
+::: ossify.plot.plot_lineup
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+### plot_lineup_grid
+
+::: ossify.plot.plot_lineup_grid
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+### LineupGroup
+
+::: ossify.plot.LineupGroup
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+### add_layer_lines
+
+::: ossify.plot.add_layer_lines
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+---
+
+## Projections and Rotations {: .doc-heading}
+
+The `projection` keyword of every 2D plotting function accepts either a
+string label (e.g. `"xy"`) or a callable mapping `(N, 3) → (N, 2)`.
+`Rotation` and `RotateCell` are factories that build such callables for
+common rotated-view use cases. See the
+[visualization guide](../visualization_and_plotting.md) for examples.
+
+### Rotation
+
+::: ossify.plot.Rotation
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+### RotateCell
+
+::: ossify.plot.RotateCell
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
 
 ---
 

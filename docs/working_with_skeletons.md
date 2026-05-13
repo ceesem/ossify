@@ -334,6 +334,41 @@ if "radius" in skeleton.feature_names:
     print(f"Volume: {volume}")
 ```
 
+## Resampling Vertices
+
+Skeletons derived from mesh contraction often have wildly uneven vertex
+spacing — dense where the mesh was detailed, sparse across long unbranched
+runs. For analyses that integrate along the skeleton (path-length kernels,
+edge-weighted features, uniform-step traversals) it's useful to resample to
+roughly even spacing while keeping topology intact.
+
+`skeleton.resample(spacing=...)` returns a new `SkeletonLayer` where every
+unbranched segment is re-sampled to approximately the requested Euclidean
+distance between vertices. Branch points, end points, and the root are
+always preserved — only the interior vertices of each segment are
+redistributed.
+
+```python
+# Resample to ~1 µm spacing (for a skeleton stored in µm)
+resampled = cell.skeleton.resample(spacing=1.0)
+
+# Leave segments adjacent to the root untouched — useful when the root is
+# a soma and you don't want to densify the cell body.
+resampled = cell.skeleton.resample(spacing=1.0, skip_root_adjacent=True)
+
+# Control how vertex features carry over. Default "nearest" copies the
+# value of the closest original vertex (works for any dtype, including
+# categorical labels). Pass a dict to aggregate numeric features instead.
+resampled = cell.skeleton.resample(
+    spacing=1.0,
+    feature_agg={"radius": "mean"},  # average radius across collapsed verts
+)
+```
+
+The same machinery powers the `resample_distance` argument of
+`ossify.export_swc` — see [Data Import and Export](data_import_export.md)
+for SWC-specific resampling.
+
 ## Root Management (Unique to Skeletons)
 
 ### Changing the Root
@@ -483,6 +518,9 @@ if len(branch_points) >= 2:
 - `skeleton.half_edge_length` - Half-edge lengths per vertex
 - `skeleton.surface_area(vertices=None, as_positional=False)` - Surface area (with radius)
 - `skeleton.volume(vertices=None, as_positional=False)` - Volume (with radius)
+
+### Resampling
+- `skeleton.resample(spacing, skip_root_adjacent=False, feature_agg="nearest")` - Return a new skeleton with approximately uniform vertex spacing
 
 ### Root Management
 - `skeleton.reroot(new_root, as_positional=False)` - Change root vertex

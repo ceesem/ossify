@@ -345,6 +345,34 @@ ossify.plot_morphology_2d(
 ax.set_title("Custom Projection")
 ```
 
+#### Rotation helpers
+
+Hand-rolling a projection is fine but verbose. For the common case of
+"rotate the cell about an axis to a better viewing angle," `Rotation` and
+`RotateCell` build a projection callable for you:
+
+```python
+from ossify.plot import Rotation, RotateCell
+
+# Rotate 30° about the y-axis through the soma
+proj = Rotation(cell.skeleton.root_location, axis="y", angle=30)
+ossify.plot.plot_cell_2d(cell, projection=proj)
+
+# Let PCA pick the best rotation angle about a given axis
+proj = RotateCell(cell, axis="y", angle="best")
+ossify.plot.plot_cell_2d(cell, projection=proj)
+
+# Or fully automatic: PCA finds both the axis and the angle
+proj = RotateCell(cell)
+ossify.plot.plot_cell_2d(cell, projection=proj)
+```
+
+`RotateCell` defaults the rotation center to the skeleton root location
+and supports `"best"` for axis and/or angle, which fits a PCA to the
+skeleton vertices. Pass `new_center=np.array([0, 0])` to position the
+projected center at a specific 2D location — useful when laying out
+multiple cells side-by-side.
+
 ### Spatial Offsets
 
 ```python
