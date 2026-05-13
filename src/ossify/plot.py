@@ -12,8 +12,9 @@ from .plot_utils import (
     _is_discrete_data,
     _map_value_to_colors,
     _rescale_scalar,
-    _resolve_color_parameter,
+    _resolve_color_to_array,
     _resolve_scalar_parameter,
+    _resolve_size_with_transform,
 )
 
 __all__ = [
@@ -778,9 +779,11 @@ def plot_annotations_2d(
     color: Optional[Union[str, np.ndarray, tuple]] = None,
     palette: Union[str, dict] = "coolwarm",
     color_norm: Optional[Tuple[float, float]] = None,
+    color_scale: Optional[Literal["log"]] = None,
     alpha: float = 1,
     size: Optional[Union[str, np.ndarray, float]] = None,
     size_norm: Optional[Tuple[float, float]] = None,
+    size_scale: Optional[Literal["log", "sqrt", "cbrt"]] = None,
     sizes: Optional[np.ndarray] = (1, 30),
     projection: Union[str, Callable] = "xy",
     rotation_angle: Optional[Union[float, int, Literal["best"]]] = None,
@@ -792,28 +795,100 @@ def plot_annotations_2d(
     ax: Optional[plt.Axes] = None,
     **kwargs,
 ) -> plt.Axes:
+    """Plot a 2D scatter of a :class:`PointCloudLayer` annotation.
+
+    Parameters
+    ----------
+    annotation : PointCloudLayer
+        Annotation layer to plot. Raw ``np.ndarray`` is also accepted, but
+        feature-name resolution then requires the layer.
+    color : str, np.ndarray, or tuple, optional
+        Color specification. A string matching a feature name resolves to a
+        per-point value array mapped through *palette*. Otherwise treated as
+        a matplotlib color.
+    palette : str or dict, default "coolwarm"
+        Colormap or dict for scalar color mapping.
+    color_norm : tuple of float, optional
+        ``(min, max)`` clip range, in original (pre-transform) units.
+    color_scale : {"log"} or None, optional
+        Value transform applied before colormap projection. Mirrors
+        :func:`plot_annotations_3d`.
+    alpha : float, default 1
+        Marker opacity.
+    size : str, np.ndarray, or float, optional
+        Marker size specification. Feature name, per-point array, or scalar.
+    size_norm : tuple of float, optional
+        ``(min, max)`` clip range for size mapping, in original units.
+    size_scale : {"log", "sqrt", "cbrt"} or None, optional
+        Value transform applied before size normalization. ``"sqrt"`` is
+        useful when the feature is a cross-sectional area; ``"cbrt"`` when
+        the feature is a volume. Mirrors :func:`plot_annotations_3d`.
+    sizes : tuple of float, optional
+        ``(min_size, max_size)`` output range for size rescaling. Default
+        ``(1, 30)``.
+
+    Returns
+    -------
+    plt.Axes
+        Matplotlib axes with the annotation rendered.
+    """
     if ax is None:
         ax = plt.gca()
-    if isinstance(annotation, PointCloudLayer):
-        vertices = annotation.vertices
-        if isinstance(color, str):
-            color = color or annotation.get_feature(color)
-        if isinstance(size, str):
-            size = annotation.get_feature(size)
-    else:
-        vertices = np.asarray(annotation)
 
-    if isinstance(size, Number) or size is None:
-        sizes_out = size
-    else:
-        sizes_out = _rescale_scalar(size, size_norm, sizes)
+    if not isinstance(annotation, PointCloudLayer):
+        # Raw array — pass straight through; no feature-name resolution.
+        return plot_points(
+            points=np.asarray(annotation),
+            sizes=size,
+            colors=color,
+            palette=palette,
+            color_norm=color_norm,
+            projection=projection,
+            rotation_angle=rotation_angle,
+            rotation_axis=rotation_axis,
+            rotation_center=rotation_center,
+            offset_h=offset_h,
+            offset_v=offset_v,
+            invert_y=invert_y,
+            alpha=alpha,
+            ax=ax,
+            **kwargs,
+        )
+
+    vertices = annotation.vertices
+
+    # Resolve color via the shared pipeline. Feature names get looked up;
+    # scalar arrays get optionally log-transformed and palette-mapped.
+    # Returns an (N, k) RGBA array, a scalar matplotlib color, or None.
+    resolved_color = _resolve_color_to_array(
+        color,
+        annotation,
+        palette=palette,
+        color_norm=color_norm,
+        color_scale=color_scale,
+    )
+
+    # Resolve size via the shared transform pipeline. Numeric scalars pass
+    # through unchanged; feature names and arrays go through the
+    # log/sqrt/cbrt transform → norm → out_range pipeline.
+    resolved_size = _resolve_size_with_transform(
+        size,
+        len(vertices),
+        scale=size_scale,
+        norm=size_norm,
+        out_range=sizes,
+        layer=annotation,
+    )
 
     return plot_points(
         points=vertices,
-        sizes=sizes_out,
-        colors=color,
-        palette=palette,
-        color_norm=color_norm,
+        sizes=resolved_size,
+        colors=resolved_color,
+        # Palette intentionally not forwarded: when resolved_color is an
+        # ndarray it's already pre-mapped to RGB(A), and when it's a scalar
+        # color string/tuple palette is irrelevant. Forwarding palette here
+        # would cause matplotlib to try to apply a colormap on top of
+        # already-mapped RGB values.
         projection=projection,
         rotation_angle=rotation_angle,
         rotation_axis=rotation_axis,
@@ -832,6 +907,7 @@ def plot_morphology_2d(
     color: Optional[Union[str, np.ndarray, tuple]] = None,
     palette: Union[str, dict] = "coolwarm",
     color_norm: Optional[Tuple[float, float]] = None,
+    color_scale: Optional[Literal["log"]] = None,
     alpha: Optional[Union[str, np.ndarray, float]] = 1.0,
     alpha_norm: Optional[Tuple[float, float]] = None,
     alpha_extent: Optional[Tuple[float, float]] = None,
@@ -863,7 +939,13 @@ def plot_morphology_2d(
     palette : str or dict, default "coolwarm"
         Colormap for mapping array values to colors
     color_norm : tuple of float, optional
-        (min, max) tuple for color normalization
+        (min, max) tuple for color normalization, in the original
+        (pre-transform) value space.
+    color_scale : {"log"} or None, optional
+        Value transform applied before colormap projection. ``"log"``
+        log-transforms feature values so the colormap is distributed
+        linearly in log-space. *color_norm* bounds remain in original units
+        and are converted internally. Mirrors :func:`plot_morphology_3d`.
     alpha : str, np.ndarray, or float, default 1.0
         Alpha specification - can be feature name, array, or single value
     alpha_norm : tuple of float, optional
@@ -899,23 +981,25 @@ def plot_morphology_2d(
         invert_y=invert_y,
     )
 
-    # Resolve color parameter
-    resolved_color = _resolve_color_parameter(color, skel)
+    # Resolve color through the shared pipeline. Returns an (N, k) array
+    # for feature/array/pre-mapped inputs, a scalar matplotlib color for
+    # uniform strings/tuples, or None.
+    resolved_color = _resolve_color_to_array(
+        color,
+        skel,
+        palette=palette,
+        color_norm=color_norm,
+        color_scale=color_scale,
+    )
 
-    # Process colors
     colors_array = None
-    if resolved_color is not None:
-        if isinstance(resolved_color, np.ndarray):
-            # Array of values - map through colormap
-            colors_array = _map_value_to_colors(
-                resolved_color, colormap=palette, color_norm=color_norm
-            )
-        else:
-            # Single color (string, tuple) - use matplotlib to convert
-            import matplotlib.colors as mcolors
+    if isinstance(resolved_color, np.ndarray):
+        colors_array = resolved_color
+    elif resolved_color is not None:
+        import matplotlib.colors as mcolors
 
-            single_color = mcolors.to_rgba(resolved_color)
-            colors_array = np.tile(single_color, (skel.n_vertices, 1))
+        single_color = mcolors.to_rgba(resolved_color)
+        colors_array = np.tile(single_color, (skel.n_vertices, 1))
 
     # Process alpha: arrays without a norm are assumed pre-normalized to [0, 1]
     if alpha_extent is None:
@@ -984,6 +1068,7 @@ def plot_cell_2d(
     color: Optional[Union[str, np.ndarray, tuple]] = None,
     palette: Union[str, dict] = "coolwarm",
     color_norm: Optional[Tuple[float, float]] = None,
+    color_scale: Optional[Literal["log"]] = None,
     alpha: Optional[Union[str, np.ndarray, float]] = 1.0,
     alpha_norm: Optional[Tuple[float, float]] = None,
     linewidth: Optional[Union[str, np.ndarray, float]] = 1.0,
@@ -995,15 +1080,17 @@ def plot_cell_2d(
     synapses: Literal["pre", "post", "both", True, False] = False,
     pre_anno: str = "pre_syn",
     pre_color: Optional[Union[str, tuple]] = None,
-    pre_palette: Union[str, dict] = None,
+    pre_palette: Union[str, dict] = "coolwarm",
     pre_color_norm: Optional[Tuple[float, float]] = None,
     syn_alpha: float = 1,
+    syn_color_scale: Optional[Literal["log"]] = None,
     syn_size: Optional[Union[str, np.ndarray, float]] = None,
     syn_size_norm: Optional[Tuple[float, float]] = None,
+    syn_size_scale: Optional[Literal["log", "sqrt", "cbrt"]] = None,
     syn_sizes: Optional[np.ndarray] = (1, 30),
     post_anno: str = "post_syn",
     post_color: Optional[Union[str, tuple]] = None,
-    post_palette: Union[str, dict] = None,
+    post_palette: Union[str, dict] = "coolwarm",
     post_color_norm: Optional[Tuple[float, float]] = None,
     projection: Union[str, Callable] = "xy",
     rotation_angle: Optional[Union[float, int, Literal["best"]]] = None,
@@ -1016,7 +1103,7 @@ def plot_cell_2d(
     dpi: Optional[float] = None,
     despine: bool = True,
     **syn_kwargs,
-) -> Tuple[plt.Figure, plt.Axes]:
+) -> plt.Axes:
     # Resolve inline rotation parameters at the top level
     projection = _resolve_rotation_params(
         projection,
@@ -1044,6 +1131,7 @@ def plot_cell_2d(
         color=color,
         palette=palette,
         color_norm=color_norm,
+        color_scale=color_scale,
         alpha=alpha,
         alpha_norm=alpha_norm,
         linewidth=linewidth,
@@ -1058,40 +1146,38 @@ def plot_cell_2d(
         invert_y=invert_y,
         ax=ax,
     )
-    if synapses == "both" or synapses == "pre" or synapses is True:
+    syn_common_kwargs = dict(
+        alpha=syn_alpha,
+        color_scale=syn_color_scale,
+        size=syn_size,
+        size_norm=syn_size_norm,
+        size_scale=syn_size_scale,
+        sizes=syn_sizes,
+        ax=ax,
+        offset_h=offset_h,
+        offset_v=offset_v,
+        invert_y=invert_y,
+        projection=projection,
+    )
+    if synapses in ("both", "pre", True):
         if pre_anno in cell.annotations.names:
             ax = plot_annotations_2d(
                 cell.annotations[pre_anno],
                 color=pre_color,
                 palette=pre_palette,
                 color_norm=pre_color_norm,
-                alpha=syn_alpha,
-                size=syn_size,
-                size_norm=syn_size_norm,
-                sizes=syn_sizes,
-                ax=ax,
-                offset_h=offset_h,
-                offset_v=offset_v,
-                invert_y=invert_y,
-                projection=projection,
+                **syn_common_kwargs,
                 **syn_kwargs,
             )
-    if synapses == "both" or synapses == "post" or synapses is True:
+            syn_common_kwargs["ax"] = ax
+    if synapses in ("both", "post", True):
         if post_anno in cell.annotations.names:
             ax = plot_annotations_2d(
                 cell.annotations[post_anno],
                 color=post_color,
                 palette=post_palette,
                 color_norm=post_color_norm,
-                alpha=syn_alpha,
-                size=syn_size,
-                size_norm=syn_size_norm,
-                sizes=syn_sizes,
-                ax=ax,
-                offset_h=offset_h,
-                offset_v=offset_v,
-                invert_y=invert_y,
-                projection=projection,
+                **syn_common_kwargs,
                 **syn_kwargs,
             )
     return ax
@@ -1103,6 +1189,7 @@ def plot_cell_multiview(
     color: Optional[Union[str, np.ndarray, tuple]] = None,
     palette: Union[str, dict] = "coolwarm",
     color_norm: Optional[Tuple[float, float]] = None,
+    color_scale: Optional[Literal["log"]] = None,
     alpha: Optional[Union[str, np.ndarray, float]] = 1.0,
     alpha_norm: Optional[Tuple[float, float]] = None,
     linewidth: Optional[Union[str, np.ndarray, float]] = 1.0,
@@ -1114,22 +1201,24 @@ def plot_cell_multiview(
     synapses: Literal["pre", "post", "both", True, False] = False,
     pre_anno: str = "pre_syn",
     pre_color: Optional[Union[str, tuple]] = None,
-    pre_palette: Union[str, dict] = None,
+    pre_palette: Union[str, dict] = "coolwarm",
     pre_color_norm: Optional[Tuple[float, float]] = None,
     syn_alpha: float = 1,
+    syn_color_scale: Optional[Literal["log"]] = None,
     syn_size: Optional[Union[str, np.ndarray, float]] = None,
     syn_size_norm: Optional[Tuple[float, float]] = None,
+    syn_size_scale: Optional[Literal["log", "sqrt", "cbrt"]] = None,
     syn_sizes: Optional[np.ndarray] = (1, 30),
     post_anno: str = "post_syn",
     post_color: Optional[Union[str, tuple]] = None,
-    post_palette: Union[str, dict] = None,
+    post_palette: Union[str, dict] = "coolwarm",
     post_color_norm: Optional[Tuple[float, float]] = None,
     invert_y: bool = True,
     despine: bool = True,
     units_per_inch: float = 100_000,
     dpi: Optional[float] = None,
     **syn_kwargs,
-) -> Tuple[plt.Figure, dict]:
+) -> dict:
     fig, axes = multi_panel_figure(
         data_bounds_min=cell.skeleton.bbox[0],
         data_bounds_max=cell.skeleton.bbox[1],
@@ -1145,6 +1234,7 @@ def plot_cell_multiview(
             color=color,
             palette=palette,
             color_norm=color_norm,
+            color_scale=color_scale,
             alpha=alpha,
             alpha_norm=alpha_norm,
             linewidth=linewidth,
@@ -1157,8 +1247,10 @@ def plot_cell_multiview(
             invert_y=invert_y,
             synapses=synapses,
             syn_alpha=syn_alpha,
+            syn_color_scale=syn_color_scale,
             syn_size=syn_size,
             syn_size_norm=syn_size_norm,
+            syn_size_scale=syn_size_scale,
             syn_sizes=syn_sizes,
             pre_anno=pre_anno,
             pre_color=pre_color,

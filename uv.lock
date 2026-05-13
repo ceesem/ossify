@@ -2751,11 +2751,13 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-3d = [
-    { name = "pyvista", extra = ["jupyter"] },
-]
 legacy = [
     { name = "h5py" },
+]
+viz = [
+    { name = "imageio" },
+    { name = "pyvista", extra = ["jupyter"] },
+    { name = "trame" },
 ]
 
 [package.dev-dependencies]
@@ -2790,14 +2792,16 @@ requires-dist = [
     { name = "cloud-files", specifier = ">=5.8.0" },
     { name = "fastremap", specifier = ">=1.15.1" },
     { name = "h5py", marker = "extra == 'legacy'", specifier = ">=3.14.0" },
+    { name = "imageio", marker = "extra == 'viz'", specifier = ">=2.34" },
     { name = "matplotlib", specifier = ">=3.10.6" },
     { name = "numpy", specifier = ">=2.0.2" },
     { name = "orjson", specifier = ">=3.10.15" },
-    { name = "pyvista", extras = ["jupyter"], marker = "extra == '3d'" },
+    { name = "pyvista", extras = ["jupyter"], marker = "extra == 'viz'", specifier = ">=0.46" },
     { name = "scipy", specifier = ">=1.15" },
+    { name = "trame", marker = "extra == 'viz'", specifier = ">=3.10" },
     { name = "trimesh", specifier = ">=4.6.2" },
 ]
-provides-extras = ["legacy", "3d"]
+provides-extras = ["legacy", "viz"]
 
 [package.metadata.requires-dev]
 dev = [

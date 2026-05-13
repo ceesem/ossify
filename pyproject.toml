@@ -32,8 +32,10 @@ classifiers = [
 legacy = [
     "h5py>=3.14.0",
 ]
-3d = [
-    "pyvista[jupyter]",
+viz = [
+    "pyvista[jupyter]>=0.46",
+    "trame>=3.10",
+    "imageio>=2.34",
 ]
 
 [dependency-groups]

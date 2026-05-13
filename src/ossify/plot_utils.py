@@ -1,7 +1,7 @@
 """Renderer-agnostic color and scalar utilities shared by plot.py and plot3d.py."""
 
 from numbers import Number
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
@@ -18,6 +18,9 @@ __all__ = [
     "_rescale_scalar",
     "_resolve_color_parameter",
     "_resolve_scalar_parameter",
+    "_apply_value_transform",
+    "_resolve_color_to_array",
+    "_resolve_size_with_transform",
 ]
 
 
@@ -432,3 +435,177 @@ def _resolve_scalar_parameter(
             return out_range[0] + normalized * (out_range[1] - out_range[0])
         return normalized
     return arr
+
+
+def _apply_value_transform(
+    values: np.ndarray,
+    scale: Optional[Literal["log", "sqrt", "cbrt"]],
+    norm: Optional[Tuple[float, float]] = None,
+) -> Tuple[np.ndarray, Optional[Tuple[float, float]]]:
+    """Apply a log/sqrt/cbrt transform to values and matching norm bounds.
+
+    Used by plotting code so that user-facing ``norm`` bounds stay in the
+    original (untransformed) value space while internal normalization
+    happens in transformed space.
+
+    Parameters
+    ----------
+    values : np.ndarray
+        Values to transform.
+    scale : {"log", "sqrt", "cbrt"} or None
+        Transform to apply. ``None`` is a passthrough.
+    norm : tuple of float, optional
+        ``(min, max)`` clip range in original units. Transformed alongside
+        the values when *scale* is set.
+
+    Returns
+    -------
+    transformed_values : np.ndarray
+        Values after applying *scale* (or the input unchanged when ``None``).
+    transformed_norm : tuple of float or None
+        ``(min, max)`` in transformed space, or ``None`` when no *norm* was
+        supplied.
+
+    Raises
+    ------
+    ValueError
+        If *scale* is not one of the supported strings or ``None``.
+    """
+    if scale is None:
+        return values, norm
+    fn_map = {"log": np.log, "sqrt": np.sqrt, "cbrt": np.cbrt}
+    if scale not in fn_map:
+        raise ValueError(
+            f"Unknown value scale: {scale!r}. Expected one of {list(fn_map)} or None."
+        )
+    fn = fn_map[scale]
+    transformed_values = fn(np.asarray(values, dtype=float))
+    transformed_norm: Optional[Tuple[float, float]] = (
+        (float(fn(norm[0])), float(fn(norm[1]))) if norm is not None else None
+    )
+    return transformed_values, transformed_norm
+
+
+def _resolve_color_to_array(
+    color: Union[str, np.ndarray, tuple, None],
+    layer: Any,
+    palette: Union[str, Dict, Colormap] = "coolwarm",
+    color_norm: Optional[Tuple[float, float]] = None,
+    color_scale: Optional[Literal["log", "sqrt", "cbrt"]] = None,
+) -> Optional[Union[np.ndarray, str, tuple]]:
+    """Resolve a color spec into per-vertex RGB(A) values or a scalar color.
+
+    Encapsulates the feature-lookup → optional transform → palette mapping
+    pipeline shared by the 2D and 3D plot backends. Scalar matplotlib
+    colors (e.g. ``"steelblue"`` or ``(0.2, 0.5, 0.8)``) are returned
+    untouched so callers can pass them directly to renderer ``color=``
+    arguments rather than tiling them across all vertices.
+
+    Parameters
+    ----------
+    color : str, np.ndarray, tuple, or None
+        Color specification. May be:
+
+        - A feature name string present on *layer* — looked up and mapped.
+        - A 1-D array of scalar values — mapped through *palette*.
+        - A 2-D ``(N, 3)`` or ``(N, 4)`` array — passed through as
+          pre-mapped RGB(A).
+        - A matplotlib color string (e.g. ``"steelblue"``) — returned as-is.
+        - A color tuple — returned as-is.
+        - ``None`` — returns ``None``.
+    layer : Any
+        Layer object providing ``get_feature(name)``.
+    palette : str, dict, or Colormap, default "coolwarm"
+        Colormap or value→color dict for scalar mapping.
+    color_norm : tuple of float, optional
+        ``(min, max)`` clip range in original (pre-transform) units.
+    color_scale : {"log", "sqrt", "cbrt"} or None, optional
+        Value transform applied to scalar values before palette mapping.
+
+    Returns
+    -------
+    np.ndarray, str, tuple, or None
+        - ``(N, 3)`` or ``(N, 4)`` array when *color* resolves to a
+          per-vertex mapping (from a feature, scalar array, or pre-mapped
+          array).
+        - ``str`` or ``tuple`` when *color* is a single matplotlib color —
+          callers can pass these to ``add_mesh(color=...)`` directly or
+          tile them as needed.
+        - ``None`` when *color* is ``None``.
+    """
+    if color is None:
+        return None
+
+    resolved = _resolve_color_parameter(color, layer)
+    if resolved is None:
+        return None
+
+    if isinstance(resolved, np.ndarray) and resolved.ndim == 1:
+        transformed, effective_norm = _apply_value_transform(
+            resolved, color_scale, color_norm
+        )
+        return _map_value_to_colors(
+            transformed, colormap=palette, color_norm=effective_norm
+        )
+    if isinstance(resolved, np.ndarray) and resolved.ndim == 2:
+        return resolved
+
+    # Single matplotlib color (str or tuple) — let the caller decide whether
+    # to tile or to pass through to the renderer's color= kwarg.
+    return resolved
+
+
+def _resolve_size_with_transform(
+    value: Union[str, np.ndarray, "pd.Series", List, float, None],
+    n_vertices: int,
+    scale: Optional[Literal["log", "sqrt", "cbrt"]] = None,
+    norm: Optional[Tuple[float, float]] = None,
+    out_range: Optional[Tuple[float, float]] = None,
+    layer: Optional[Any] = None,
+) -> Optional[np.ndarray]:
+    """Resolve a size/radius parameter with optional value transform.
+
+    Wraps :func:`_resolve_scalar_parameter` with optional ``log``, ``sqrt``,
+    or ``cbrt`` transformation applied to feature/array values prior to
+    normalization. Numeric scalars are passed through untransformed — they
+    are assumed to be in output units already.
+
+    Parameters
+    ----------
+    value : str, array-like, float, or None
+        Size specification (see :func:`_resolve_scalar_parameter`).
+    n_vertices : int
+        Number of vertices for filling constant arrays.
+    scale : {"log", "sqrt", "cbrt"} or None, optional
+        Transform applied to feature/array values before normalization.
+        ``"sqrt"`` is useful when the feature is a cross-sectional area;
+        ``"cbrt"`` when the feature is a volume.
+    norm : tuple of float, optional
+        ``(min, max)`` clip range, always specified in original units.
+    out_range : tuple of float, optional
+        ``(min, max)`` output range after normalization.
+    layer : Any, optional
+        Layer providing ``get_feature(name)``; required when *value* is a
+        feature name string.
+
+    Returns
+    -------
+    np.ndarray or None
+        Per-vertex size array, or ``None`` when *value* is ``None``.
+    """
+    if scale is None or value is None or isinstance(value, (int, float, bool)):
+        return _resolve_scalar_parameter(
+            value, n_vertices, norm=norm, out_range=out_range, layer=layer
+        )
+
+    if isinstance(value, str):
+        if layer is None:
+            raise ValueError(f"layer is required to resolve feature '{value}'")
+        raw = np.asarray(layer.get_feature(value), dtype=float)
+    else:
+        raw = np.asarray(value, dtype=float)
+
+    transformed, transformed_norm = _apply_value_transform(raw, scale, norm)
+    return _resolve_scalar_parameter(
+        transformed, n_vertices, norm=transformed_norm, out_range=out_range
+    )

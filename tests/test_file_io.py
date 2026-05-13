@@ -688,3 +688,69 @@ class TestSWCRoundtrip:
 
         sk = file_io.load_swc(out, rescale=1000.0)
         np.testing.assert_allclose(sk.vertices, swc_cell.skeleton.vertices, atol=1e-3)
+
+
+class TestSWCCompartmentConstants:
+    """Tests for the SWCCompartment IntEnum and SWC_* aliases."""
+
+    def test_values_match_swc_spec(self):
+        """Each member equals its canonical SWC type code."""
+        assert file_io.SWCCompartment.UNDEFINED == 0
+        assert file_io.SWCCompartment.SOMA == 1
+        assert file_io.SWCCompartment.AXON == 2
+        assert file_io.SWCCompartment.DENDRITE == 3
+        assert file_io.SWCCompartment.APICAL_DENDRITE == 4
+        assert file_io.SWCCompartment.CUSTOM == 5
+
+    def test_flat_aliases_identical_to_enum_members(self):
+        """SWC_* module aliases are the same objects as the enum members."""
+        assert file_io.SWC_UNDEFINED is file_io.SWCCompartment.UNDEFINED
+        assert file_io.SWC_SOMA is file_io.SWCCompartment.SOMA
+        assert file_io.SWC_AXON is file_io.SWCCompartment.AXON
+        assert file_io.SWC_DENDRITE is file_io.SWCCompartment.DENDRITE
+        assert file_io.SWC_APICAL_DENDRITE is file_io.SWCCompartment.APICAL_DENDRITE
+        assert file_io.SWC_CUSTOM is file_io.SWCCompartment.CUSTOM
+
+    def test_palette_lookup_with_int_feature_values(self):
+        """The intended use case: dict palette keyed by SWC_* constants
+        must resolve when the feature values are plain ints."""
+        palette = {
+            file_io.SWC_SOMA: "black",
+            file_io.SWC_DENDRITE: "tomato",
+            file_io.SWC_AXON: "steelblue",
+        }
+        assert palette[1] == "black"
+        assert palette[3] == "tomato"
+        assert palette[2] == "steelblue"
+
+    def test_palette_lookup_with_float_feature_values(self):
+        """Float values that equal SWC integers should also resolve, since
+        feature arrays sometimes come back as float dtypes."""
+        palette = {file_io.SWC_DENDRITE: "tomato", file_io.SWC_SOMA: "black"}
+        assert palette[3.0] == "tomato"
+        assert palette[1.0] == "black"
+
+    def test_palette_lookup_with_numpy_scalar(self):
+        """Numpy scalar values should also resolve through the palette."""
+        palette = {file_io.SWC_DENDRITE: "tomato"}
+        v = np.array([3], dtype=np.int32)[0]
+        assert palette[v] == "tomato"
+
+    def test_compartment_mapping_accepts_enum_values(self):
+        """export_swc's compartment_mapping argument should accept enum
+        members as values (since they're ints)."""
+        mapping = {
+            "soma": file_io.SWC_SOMA,
+            "dendrite": file_io.SWC_DENDRITE,
+        }
+        # Values cast cleanly to int via the existing pipeline.
+        assert int(mapping["soma"]) == 1
+        assert int(mapping["dendrite"]) == 3
+
+    def test_top_level_ossify_exports(self):
+        """Constants are accessible at the package root, not just file_io."""
+        import ossify
+
+        assert ossify.SWC_SOMA == 1
+        assert ossify.SWC_DENDRITE == 3
+        assert ossify.SWCCompartment.AXON == 2

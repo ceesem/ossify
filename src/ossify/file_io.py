@@ -1,6 +1,7 @@
 import io
 import os
 import tarfile
+from enum import IntEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, Optional, Union
 from urllib import parse
@@ -29,6 +30,13 @@ __all__ = [
     "export_swc",
     "export_swc_dataframe",
     "load_swc",
+    "SWCCompartment",
+    "SWC_UNDEFINED",
+    "SWC_SOMA",
+    "SWC_AXON",
+    "SWC_DENDRITE",
+    "SWC_APICAL_DENDRITE",
+    "SWC_CUSTOM",
 ]
 
 PUTABLE_SCHEMES = ["s3", "gs", "file", "mem"]
@@ -37,6 +45,47 @@ OSSIFY_EXTENSION = "osy"
 FILE_VERSION = (
     2.0  # Version 2.0: added dtype optimization (float64→float32, int64→int32)
 )
+
+
+class SWCCompartment(IntEnum):
+    """SWC ``type`` column values, per the SWC format specification.
+
+    See https://swc-specification.readthedocs.io/en/latest/swc.html.
+
+    Members are :class:`int` subclasses, so they can be used as dict keys
+    alongside integer feature values — useful when building palettes for
+    plotting functions:
+
+    >>> palette = {SWCCompartment.SOMA: "black",
+    ...            SWCCompartment.DENDRITE: "tomato",
+    ...            SWCCompartment.AXON: "steelblue"}
+    >>> ossify.plot_cell_2d(cell, color="compartment", palette=palette)
+
+    The module also exports flat ``SWC_<NAME>`` aliases for the same
+    members so the dict literal stays compact:
+
+    >>> palette = {SWC_SOMA: "black", SWC_DENDRITE: "tomato"}
+
+    Values 5 and above are conventionally "custom" / user-defined in the
+    SWC spec; ossify only defines ``CUSTOM = 5`` as a named member but
+    will round-trip any integer value through ``load_swc``/``export_swc``.
+    """
+
+    UNDEFINED = 0
+    SOMA = 1
+    AXON = 2
+    DENDRITE = 3
+    APICAL_DENDRITE = 4
+    CUSTOM = 5
+
+
+# Flat aliases for ergonomic palette dict literals.
+SWC_UNDEFINED = SWCCompartment.UNDEFINED
+SWC_SOMA = SWCCompartment.SOMA
+SWC_AXON = SWCCompartment.AXON
+SWC_DENDRITE = SWCCompartment.DENDRITE
+SWC_APICAL_DENDRITE = SWCCompartment.APICAL_DENDRITE
+SWC_CUSTOM = SWCCompartment.CUSTOM
 
 
 def load_cell(source: Union[str, BinaryIO]) -> Cell:

@@ -228,6 +228,86 @@ ossify.plot_morphology_2d(
 )
 ```
 
+### Value Transforms (log, sqrt, cbrt)
+
+When a feature spans several orders of magnitude — synapse counts, branch
+radii, depth — a linear colormap mapping wastes most of the dynamic range
+on the largest values. Use `color_scale` (or `size_scale` on annotations)
+to transform values before they hit the colormap. The `color_norm` /
+`size_norm` bounds stay in original units, so you can think and write in
+the data's native space:
+
+```python
+# Log color scale for radius (handles thin axon → thick soma sweep)
+fig, ax = plt.subplots(figsize=(10, 8))
+ossify.plot_morphology_2d(
+    cell,
+    color="radius",
+    palette="viridis",
+    color_scale="log",            # log-transform values before colormap
+    color_norm=(100, 5000),       # bounds in original (nm) units
+    ax=ax,
+)
+
+# Log size scale for synapse counts
+fig, ax = plt.subplots(figsize=(10, 8))
+ossify.plot_annotations_2d(
+    cell.annotations["pre_syn"],
+    color="count",
+    color_scale="log",            # color also log-transformed
+    color_norm=(1, 1000),
+    size="count",
+    size_scale="log",
+    sizes=(5, 80),                # output marker size range
+    ax=ax,
+)
+
+# Sqrt size scale for area-like features (radius ∝ √area)
+fig, ax = plt.subplots(figsize=(10, 8))
+ossify.plot_annotations_2d(
+    cell.annotations["synapses"],
+    size="cross_section_area",
+    size_scale="sqrt",
+    sizes=(2, 50),
+    ax=ax,
+)
+
+# In plot_cell_2d, the synapse transforms have separate keywords so the
+# skeleton and synapses can be transformed independently.
+ossify.plot_cell_2d(
+    cell,
+    color="radius",
+    color_scale="log",            # skeleton color transform
+    synapses="both",
+    pre_color="count",
+    syn_color_scale="log",        # synapse color transform
+    syn_size="count",
+    syn_size_scale="log",         # synapse size transform
+)
+```
+
+These transforms match the corresponding 3D functions (`plot_morphology_3d`,
+`plot_annotations_3d`, `plot_cell_3d`), so the same call pattern works in
+either rendering backend.
+
+!!! note "`size` and `sizes` in 2D vs. 3D"
+
+    The 2D and 3D synapse-sizing APIs share keyword names but the
+    *output units differ between backends*:
+
+    - **2D** (`plot_annotations_2d`, `plot_cell_2d`): `sizes` is in
+      matplotlib marker units (points², following `scatter(s=…)`). The
+      defaults `(1, 30)` or `(5, 80)` are points² regardless of what
+      units your data is in.
+    - **3D** (`plot_annotations_3d`, `plot_cell_3d`): `sizes` is in
+      **world units** — the same units as your cell's vertex coordinates
+      (nm/µm/voxels). When `sizes=None` the 3D backend auto-scales from
+      the annotation's bounding box.
+
+    The *input* keywords (`size`, `size_norm`, `size_scale`) behave the
+    same in both backends and live in the feature's units. See the 3D
+    section below for the full table.
+
 ### Projection Customization
 
 ```python
@@ -621,12 +701,32 @@ pl = plot_cell_3d(
     pre_color="red",
     post_color="blue",
     syn_size="size",           # radius mapped from a feature
-    syn_sizes=(50, 500),       # output radius range
+    syn_sizes=(50, 500),       # output radius range (world units!)
     syn_size_scale="log",      # log-transform size values
 )
 
 pl.show()
 ```
+
+!!! warning "`syn_size` and `syn_sizes` are in **different units**"
+
+    This trips up almost everyone the first time. The synapse-sizing
+    keywords on `plot_cell_3d` (and the matching `size`/`sizes` on
+    `plot_annotations_3d`) split cleanly into *input* and *output*:
+
+    | Keyword                          | Role          | Units                                                                      |
+    | -------------------------------- | ------------- | -------------------------------------------------------------------------- |
+    | `syn_size` (`size`)              | input feature | whatever your feature is stored in (e.g. voxel counts, raw size values)    |
+    | `syn_size_norm` (`size_norm`)    | input clip    | same units as the feature                                                  |
+    | `syn_size_scale` (`size_scale`)  | input xform   | — (`"log"` / `"sqrt"` / `"cbrt"`)                                          |
+    | `syn_sizes` (`sizes`)            | output radius | **world units — same as your cell's vertex coordinates** (nm/µm/voxels)    |
+
+    For a cell stored in **nm**, `syn_sizes=(300, 2000)` gives spheres
+    of 0.3–2 µm radius. For a cell in **µm**, write `syn_sizes=(0.3, 2.0)`
+    for the same physical size. Pass `syn_sizes=None` (the default) and
+    ossify auto-scales from the synapse bounding box — works at any unit.
+    `syn_size_norm` is always in the input feature's units regardless of
+    what the cell coordinates are in.
 
 ### Mesh Surface — plot_mesh_3d
 
@@ -685,13 +785,22 @@ pl = plot_annotations_3d(
     cell.annotations["pre_syn"],
     color="size",
     color_scale="log",
-    color_norm=(275, 5771),    # 5th–95th percentile, original space
+    color_norm=(275, 5771),    # 5th–95th percentile, in feature units
     size="size",
     size_scale="log",
-    sizes=(50, 500),
+    sizes=(50, 500),           # output radius range in WORLD units (nm here)
 )
 pl.show()
 ```
+
+!!! note "`size` vs `sizes` units"
+
+    `size` (the input feature) lives in whatever units the feature
+    stores. `sizes` (the output radius range) lives in **world units —
+    the same units as the annotation's vertex coordinates**. See the
+    [`plot_cell_3d` section](#full-cell-plot_cell_3d) for a full table.
+    When in doubt, leave `sizes=None` and let ossify auto-scale from the
+    annotation bounding box.
 
 ### Graph Networks — plot_graph_3d
 
@@ -778,4 +887,16 @@ direction (e.g. `viewup=(0, 0, 1)` to keep Z pointing up):
 
 ```python
 orbit_3d(pl, elevation=30.0, factor=3.0, viewup=(0, 0, 1))
+```
+
+By default `orbit_3d` closes the plotter when the animation finishes, so
+the returned plotter is no longer usable. Pass `close=False` to keep it
+alive — useful when you want to add more actors after orbiting, capture
+a still screenshot, or run another orbit:
+
+```python
+pl = plot_cell_3d(cell, color="red", tube_radius=500)
+orbit_3d(pl, output="neuron.gif", n_frames=60, close=False)
+pl.screenshot("final_frame.png")              # still works
+orbit_3d(pl, output="neuron_slow.mp4", n_frames=120, framerate=30)
 ```

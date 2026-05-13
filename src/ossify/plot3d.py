@@ -7,15 +7,17 @@ import numpy as np
 from .base import Cell, GraphLayer, MeshLayer, PointCloudLayer, SkeletonLayer
 from .plot_utils import (
     _map_value_to_colors,
-    _resolve_color_parameter,
+    _resolve_color_to_array,
     _resolve_scalar_parameter,
+    _resolve_size_with_transform,
 )
 
 try:
     import pyvista as pv
 except ImportError as e:
     raise ImportError(
-        "pyvista is required for 3D plotting. Install it with: pip install ossify[viz]"
+        "ossify.plot3d requires pyvista. Install with "
+        "`pip install ossify[viz]` (or `uv add 'ossify[viz]'`)."
     ) from e
 
 import matplotlib.colors as mcolors
@@ -32,6 +34,54 @@ __all__ = [
     "add_colorbar_3d",
     "orbit_3d",
 ]
+
+
+def _make_tube(
+    poly: "pv.PolyData",
+    radius: Union[float, np.ndarray],
+    n_sides: int = 12,
+) -> "pv.PolyData":
+    """Build a tube from a polyline with scalar or per-vertex radius.
+
+    For per-vertex arrays, VTK's tube filter maps a normalized scalar range
+    ``[0, 1]`` to ``[radius, radius * radius_factor]``. We pick
+    ``radius = min(radii)`` and ``radius_factor = max/min`` so the per-vertex
+    radii are reproduced exactly.
+
+    Parameters
+    ----------
+    poly : pv.PolyData
+        Polyline geometry. Point data attached here will be propagated to
+        the tube output points by VTK.
+    radius : float or np.ndarray
+        Scalar tube radius, or per-vertex radius array of length
+        ``poly.n_points``.
+    n_sides : int, default 12
+        Number of sides on the tube cross-section.
+
+    Returns
+    -------
+    pv.PolyData
+        Triangulated tube mesh.
+    """
+    if isinstance(radius, np.ndarray):
+        radii = radius.astype(float)
+        r_min = float(np.min(radii))
+        r_max = float(np.max(radii))
+        if r_min <= 0:
+            # Avoid degenerate zero-radius tubes
+            r_min = max(r_max * 0.01, 1e-9)
+            radii = np.clip(radii, r_min, None)
+        if r_max <= r_min:
+            return poly.tube(radius=r_min, n_sides=n_sides)
+        poly.point_data["tube_radius"] = radii
+        return poly.tube(
+            radius=r_min,
+            scalars="tube_radius",
+            radius_factor=r_max / r_min,
+            n_sides=n_sides,
+        )
+    return poly.tube(radius=float(radius), n_sides=n_sides)
 
 
 def plot_skeleton_3d(
@@ -56,9 +106,9 @@ def plot_skeleton_3d(
         Per-vertex color array, shape ``(N, 3)`` or ``(N, 4)`` (RGB or RGBA
         floats in ``[0, 1]``).
     opacity : float or np.ndarray, optional
-        Overall opacity scalar, or per-vertex opacity array. Ignored when
-        ``tube_radius`` is not ``None`` and colors are RGBA (alpha is baked
-        into the color array).
+        Overall opacity scalar, or per-vertex opacity array. Per-vertex
+        arrays are interpolated by the tube filter when ``tube_radius`` is
+        also a per-vertex array.
     line_width : float, default 2.0
         Line width in pixels. Used only when ``tube_radius`` is ``None``.
     tube_radius : float or np.ndarray, optional
@@ -94,59 +144,26 @@ def plot_skeleton_3d(
     lines_array = np.array(lines_connectivity, dtype=np.intp)
     poly = pv.PolyData(points, lines=lines_array)
 
-    if colors is not None:
-        poly.point_data["colors"] = colors
-
     mesh_kwargs: dict = {}
 
-    if tube_radius is not None:
-        if isinstance(tube_radius, np.ndarray):
-            radii = tube_radius.astype(float)
-            r_min = float(np.min(radii))
-            r_max = float(np.max(radii))
-            if r_min <= 0:
-                # Avoid degenerate zero-radius tubes
-                r_min = max(r_max * 0.01, 1e-9)
-                radii = np.clip(radii, r_min, None)
-            if r_max <= r_min:
-                # All radii identical — skip scalar path
-                poly = poly.tube(radius=r_min, n_sides=12)
-            else:
-                # VTK maps scalars to [radius, radius * radius_factor], so set
-                # radius=r_min and radius_factor=r_max/r_min so that the
-                # normalized [0, 1] scalar range maps exactly to [r_min, r_max].
-                poly.point_data["tube_radius"] = radii
-                poly = poly.tube(
-                    radius=r_min,
-                    scalars="tube_radius",
-                    radius_factor=r_max / r_min,
-                    n_sides=12,
-                )
-        else:
-            poly = poly.tube(radius=float(tube_radius), n_sides=12)
-
+    # Attach per-vertex arrays BEFORE tube'ing so VTK's tube filter
+    # interpolates them to its output points. This is the only way to keep
+    # per-vertex opacity and color working under variable-radius tubes.
     if colors is not None:
-        # Re-attach colors after tube (tube interpolates point_data)
-        if "colors" not in poly.point_data:
-            # tube didn't propagate — attach by mapping original colors to
-            # interpolated points.  This is a best-effort fallback; tube
-            # rendering normally propagates point_data automatically.
-            pass
-        else:
-            mesh_kwargs["scalars"] = "colors"
-            mesh_kwargs["rgb"] = True
+        poly.point_data["colors"] = colors
+        mesh_kwargs["scalars"] = "colors"
+        mesh_kwargs["rgb"] = True
+    if isinstance(opacity, np.ndarray):
+        poly.point_data["opacity"] = opacity.astype(float)
+        mesh_kwargs["opacity"] = "opacity"
+    elif opacity is not None:
+        mesh_kwargs["opacity"] = float(opacity)
 
-    if opacity is not None:
-        if isinstance(opacity, np.ndarray):
-            poly.point_data["opacity"] = opacity.astype(float)
-            mesh_kwargs["opacity"] = "opacity"
-        else:
-            mesh_kwargs["opacity"] = float(opacity)
-
-    if tube_radius is None:
-        plotter.add_mesh(poly, line_width=line_width, **mesh_kwargs)
-    else:
+    if tube_radius is not None:
+        poly = _make_tube(poly, tube_radius)
         plotter.add_mesh(poly, **mesh_kwargs)
+    else:
+        plotter.add_mesh(poly, line_width=line_width, **mesh_kwargs)
 
     return plotter
 
@@ -243,27 +260,22 @@ def plot_morphology_3d(
         skel = cell
 
     # --- Resolve colors ---
-    resolved_color = _resolve_color_parameter(color, skel)
-    effective_color_norm = color_norm
-    if (
-        color_scale == "log"
-        and isinstance(resolved_color, np.ndarray)
-        and resolved_color.ndim == 1
-    ):
-        resolved_color = np.log(np.asarray(resolved_color, dtype=float))
-        if color_norm is not None:
-            effective_color_norm = (np.log(color_norm[0]), np.log(color_norm[1]))
-    colors_array = None
-    if resolved_color is not None:
-        if isinstance(resolved_color, np.ndarray) and resolved_color.ndim == 1:
-            colors_array = _map_value_to_colors(
-                resolved_color, colormap=palette, color_norm=effective_color_norm
-            )
-        elif isinstance(resolved_color, np.ndarray) and resolved_color.ndim == 2:
-            colors_array = resolved_color
-        else:
-            single_color = mcolors.to_rgb(resolved_color)
-            colors_array = np.tile(single_color, (skel.n_vertices, 1))
+    resolved = _resolve_color_to_array(
+        color,
+        skel,
+        palette=palette,
+        color_norm=color_norm,
+        color_scale=color_scale,
+    )
+    if resolved is None:
+        colors_array = None
+    elif isinstance(resolved, np.ndarray):
+        colors_array = resolved
+    else:
+        # Single matplotlib color — tile across vertices so downstream
+        # per-vertex consumers (root marker lookup, tube colors) work.
+        single_color = mcolors.to_rgb(resolved)
+        colors_array = np.tile(single_color, (skel.n_vertices, 1))
 
     # --- Resolve tube_radius ---
     # Three-step pipeline: (1) feature/array lookup, (2) unit scale, (3) norm+remap
@@ -307,24 +319,13 @@ def plot_morphology_3d(
                 resolved_tube_radius = raw
 
     # --- Resolve opacity ---
+    # Numeric scalars stay scalar; feature names and array-likes resolve to a
+    # per-vertex array that the tube filter will interpolate.
     opacity_out: Optional[Union[float, np.ndarray]] = None
-    if opacity is not None:
-        resolved_opacity = _resolve_scalar_parameter(
-            opacity, skel.n_vertices, layer=skel
-        )
-        if resolved_opacity is not None:
-            if np.ndim(resolved_opacity) == 0 or (
-                isinstance(resolved_opacity, np.ndarray) and resolved_opacity.ndim == 0
-            ):
-                opacity_out = float(resolved_opacity)
-            elif (
-                isinstance(resolved_opacity, np.ndarray)
-                and resolved_opacity.shape == (skel.n_vertices,)
-                and np.allclose(resolved_opacity, resolved_opacity[0])
-            ):
-                opacity_out = float(resolved_opacity[0])
-            else:
-                opacity_out = resolved_opacity
+    if isinstance(opacity, (int, float)) and not isinstance(opacity, bool):
+        opacity_out = float(opacity)
+    elif opacity is not None:
+        opacity_out = _resolve_scalar_parameter(opacity, skel.n_vertices, layer=skel)
 
     # When root_marker is shown, replace the root vertex's tube radius with
     # the average of its immediate children so the tube doesn't bulge at the
@@ -380,7 +381,7 @@ def plot_morphology_3d(
 def plot_points_3d(
     points: np.ndarray,
     sizes: Optional[Union[float, np.ndarray]] = None,
-    colors: Optional[Union[str, np.ndarray, dict]] = None,
+    colors: Optional[Union[str, np.ndarray, tuple]] = None,
     palette: Union[str, dict] = "coolwarm",
     color_norm: Optional[Tuple[float, float]] = None,
     opacity: float = 1.0,
@@ -389,26 +390,37 @@ def plot_points_3d(
 ) -> "pv.Plotter":
     """Render a point cloud as spheres in 3D.
 
+    Per-point colors are pre-mapped to RGB before glyphing and attached
+    to the source cloud's ``point_data``. The glyph filter propagates the
+    array to every generated vertex, and ``add_mesh`` reads it by name.
+    Avoids PyVista's ``cmap``/``clim`` forwarding, which can pick the
+    wrong colormap when the glyph filter rebuilds active scalars.
+
     Parameters
     ----------
     points : np.ndarray
         Point coordinates, shape ``(N, 3)``.
     sizes : float or np.ndarray, optional
         Sphere radius. A scalar gives uniform radius; an array of shape
-        ``(N,)`` gives per-point radius. Defaults to a small fixed radius
-        when ``None``.
-    colors : str, np.ndarray, or dict, optional
-        Color specification. A string is treated as a single matplotlib color.
-        A 1D array of shape ``(N,)`` is mapped through *palette*. An
-        ``(N, 3)`` array is used directly as RGB.  A dict maps discrete
-        values to colors.
+        ``(N,)`` gives per-point radius. Defaults to a bounding-box-relative
+        radius when ``None`` (visible at any coordinate scale).
+    colors : str, np.ndarray, or tuple, optional
+        Color specification. May be:
+
+        - A matplotlib color string or ``(r, g, b)`` tuple — uniform color
+          for all points.
+        - A 1-D array of shape ``(N,)`` — mapped through *palette*.
+        - An ``(N, 3)`` or ``(N, 4)`` array — used directly as RGB(A).
+
+        Discrete-label coloring is supported by passing the labels as a 1-D
+        array and a dict *palette* mapping labels to colors.
     palette : str or dict, default "coolwarm"
-        Colormap for mapping scalar color values. Any name from the
+        Colormap for scalar color mapping. Any name from the
         `matplotlib colormap registry
         <https://matplotlib.org/stable/gallery/color/colormap_reference.html>`_
-        is accepted, including colormaps registered by third-party packages
-        (e.g. cmocean, colorcet, cmcrameri) if they are installed. A dict
-        maps discrete values to colors.
+        is accepted, including colormaps from third-party packages
+        (e.g. cmocean, colorcet, cmcrameri). A dict maps discrete values to
+        colors.
     color_norm : tuple of float, optional
         ``(min, max)`` normalization range for continuous color mapping.
     opacity : float, default 1.0
@@ -429,113 +441,65 @@ def plot_points_3d(
     pts = np.asarray(points, dtype=float)
     cloud = pv.PolyData(pts)
 
-    # Normalize array-like inputs to ndarray so pandas Series, lists, etc.
-    # pass all isinstance(…, np.ndarray) checks below.
+    # Normalize array-like inputs to ndarray (pandas Series, lists, etc.).
     if sizes is not None and not isinstance(sizes, (int, float, np.ndarray)):
         sizes = np.asarray(sizes, dtype=float)
-    if colors is not None and not isinstance(colors, (str, dict, np.ndarray)):
+    if colors is not None and not isinstance(colors, (str, tuple, np.ndarray)):
         colors = np.asarray(colors)
 
-    # --- Resolve colors ---
-    mesh_kwargs: dict = {"opacity": opacity, **kwargs}
-    if colors is not None:
-        if isinstance(colors, str):
-            mesh_kwargs["color"] = colors
-        elif isinstance(colors, np.ndarray):
-            if colors.ndim == 1:
-                # Raw scalar values: store on the cloud so the glyph path can
-                # retrieve them for pre-mapping to RGB.
-                if isinstance(palette, dict):
-                    # Dict palette: pre-map to RGB since PyVista has no native
-                    # support for arbitrary label→color mappings.
-                    mapped = _map_value_to_colors(
-                        colors, colormap=palette, color_norm=color_norm
-                    )
-                    cloud.point_data["colors"] = mapped
-                    mesh_kwargs["scalars"] = "colors"
-                    mesh_kwargs["rgb"] = True
-                else:
-                    # Use "pt_values" to avoid collision with VTK's internal
-                    # "scalars" slot, which the glyph filter can overwrite.
-                    cloud.point_data["pt_values"] = colors
-                    mesh_kwargs["scalars"] = "pt_values"
-                    if palette is not None:
-                        mesh_kwargs["cmap"] = palette
-                    if color_norm is not None:
-                        mesh_kwargs["clim"] = list(color_norm)
-            else:
-                # Already (N, 3) or (N, 4) — use as pre-mapped RGB.
-                cloud.point_data["colors"] = colors
-                mesh_kwargs["scalars"] = "colors"
-                mesh_kwargs["rgb"] = True
-        elif isinstance(colors, dict):
-            mesh_kwargs["scalars"] = "colors"
-            mesh_kwargs["rgb"] = True
+    # Resolve colors to either a scalar matplotlib color or a pre-mapped
+    # RGB(A) array. Scalar arrays go through the palette here so the glyph
+    # filter sees per-point RGB and we never rely on cmap/clim forwarding.
+    rgb_array: Optional[np.ndarray] = None
+    scalar_color: Optional[Union[str, tuple]] = None
+    if isinstance(colors, np.ndarray):
+        if colors.ndim == 1:
+            rgb_array = _map_value_to_colors(
+                colors, colormap=palette, color_norm=color_norm
+            )
+        else:
+            rgb_array = colors
+    elif isinstance(colors, (str, tuple)):
+        scalar_color = colors
 
-    # --- Normalize sizes to an array ---
-    # Ensure we always have a per-point radius array so there is a single
-    # glyph rendering path.  When no size is provided, derive a sensible
-    # default from the bounding box so spheres are visible regardless of
-    # coordinate scale (nm, µm, voxels, etc.).
+    # Default sphere radius: ~0.2% of the smallest positive bounding-box
+    # extent, so spheres are visible at any coordinate scale (nm/µm/vx).
+    # Conservative on purpose — annotation clouds often have hundreds to
+    # thousands of points, and a larger default crowds the rendering.
+    # Callers can scale up via the ``sizes`` argument when warranted.
     if sizes is None:
         bbox = pts.max(0) - pts.min(0)
         positive_dims = bbox[bbox > 0]
         ref = float(positive_dims.min()) if len(positive_dims) > 0 else 1.0
-        sizes = np.full(len(pts), ref * 0.01)
+        sizes = np.full(len(pts), ref * 0.002)
     elif not isinstance(sizes, np.ndarray):
         sizes = np.full(len(pts), float(sizes))
 
-    # --- Render ---
-    if colors is not None and isinstance(colors, np.ndarray):
-        # Per-point radius via glyph
-        cloud.point_data["radius"] = sizes.astype(float)
-        # radius=1.0 ensures the glyph scale factor equals the output sphere
-        # radius directly; the default radius=0.5 would halve all sizes.
-        geom = pv.Sphere(radius=1.0, theta_resolution=12, phi_resolution=12)
-        glyphs = cloud.glyph(geom=geom, scale="radius", orient=False)
-        # VTK's vtkGlyph3D does not reliably propagate custom point_data arrays
-        # (PassPointData=Off by default), so the named scalar key in mesh_kwargs
-        # may not exist on the glyph output.  Pass the color data as an explicit
-        # numpy array instead — PyVista's add_mesh accepts scalars=<array> and
-        # uses it directly without needing the array to live in the mesh.
-        glyph_kwargs: dict = {
-            k: v
-            for k, v in mesh_kwargs.items()
-            if k not in ("scalars", "rgb", "cmap", "clim")
-        }
-        if "scalars" in mesh_kwargs:
-            arr_name = mesh_kwargs["scalars"]
-            src = cloud.point_data.get(arr_name)
-            if src is not None and glyphs.n_points % cloud.n_points == 0:
-                n_per = glyphs.n_points // cloud.n_points
-                if src.ndim == 1 and not mesh_kwargs.get("rgb", False):
-                    # Pre-map scalars → RGB so the correct palette is applied.
-                    # Passing raw scalars + cmap= to add_mesh is unreliable
-                    # across PyVista/VTK versions (often defaults to viridis).
-                    _cmap = mesh_kwargs.get("cmap", "coolwarm")
-                    _clim = mesh_kwargs.get("clim")
-                    src = _map_value_to_colors(
-                        src,
-                        colormap=_cmap,
-                        color_norm=tuple(_clim) if _clim is not None else None,
-                    )
-                    glyph_kwargs["rgb"] = True
-                else:
-                    for key in ("cmap", "clim", "rgb"):
-                        if key in mesh_kwargs:
-                            glyph_kwargs[key] = mesh_kwargs[key]
-                glyph_kwargs["scalars"] = np.repeat(src, n_per, axis=0)
-        plotter.add_mesh(glyphs, **glyph_kwargs)
-    else:
-        # No per-point colors — use the lightweight render_points_as_spheres path.
-        for key in ("scalars", "rgb", "cmap", "clim"):
-            mesh_kwargs.pop(key, None)
-        mesh_kwargs["point_size"] = float(sizes.mean())
-        mesh_kwargs["render_points_as_spheres"] = True
-        if isinstance(colors, str):
-            mesh_kwargs["color"] = colors
-        plotter.add_mesh(cloud, **mesh_kwargs)
+    mesh_kwargs: dict = {"opacity": opacity, **kwargs}
 
+    # Build sphere glyphs in world units. We deliberately avoid PyVista's
+    # render_points_as_spheres path: it takes pixel-unit `point_size`,
+    # which would force every caller to know whether their data is nm or
+    # µm. Glyphs interpret `sizes` as world-unit radii directly.
+    cloud.point_data["radius"] = sizes.astype(float)
+    if rgb_array is not None:
+        # Attach colors before glyphing — VTK propagates point_data from
+        # the source cloud to each generated glyph vertex (this is the
+        # default behavior since vtkGlyph3D's PassPointData was made
+        # on-by-default; we pin pyvista>=0.46 / VTK>=9.5 to guarantee it).
+        cloud.point_data["colors"] = rgb_array
+    # radius=1.0 makes the glyph scale factor equal the output radius
+    # directly (default radius=0.5 would halve every size).
+    geom = pv.Sphere(radius=1.0, theta_resolution=12, phi_resolution=12)
+    glyphs = cloud.glyph(geom=geom, scale="radius", orient=False)
+
+    if rgb_array is not None:
+        mesh_kwargs["scalars"] = "colors"
+        mesh_kwargs["rgb"] = True
+    elif scalar_color is not None:
+        mesh_kwargs["color"] = scalar_color
+
+    plotter.add_mesh(glyphs, **mesh_kwargs)
     return plotter
 
 
@@ -549,7 +513,7 @@ def plot_annotations_3d(
     size: Optional[Union[str, np.ndarray, float]] = None,
     size_norm: Optional[Tuple[float, float]] = None,
     size_scale: Optional[Literal["log", "sqrt", "cbrt"]] = None,
-    sizes: Optional[Tuple[float, float]] = (1, 30),
+    sizes: Optional[Tuple[float, float]] = None,
     plotter: Optional["pv.Plotter"] = None,
 ) -> "pv.Plotter":
     """Render a :class:`PointCloudLayer` annotation as 3D spheres.
@@ -593,8 +557,12 @@ def plot_annotations_3d(
         when the feature is a volume and radius ∝ ∛volume). *size_norm*
         bounds are always specified in the original value space.
     sizes : tuple of float, optional
-        ``(min_radius, max_radius)`` output range for size rescaling. Default
-        ``(1, 30)``.
+        ``(min_radius, max_radius)`` output range for size rescaling, in
+        the same world units as the annotation vertices.  When ``None``
+        (default), estimated from the annotation's bounding box
+        (approximately 0.1 %–0.8 % of the smallest spatial extent) so
+        spheres are visible regardless of coordinate scale (nm/µm/voxels).
+        Pass an explicit tuple to make markers bolder.
     plotter : pv.Plotter, optional
         Existing plotter to add actors to.
 
@@ -608,53 +576,42 @@ def plot_annotations_3d(
 
     vertices = annotation.vertices
 
-    # --- Resolve color ---
-    resolved_color = _resolve_color_parameter(color, annotation)
-    effective_color_norm = color_norm
-    if (
-        color_scale == "log"
-        and isinstance(resolved_color, np.ndarray)
-        and resolved_color.ndim == 1
-    ):
-        resolved_color = np.log(np.asarray(resolved_color, dtype=float))
-        if color_norm is not None:
-            effective_color_norm = (np.log(color_norm[0]), np.log(color_norm[1]))
+    # Auto-compute the output radius range from the annotation bounding
+    # box when not provided. Conservative on purpose: synapse clouds are
+    # often dense (hundreds to thousands of points), and larger defaults
+    # crowd the rendering. Pass ``sizes`` explicitly when you want bolder
+    # markers.
+    if sizes is None:
+        bbox = vertices.max(0) - vertices.min(0)
+        positive_dims = bbox[bbox > 0]
+        ref = float(positive_dims.min()) if len(positive_dims) > 0 else 1.0
+        sizes = (ref * 0.001, ref * 0.008)
 
-    # --- Resolve size ---
-    if (
-        size_scale is not None
-        and size is not None
-        and not isinstance(size, (int, float, bool))
-    ):
-        # Fetch raw values, apply transform, convert norm bounds to match.
-        if isinstance(size, str):
-            raw_size = np.asarray(annotation.get_feature(size), dtype=float)
-        else:
-            raw_size = np.asarray(size, dtype=float)
-        if size_scale == "log":
-            fn = np.log
-        elif size_scale == "sqrt":
-            fn = np.sqrt
-        elif size_scale == "cbrt":
-            fn = np.cbrt
-        transformed = fn(raw_size)
-        transformed_norm = (
-            (fn(size_norm[0]), fn(size_norm[1])) if size_norm is not None else None
-        )
-        resolved_size = _resolve_scalar_parameter(
-            transformed, len(vertices), norm=transformed_norm, out_range=sizes
-        )
-    else:
-        resolved_size = _resolve_scalar_parameter(
-            size, len(vertices), norm=size_norm, out_range=sizes, layer=annotation
-        )
+    # Resolve color through the shared pipeline. The result is either a
+    # pre-mapped (N, 3/4) RGB(A) array, a scalar matplotlib color, or None;
+    # plot_points_3d handles all three directly without needing palette
+    # info, so we no longer forward palette/color_norm downstream.
+    resolved_color = _resolve_color_to_array(
+        color,
+        annotation,
+        palette=palette,
+        color_norm=color_norm,
+        color_scale=color_scale,
+    )
+
+    resolved_size = _resolve_size_with_transform(
+        size,
+        len(vertices),
+        scale=size_scale,
+        norm=size_norm,
+        out_range=sizes,
+        layer=annotation,
+    )
 
     return plot_points_3d(
         points=vertices,
         sizes=resolved_size,
         colors=resolved_color,
-        palette=palette,
-        color_norm=effective_color_norm,
         opacity=opacity,
         plotter=plotter,
     )
@@ -731,27 +688,17 @@ def plot_mesh_3d(
     poly = pv.PolyData(vertices, faces=vtk_faces)
 
     # --- Resolve colors ---
-    resolved_color = _resolve_color_parameter(color, mesh)
-    effective_color_norm = color_norm
-    if (
-        color_scale == "log"
-        and isinstance(resolved_color, np.ndarray)
-        and resolved_color.ndim == 1
-    ):
-        resolved_color = np.log(np.asarray(resolved_color, dtype=float))
-        if color_norm is not None:
-            effective_color_norm = (np.log(color_norm[0]), np.log(color_norm[1]))
+    resolved_color = _resolve_color_to_array(
+        color,
+        mesh,
+        palette=palette,
+        color_norm=color_norm,
+        color_scale=color_scale,
+    )
 
     mesh_kwargs: dict = {"opacity": opacity, "show_edges": show_edges}
 
-    if isinstance(resolved_color, np.ndarray) and resolved_color.ndim == 1:
-        rgb = _map_value_to_colors(
-            resolved_color, colormap=palette, color_norm=effective_color_norm
-        )
-        poly.point_data["colors"] = rgb
-        mesh_kwargs["scalars"] = "colors"
-        mesh_kwargs["rgb"] = True
-    elif isinstance(resolved_color, np.ndarray) and resolved_color.ndim == 2:
+    if isinstance(resolved_color, np.ndarray):
         poly.point_data["colors"] = resolved_color
         mesh_kwargs["scalars"] = "colors"
         mesh_kwargs["rgb"] = True
@@ -893,55 +840,26 @@ def plot_graph_3d(
 
     # ------------------------------------------------------------------ nodes
     if show_nodes:
-        resolved_node_color = _resolve_color_parameter(node_color, graph)
-        effective_node_color_norm = node_color_norm
-        if (
-            node_color_scale == "log"
-            and isinstance(resolved_node_color, np.ndarray)
-            and resolved_node_color.ndim == 1
-        ):
-            resolved_node_color = np.log(np.asarray(resolved_node_color, dtype=float))
-            if node_color_norm is not None:
-                effective_node_color_norm = (
-                    np.log(node_color_norm[0]),
-                    np.log(node_color_norm[1]),
-                )
-
-        if (
-            node_size_scale is not None
-            and node_size is not None
-            and not isinstance(node_size, (int, float, bool))
-        ):
-            if isinstance(node_size, str):
-                raw_ns = np.asarray(graph.get_feature(node_size), dtype=float)
-            else:
-                raw_ns = np.asarray(node_size, dtype=float)
-            if node_size_scale == "log":
-                fn_ns = np.log
-            elif node_size_scale == "sqrt":
-                fn_ns = np.sqrt
-            else:
-                fn_ns = np.cbrt
-            transformed_ns = fn_ns(raw_ns)
-            ns_norm = (
-                (fn_ns(node_size_norm[0]), fn_ns(node_size_norm[1]))
-                if node_size_norm is not None
-                else None
-            )
-            resolved_node_size = _resolve_scalar_parameter(
-                transformed_ns, N, norm=ns_norm, out_range=node_sizes
-            )
-        else:
-            resolved_node_size = _resolve_scalar_parameter(
-                node_size, N, norm=node_size_norm, out_range=node_sizes, layer=graph
-            )
+        resolved_node_color = _resolve_color_to_array(
+            node_color,
+            graph,
+            palette=node_palette,
+            color_norm=node_color_norm,
+            color_scale=node_color_scale,
+        )
+        resolved_node_size = _resolve_size_with_transform(
+            node_size,
+            N,
+            scale=node_size_scale,
+            norm=node_size_norm,
+            out_range=node_sizes,
+            layer=graph,
+        )
 
         plotter = plot_points_3d(
             points=vertices,
             sizes=resolved_node_size,
             colors=resolved_node_color,
-            palette=node_palette,
-            color_norm=effective_node_color_norm,
             opacity=node_opacity,
             plotter=plotter,
         )
@@ -963,88 +881,44 @@ def plot_graph_3d(
         # Resolve edge color — per-vertex values get pre-mapped to RGB so the
         # tube filter can interpolate them naturally between endpoints.
         edge_mesh_kwargs: dict = {"opacity": edge_opacity}
-        resolved_edge_color = _resolve_color_parameter(edge_color, graph)
-        effective_edge_color_norm = edge_color_norm
-        if (
-            isinstance(resolved_edge_color, np.ndarray)
-            and resolved_edge_color.ndim == 1
-        ):
-            if edge_color_scale == "log":
-                resolved_edge_color = np.log(
-                    np.asarray(resolved_edge_color, dtype=float)
-                )
-                if edge_color_norm is not None:
-                    effective_edge_color_norm = (
-                        np.log(edge_color_norm[0]),
-                        np.log(edge_color_norm[1]),
-                    )
-            edge_colors_rgb = _map_value_to_colors(
-                resolved_edge_color,
-                colormap=edge_palette,
-                color_norm=effective_edge_color_norm,
-            )
-            poly.point_data["colors"] = edge_colors_rgb
-        elif isinstance(resolved_edge_color, str):
+        resolved_edge_color = _resolve_color_to_array(
+            edge_color,
+            graph,
+            palette=edge_palette,
+            color_norm=edge_color_norm,
+            color_scale=edge_color_scale,
+        )
+        if isinstance(resolved_edge_color, np.ndarray):
+            poly.point_data["colors"] = resolved_edge_color
+        elif isinstance(resolved_edge_color, (str, tuple)):
             edge_mesh_kwargs["color"] = resolved_edge_color
 
-        # Resolve edge radius
-        resolved_edge_radius: Optional[Union[float, np.ndarray]] = None
-        if edge_radius is not None:
-            if isinstance(edge_radius, (int, float)):
-                resolved_edge_radius = float(edge_radius)
-            else:
-                if isinstance(edge_radius, str):
-                    raw_er = np.asarray(graph.get_feature(edge_radius), dtype=float)
-                else:
-                    raw_er = np.asarray(edge_radius, dtype=float)
-                if edge_radius_scale is not None:
-                    if edge_radius_scale == "log":
-                        fn_er = np.log
-                    elif edge_radius_scale == "sqrt":
-                        fn_er = np.sqrt
-                    else:
-                        fn_er = np.cbrt
-                    raw_er = fn_er(raw_er)
-                    er_norm = (
-                        (fn_er(edge_radius_norm[0]), fn_er(edge_radius_norm[1]))
-                        if edge_radius_norm is not None
-                        else None
-                    )
-                else:
-                    er_norm = edge_radius_norm
-                resolved_edge_radius = _resolve_scalar_parameter(
-                    raw_er, N, norm=er_norm, out_range=edge_radii
-                )
+        # Resolve edge radius — scalar floats pass straight through; feature
+        # names and arrays go through the transform pipeline.
+        if isinstance(edge_radius, (int, float)) and not isinstance(edge_radius, bool):
+            resolved_edge_radius: Optional[Union[float, np.ndarray]] = float(
+                edge_radius
+            )
+        else:
+            resolved_edge_radius = _resolve_size_with_transform(
+                edge_radius,
+                N,
+                scale=edge_radius_scale,
+                norm=edge_radius_norm,
+                out_range=edge_radii,
+                layer=graph,
+            )
 
         # Render
-        if resolved_edge_radius is not None:
-            if isinstance(resolved_edge_radius, np.ndarray):
-                r_min = float(np.min(resolved_edge_radius))
-                r_max = float(np.max(resolved_edge_radius))
-                if r_min <= 0:
-                    r_min = max(r_max * 0.01, 1e-9)
-                    resolved_edge_radius = np.clip(resolved_edge_radius, r_min, None)
-                if r_max <= r_min:
-                    poly = poly.tube(radius=r_min, n_sides=12)
-                else:
-                    poly.point_data["tube_radius"] = resolved_edge_radius
-                    poly = poly.tube(
-                        radius=r_min,
-                        scalars="tube_radius",
-                        radius_factor=r_max / r_min,
-                        n_sides=12,
-                    )
-            else:
-                poly = poly.tube(radius=resolved_edge_radius, n_sides=12)
+        # Colors were attached to poly.point_data above; tube propagates them.
+        if "colors" in poly.point_data:
+            edge_mesh_kwargs["scalars"] = "colors"
+            edge_mesh_kwargs["rgb"] = True
 
-            if "colors" in poly.point_data:
-                edge_mesh_kwargs["scalars"] = "colors"
-                edge_mesh_kwargs["rgb"] = True
+        if resolved_edge_radius is not None:
+            poly = _make_tube(poly, resolved_edge_radius)
             plotter.add_mesh(poly, **edge_mesh_kwargs)
         else:
-            if "colors" in poly.point_data:
-                edge_mesh_kwargs["scalars"] = "colors"
-                edge_mesh_kwargs["rgb"] = True
             plotter.add_mesh(poly, line_width=line_width, **edge_mesh_kwargs)
 
     return plotter
@@ -1090,7 +964,7 @@ def plot_cell_3d(
     syn_size: Optional[Union[str, np.ndarray, float]] = None,
     syn_size_norm: Optional[Tuple[float, float]] = None,
     syn_size_scale: Optional[Literal["log", "sqrt", "cbrt"]] = None,
-    syn_sizes: Optional[Tuple[float, float]] = (1, 30),
+    syn_sizes: Optional[Tuple[float, float]] = None,
     plotter: Optional["pv.Plotter"] = None,
 ) -> "pv.Plotter":
     """Render a :class:`Cell` — skeleton and optional annotations — in 3D.
@@ -1174,8 +1048,11 @@ def plot_cell_3d(
     syn_size_scale : {"log", "sqrt", "cbrt"} or None, optional
         Value transform for synapse size mapping (see
         :func:`plot_annotations_3d`).
-    syn_sizes : tuple of float, default (1, 30)
-        ``(min_radius, max_radius)`` output range for synapse sizes.
+    syn_sizes : tuple of float, optional
+        ``(min_radius, max_radius)`` output range for synapse sphere radii,
+        in the same world units as the cell vertices. When ``None``
+        (default), estimated from the synapse bounding box so spheres are
+        visible regardless of coordinate scale (nm/µm/voxels).
     plotter : pv.Plotter, optional
         Existing plotter to add actors to.
 
@@ -1259,14 +1136,20 @@ def add_colorbar_3d(
     position_y: float = 0.05,
     width: float = 0.1,
     height: float = 0.9,
+    n_labels: int = 5,
+    fmt: str = "%.3g",
+    orientation: Literal["vertical", "horizontal"] = "vertical",
+    n_colors: int = 256,
     **scalar_bar_kwargs,
 ) -> "pv.Plotter":
     """Add a colorbar to a 3D plotter.
 
-    Because ossify's plot functions pre-map scalars to RGB, PyVista has no
-    colormap information to build a scalar bar from.  This function injects a
-    tiny invisible helper mesh that carries the desired colormap and range,
-    which triggers PyVista's native scalar bar rendering.
+    Because ossify's plot functions pre-map scalars to RGB before they
+    reach VTK, PyVista has no mapper to build a scalar bar from. This
+    helper creates a :class:`vtkScalarBarActor` directly from a
+    :class:`vtkLookupTable` populated by the matplotlib colormap, then
+    attaches it as a 2D viewport overlay. The actor has no spatial
+    bounds, so the scene camera is unaffected.
 
     Parameters
     ----------
@@ -1287,9 +1170,18 @@ def add_colorbar_3d(
         Width of the colorbar as a fraction of the window.
     height : float, default 0.9
         Height of the colorbar as a fraction of the window.
+    n_labels : int, default 5
+        Number of tick labels along the bar.
+    fmt : str, default "%.3g"
+        ``printf``-style format string for tick labels.
+    orientation : {"vertical", "horizontal"}, default "vertical"
+        Bar orientation.
+    n_colors : int, default 256
+        Number of colors sampled from *palette* into the lookup table.
     **scalar_bar_kwargs
-        Additional keyword arguments forwarded to PyVista's
-        ``scalar_bar_args`` dict (e.g. ``n_labels``, ``fmt``).
+        Extra keyword arguments passed to :class:`vtkScalarBarActor`. Keys
+        are converted from ``snake_case`` to ``SetPascalCase``; unknown
+        keys are silently ignored.
 
     Returns
     -------
@@ -1301,32 +1193,44 @@ def add_colorbar_3d(
     >>> pl = plot_morphology_3d(cell, color="strahler_order", palette="viridis")
     >>> add_colorbar_3d(pl, palette="viridis", color_norm=(1, 7), label="Strahler order")
     """
+    import matplotlib.pyplot as plt
+    import vtk
+
     vmin, vmax = color_norm if color_norm is not None else (0.0, 1.0)
+    cmap = plt.get_cmap(palette) if isinstance(palette, str) else palette
 
-    # Place the dummy geometry far from any realistic data so it never
-    # appears visually — even if point_size=0 is ignored on some backends.
-    far = 1e12
-    dummy = pv.PolyData(np.array([[far, far, far], [far, far, far + 1.0]]))
-    dummy.point_data["_cbar"] = np.array([vmin, vmax])
+    lut = vtk.vtkLookupTable()
+    lut.SetNumberOfTableValues(n_colors)
+    lut.SetRange(vmin, vmax)
+    denom = max(n_colors - 1, 1)
+    for i in range(n_colors):
+        r, g, b, a = cmap(i / denom)
+        lut.SetTableValue(i, r, g, b, a)
+    lut.Build()
 
-    sbar_args = {
-        "title": label or "",
-        "position_x": position_x,
-        "position_y": position_y,
-        "width": width,
-        "height": height,
-    }
-    sbar_args.update(scalar_bar_kwargs)
+    sbar = vtk.vtkScalarBarActor()
+    sbar.SetLookupTable(lut)
+    sbar.SetTitle(label or "")
+    sbar.SetNumberOfLabels(n_labels)
+    sbar.SetLabelFormat(fmt)
+    if orientation == "horizontal":
+        sbar.SetOrientationToHorizontal()
+    else:
+        sbar.SetOrientationToVertical()
 
-    plotter.add_mesh(
-        dummy,
-        scalars="_cbar",
-        cmap=palette,
-        clim=[vmin, vmax],
-        point_size=0,
-        show_scalar_bar=True,
-        scalar_bar_args=sbar_args,
-    )
+    sbar.GetPositionCoordinate().SetCoordinateSystemToNormalizedViewport()
+    sbar.GetPositionCoordinate().SetValue(position_x, position_y)
+    sbar.SetWidth(width)
+    sbar.SetHeight(height)
+
+    # Best-effort forwarding for any extra VTK setters the caller wants.
+    for key, val in scalar_bar_kwargs.items():
+        setter_name = "Set" + "".join(part.capitalize() for part in key.split("_"))
+        setter = getattr(sbar, setter_name, None)
+        if setter is not None:
+            setter(val)
+
+    plotter.add_actor(sbar, reset_camera=False)
     return plotter
 
 
@@ -1338,6 +1242,7 @@ def orbit_3d(
     factor: float = 2.0,
     framerate: int = 24,
     viewup: Optional[Tuple[float, float, float]] = None,
+    close: bool = True,
 ) -> "pv.Plotter":
     """Orbit the camera around the scene, optionally saving to a file.
 
@@ -1365,11 +1270,17 @@ def orbit_3d(
     viewup : tuple of float, optional
         Camera "up" direction as ``(x, y, z)``.  When ``None``, PyVista's
         default is used.
+    close : bool, default True
+        If ``True``, close the plotter after the orbit completes (default
+        for one-shot animation rendering). Pass ``close=False`` to keep the
+        plotter alive — e.g. to add more actors and orbit again, or to
+        capture screenshots after the orbit.
 
     Returns
     -------
     pv.Plotter
-        The same plotter after the orbit completes.
+        The plotter passed in. By default the plotter is closed and not
+        reusable; pass ``close=False`` to keep it alive.
 
     Examples
     --------
@@ -1401,10 +1312,11 @@ def orbit_3d(
         else:
             plotter.open_movie(output, framerate=framerate)
         plotter.orbit_on_path(path, write_frames=True)
-        plotter.close()
     else:
         plotter.show(auto_close=False)
         plotter.orbit_on_path(path, write_frames=False)
+
+    if close:
         plotter.close()
 
     return plotter
