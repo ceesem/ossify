@@ -1242,12 +1242,14 @@ def orbit_3d(
     factor: float = 2.0,
     framerate: int = 24,
     viewup: Optional[Tuple[float, float, float]] = None,
+    window_size: Optional[Tuple[int, int]] = None,
     close: bool = True,
 ) -> "pv.Plotter":
     """Orbit the camera around the scene, optionally saving to a file.
 
-    Generates a circular orbital path and either plays the orbit
-    interactively or writes frames to a GIF / MP4 file.
+    Generates a circular 360° orbital path around the *viewup* axis and
+    either plays the orbit interactively or writes frames to a GIF / MP4
+    file.
 
     Parameters
     ----------
@@ -1255,26 +1257,45 @@ def orbit_3d(
         Plotter with actors already added.
     output : str, optional
         Path to write the animation to (``.gif`` or ``.mp4``).  Requires
-        ``imageio`` to be installed.  When ``None``, the orbit is displayed
-        interactively (or runs off-screen silently).
+        ``imageio`` (already bundled with the ``[viz]`` extra).  When
+        ``None``, the orbit is displayed interactively (or runs off-screen
+        silently in headless contexts).
     n_frames : int, default 60
-        Number of frames in the full orbit.
+        Number of frames in the full 360° orbit. Higher values give a
+        smoother animation; lower values give a smaller file. 60 frames @
+        24 fps is a 2.5-second loop.
     elevation : float, default 0.0
-        Camera elevation angle in degrees above the XY plane.
+        Camera elevation angle in degrees above the orbital plane,
+        applied once before path generation. Positive values tilt the
+        camera up; negative values tilt it down.
     factor : float, default 2.0
         Orbit radius factor relative to the scene bounding box.  Larger
-        values move the camera further from the scene center.
+        values move the camera further from the scene center. Note that
+        PyVista's :meth:`Plotter.generate_orbital_path` computes the
+        radius from the scene's x and y extents only (ignoring z), so
+        very-tall-in-z scenes may need a larger *factor* to avoid the
+        camera path passing through the data.
     framerate : int, default 24
         Frames per second for file output.  Ignored when *output* is
         ``None``.
     viewup : tuple of float, optional
-        Camera "up" direction as ``(x, y, z)``.  When ``None``, PyVista's
-        default is used.
+        The axis around which the camera orbits and the camera's "up"
+        direction during the orbit. ``[0, 0, 1]`` (z-up, PyVista's
+        default) orbits in the xy plane around the z axis. ``[0, 1, 0]``
+        or ``[0, -1, 0]`` orbits around the y axis (common for cells
+        where y is the depth/anatomical axis). When ``None``, the
+        plotter's current camera up vector is used.
+    window_size : tuple of int, optional
+        ``(width, height)`` in pixels for rendered output frames. Larger
+        sizes produce higher-resolution GIFs/MP4s at the cost of file
+        size. When ``None``, uses the plotter's existing window size
+        (typically 1024 × 768 for newly-constructed plotters). For
+        publication-quality output, try ``(1920, 1440)`` or larger.
     close : bool, default True
         If ``True``, close the plotter after the orbit completes (default
-        for one-shot animation rendering). Pass ``close=False`` to keep the
-        plotter alive — e.g. to add more actors and orbit again, or to
-        capture screenshots after the orbit.
+        for one-shot animation rendering). Pass ``close=False`` to keep
+        the plotter alive — e.g. to add more actors and orbit again, or
+        to capture screenshots after the orbit.
 
     Returns
     -------
@@ -1289,21 +1310,36 @@ def orbit_3d(
     >>> pl = plot_cell_3d(cell, color="red", tube_radius=500)
     >>> orbit_3d(pl)
 
-    Save to GIF:
+    Save a high-res GIF orbiting around the depth axis:
 
     >>> pl = plot_cell_3d(cell, color="red", tube_radius=500)
-    >>> orbit_3d(pl, output="neuron_orbit.gif", n_frames=90)
+    >>> orbit_3d(
+    ...     pl,
+    ...     output="neuron_orbit.gif",
+    ...     n_frames=90,
+    ...     viewup=(0, 1, 0),
+    ...     window_size=(1920, 1080),
+    ... )
     """
-    path_kwargs: dict = {"factor": factor, "n_points": n_frames}
-    if viewup is not None:
-        path_kwargs["viewup"] = viewup
+    if window_size is not None:
+        plotter.window_size = list(window_size)
+
+    # Resolve viewup: fall back to the plotter's current camera up. Both
+    # generate_orbital_path and orbit_on_path receive the same value so
+    # the orbital plane normal and the camera-up vector stay coherent
+    # (otherwise the orbit visually flips midway, looking like a 180°
+    # back-and-forth instead of a full revolution).
+    if viewup is None:
+        viewup = tuple(plotter.camera.up)
 
     # Set camera elevation before generating the orbital path so the
     # path is computed at the desired viewing angle.
     if elevation != 0.0:
         plotter.camera.elevation = elevation
 
-    path = plotter.generate_orbital_path(**path_kwargs)
+    path = plotter.generate_orbital_path(
+        factor=factor, n_points=n_frames, viewup=viewup
+    )
 
     if output is not None:
         ext = output.rsplit(".", 1)[-1].lower()
@@ -1311,10 +1347,10 @@ def orbit_3d(
             plotter.open_gif(output)
         else:
             plotter.open_movie(output, framerate=framerate)
-        plotter.orbit_on_path(path, write_frames=True)
+        plotter.orbit_on_path(path, viewup=viewup, write_frames=True)
     else:
         plotter.show(auto_close=False)
-        plotter.orbit_on_path(path, write_frames=False)
+        plotter.orbit_on_path(path, viewup=viewup, write_frames=False)
 
     if close:
         plotter.close()

@@ -1370,3 +1370,347 @@ class TestPlotLineup:
     def test_point_align_missing_alignment_point_raises(self, two_cells):
         with pytest.raises(ValueError):
             plot.plot_lineup(two_cells, align="point", alignment_point=None)
+
+
+class TestPlotLineupGrid:
+    """Tests for LineupGroup + plot_lineup_grid + add_layer_lines."""
+
+    @pytest.fixture
+    def cell_a(self):
+        return _make_cell_with_skeleton(
+            np.array([[0.0, 0.0, 0.0], [5.0, 10.0, 0.0], [10.0, 5.0, 0.0]])
+        )
+
+    @pytest.fixture
+    def cell_b(self):
+        return _make_cell_with_skeleton(
+            np.array([[0.0, 100.0, 0.0], [5.0, 110.0, 0.0], [10.0, 105.0, 0.0]])
+        )
+
+    @pytest.fixture
+    def cell_c(self):
+        return _make_cell_with_skeleton(
+            np.array([[0.0, 200.0, 0.0], [5.0, 210.0, 0.0], [10.0, 205.0, 0.0]])
+        )
+
+    # --- LineupGroup dataclass ---
+
+    def test_lineup_group_defaults(self, cell_a):
+        grp = plot.LineupGroup([cell_a])
+        assert grp.label is None
+        assert grp.color is None
+        assert grp.palette == "coolwarm"
+        assert grp.synapses is False
+        assert grp.cells == [cell_a]
+        plt.close("all")
+
+    def test_lineup_group_accepts_per_cell_lists(self, cell_a, cell_b):
+        grp = plot.LineupGroup(
+            [cell_a, cell_b],
+            color=["red", "blue"],
+            alpha=[1.0, 0.5],
+        )
+        assert grp.color == ["red", "blue"]
+        assert grp.alpha == [1.0, 0.5]
+
+    def test_resolve_cell_style_scalar(self, cell_a, cell_b):
+        grp = plot.LineupGroup([cell_a, cell_b], color="red", alpha=0.7)
+        style0 = plot._resolve_cell_style(grp, 0)
+        style1 = plot._resolve_cell_style(grp, 1)
+        assert style0["color"] == "red"
+        assert style1["color"] == "red"
+        assert style0["alpha"] == 0.7
+
+    def test_resolve_cell_style_list(self, cell_a, cell_b):
+        grp = plot.LineupGroup(
+            [cell_a, cell_b], color=["red", "blue"], alpha=[1.0, 0.5]
+        )
+        style0 = plot._resolve_cell_style(grp, 0)
+        style1 = plot._resolve_cell_style(grp, 1)
+        assert style0["color"] == "red"
+        assert style1["color"] == "blue"
+        assert style0["alpha"] == 1.0
+        assert style1["alpha"] == 0.5
+
+    def test_resolve_cell_style_wrong_list_length_raises(self, cell_a, cell_b):
+        grp = plot.LineupGroup([cell_a, cell_b], color=["red", "blue", "green"])
+        with pytest.raises(ValueError, match="length 3"):
+            plot._resolve_cell_style(grp, 0)
+
+    # --- plot_lineup_grid basics ---
+
+    def test_returns_axes(self, cell_a, cell_b):
+        ax = plot.plot_lineup_grid([plot.LineupGroup([cell_a, cell_b], label="A")])
+        assert isinstance(ax, plt.Axes)
+        plt.close("all")
+
+    def test_empty_groups_raises(self):
+        with pytest.raises(ValueError):
+            plot.plot_lineup_grid([])
+
+    def test_uses_existing_ax(self, cell_a):
+        _fig, existing_ax = plt.subplots()
+        returned_ax = plot.plot_lineup_grid(
+            [plot.LineupGroup([cell_a])], ax=existing_ax
+        )
+        assert returned_ax is existing_ax
+        plt.close("all")
+
+    # --- _grid_offsets layout ---
+
+    def test_grid_offsets_single_row(self, cell_a, cell_b, cell_c):
+        proj = plot.projection_factory("xy")
+        groups = [
+            plot.LineupGroup([cell_a, cell_b]),
+            plot.LineupGroup([cell_c]),
+        ]
+        offsets, anchors = plot._grid_offsets(
+            groups,
+            projection=proj,
+            align="natural",
+            inter_cell_gap=0.0,
+            inter_group_gap=0.0,
+            row_max_cells=None,
+            row_max_width=None,
+            row_gap=0.0,
+            alignment_points=None,
+        )
+        # All cells on row 0 → offset_v == 0 in natural alignment
+        for group_offs in offsets:
+            for _, v in group_offs:
+                assert v == 0.0
+        # Cells are placed in increasing x order
+        flat_h = [h for group_offs in offsets for h, _ in group_offs]
+        assert flat_h == sorted(flat_h)
+
+    def test_grid_offsets_row_max_cells_wraps(self, cell_a, cell_b, cell_c):
+        proj = plot.projection_factory("xy")
+        groups = [
+            plot.LineupGroup([cell_a]),
+            plot.LineupGroup([cell_b]),
+            plot.LineupGroup([cell_c]),
+        ]
+        offsets, _ = plot._grid_offsets(
+            groups,
+            projection=proj,
+            align="natural",
+            inter_cell_gap=0.0,
+            inter_group_gap=0.0,
+            row_max_cells=2,
+            row_max_width=None,
+            row_gap=10.0,
+            alignment_points=None,
+        )
+        # Groups 0 and 1 should share a row; group 2 wraps to the next.
+        # Row 0 cells have offset_v == 0; row 1 cells have offset_v < 0.
+        assert offsets[0][0][1] == 0.0
+        assert offsets[1][0][1] == 0.0
+        assert offsets[2][0][1] < 0.0
+
+    def test_grid_offsets_row_max_width_wraps(self, cell_a, cell_b, cell_c):
+        proj = plot.projection_factory("xy")
+        # Each cell spans x∈[0, 10], width 10. Set max width to force wrap.
+        groups = [plot.LineupGroup([c]) for c in (cell_a, cell_b, cell_c)]
+        offsets, _ = plot._grid_offsets(
+            groups,
+            projection=proj,
+            align="natural",
+            inter_cell_gap=0.0,
+            inter_group_gap=5.0,
+            row_max_cells=None,
+            row_max_width=20.0,  # fits cell + gap + cell (10 + 5 + 10 = 25 → no)
+            row_gap=10.0,
+            alignment_points=None,
+        )
+        # Each group should wrap to its own row
+        assert offsets[1][0][1] < offsets[0][0][1]
+        assert offsets[2][0][1] < offsets[1][0][1]
+
+    def test_grid_offsets_label_anchor_only_when_labeled(self, cell_a, cell_b):
+        proj = plot.projection_factory("xy")
+        groups = [
+            plot.LineupGroup([cell_a], label="A"),
+            plot.LineupGroup([cell_b]),  # no label
+        ]
+        _, anchors = plot._grid_offsets(
+            groups,
+            projection=proj,
+            align="natural",
+            inter_cell_gap=0.0,
+            inter_group_gap=0.0,
+            row_max_cells=None,
+            row_max_width=None,
+            row_gap=0.0,
+            alignment_points=None,
+        )
+        assert anchors[0] is not None
+        assert anchors[1] is None
+
+    # --- add_layer_lines ---
+
+    def test_add_layer_lines_adds_lines(self):
+        _fig, ax = plt.subplots()
+        ax.set_xlim(0, 100)
+        ax.set_ylim(0, 100)
+        n_lines_before = len(ax.get_lines())
+        plot.add_layer_lines(ax, {25: "A", 50: "B", 75: None})
+        n_lines_after = len(ax.get_lines())
+        assert n_lines_after - n_lines_before == 3
+        plt.close("all")
+
+    def test_add_layer_lines_labels_only_for_truthy(self):
+        _fig, ax = plt.subplots()
+        ax.set_xlim(0, 100)
+        ax.set_ylim(0, 100)
+        n_texts_before = len(ax.texts)
+        plot.add_layer_lines(ax, {25: "A", 50: None, 75: "C"})
+        labels = [t.get_text() for t in ax.texts[n_texts_before:]]
+        assert labels == ["A", "C"]
+        plt.close("all")
+
+    # --- end-to-end ---
+
+    def test_lineup_grid_with_layer_lines_and_labels(self, cell_a, cell_b, cell_c):
+        ax = plot.plot_lineup_grid(
+            [
+                plot.LineupGroup([cell_a, cell_b], label="Top", color="red"),
+                plot.LineupGroup([cell_c], label="Bottom", color="blue"),
+            ],
+            inter_cell_gap=2.0,
+            inter_group_gap=5.0,
+            row_max_cells=2,
+            row_gap=20.0,
+            layer_lines={50: "mid", 150: "high"},
+            group_label_offset=5.0,
+        )
+        assert isinstance(ax, plt.Axes)
+        # axhlines from layer_lines (the lines are added as Line2D children)
+        n_axhlines = sum(1 for line in ax.get_lines() if line.get_xdata()[0] == 0)
+        # There are at least 2 layer lines
+        assert n_axhlines >= 2
+        plt.close("all")
+
+    # --- rotation in lineup ---
+
+    def test_resolve_group_projections_no_rotation(self, cell_a, cell_b):
+        """No rotation → all cells get the base projection callable."""
+        grp = plot.LineupGroup([cell_a, cell_b])
+        projs = plot._resolve_group_projections(grp, "xy", invert_y=True)
+        assert len(projs) == 2
+        # All callable; both produce the same xy projection for the same input
+        pts = np.array([[1.0, 2.0, 3.0]])
+        np.testing.assert_allclose(projs[0](pts), projs[1](pts))
+
+    def test_resolve_group_projections_per_cell_rotation(self, cell_a, cell_b):
+        """rotation_angle='best' → each cell gets its own rotation callable."""
+        grp = plot.LineupGroup(
+            [cell_a, cell_b],
+            rotation_angle="best",
+            rotation_axis="y",
+        )
+        projs = plot._resolve_group_projections(grp, "xy", invert_y=True)
+        assert len(projs) == 2
+        # Each callable rotates around its own root — the two should not be
+        # identical since their roots differ.
+        assert projs[0] is not projs[1]
+
+    def test_plot_lineup_grid_with_best_rotation_renders(self, cell_a, cell_b, cell_c):
+        """End-to-end: groups with rotation_angle='best' lay out without overlap."""
+        grp = plot.LineupGroup(
+            [cell_a, cell_b, cell_c],
+            label="Rotated",
+            rotation_angle="best",
+            rotation_axis="y",
+            color="red",
+        )
+        ax = plot.plot_lineup_grid([grp], inter_cell_gap=5.0)
+        assert isinstance(ax, plt.Axes)
+        # Confirm we drew something — at least one LineCollection per cell.
+        from matplotlib.collections import LineCollection
+
+        lc_count = sum(isinstance(child, LineCollection) for child in ax.get_children())
+        assert lc_count >= 3
+        plt.close("all")
+
+    def test_plot_lineup_grid_mixed_rotation_groups(self, cell_a, cell_b, cell_c):
+        """Two groups: one rotated, one not. Both render cleanly."""
+        rotated = plot.LineupGroup(
+            [cell_a, cell_b],
+            label="Rotated",
+            rotation_angle="best",
+            rotation_axis="y",
+            color="red",
+        )
+        natural = plot.LineupGroup(
+            [cell_c],
+            label="Natural",
+            color="blue",
+        )
+        ax = plot.plot_lineup_grid(
+            [rotated, natural], inter_cell_gap=5.0, inter_group_gap=20.0
+        )
+        assert isinstance(ax, plt.Axes)
+        plt.close("all")
+
+    # --- row-stacking direction ---
+
+    def test_grid_offsets_inverted_axis_stacks_positive_y(self, cell_a, cell_b):
+        """With y_axis_inverted=True, subsequent row baselines INCREASE
+        in data y so they appear below on the inverted screen.
+        """
+        proj = plot.projection_factory("xy")
+        groups = [plot.LineupGroup([c]) for c in (cell_a, cell_b)]
+        offsets, _ = plot._grid_offsets(
+            groups,
+            projection=proj,
+            align="natural",
+            inter_cell_gap=0.0,
+            inter_group_gap=0.0,
+            row_max_cells=1,  # force wrap so each group is its own row
+            row_max_width=None,
+            row_gap=10.0,
+            alignment_points=None,
+            y_axis_inverted=True,
+        )
+        # Row 0 at y=0. Row 1 should be at y > 0 because axis is inverted.
+        assert offsets[0][0][1] == 0.0
+        assert offsets[1][0][1] > 0.0
+
+    def test_grid_offsets_non_inverted_axis_stacks_negative_y(self, cell_a, cell_b):
+        """With y_axis_inverted=False, subsequent baselines DECREASE in
+        data y so they appear below on a non-inverted screen.
+        """
+        proj = plot.projection_factory("xz")  # no "y" in projection → not inverted
+        groups = [plot.LineupGroup([c]) for c in (cell_a, cell_b)]
+        offsets, _ = plot._grid_offsets(
+            groups,
+            projection=proj,
+            align="natural",
+            inter_cell_gap=0.0,
+            inter_group_gap=0.0,
+            row_max_cells=1,
+            row_max_width=None,
+            row_gap=10.0,
+            alignment_points=None,
+            y_axis_inverted=False,
+        )
+        assert offsets[0][0][1] == 0.0
+        assert offsets[1][0][1] < 0.0
+
+    def test_plot_lineup_grid_xy_stacks_below_on_screen(self, cell_a, cell_b):
+        """End-to-end: with default "xy" projection (invert_y=True), the
+        second row should sit at a HIGHER data y than the first row so
+        that — on the inverted axis — it appears below on screen.
+        """
+        ax = plot.plot_lineup_grid(
+            [
+                plot.LineupGroup([cell_a], label="row 0"),
+                plot.LineupGroup([cell_b], label="row 1"),
+            ],
+            projection="xy",
+            row_max_cells=1,
+            row_gap=20.0,
+        )
+        # Axis should have been inverted.
+        assert ax.yaxis_inverted()
+        plt.close("all")

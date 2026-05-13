@@ -465,6 +465,83 @@ plt.savefig("multiview_figure.pdf", dpi=300, bbox_inches="tight")
 plt.show()
 ```
 
+### Styling labels in lineups and layer guides
+
+`plot_lineup_grid` and `add_layer_lines` both accept a `*_kwargs` dict
+that is forwarded directly to matplotlib's `Axes.text` call. Anything
+`text(...)` accepts works — font family, size, weight, style, color,
+custom `FontProperties`, even mathtext / LaTeX strings.
+
+```python
+from ossify.plot import plot_lineup_grid, add_layer_lines, LineupGroup
+
+# Group labels: pass a dict to `group_label_kwargs`.
+ax = plot_lineup_grid(
+    [
+        LineupGroup(cells_l2a, label="L2a", **L2A_STYLE),
+        LineupGroup(cells_l2b, label="L2b", **L2B_STYLE),
+    ],
+    inter_cell_gap=10_000,
+    inter_group_gap=30_000,
+    units_per_inch=200_000,
+    group_label_offset=20_000,
+    group_label_kwargs=dict(
+        fontfamily="serif",
+        fontsize=14,
+        fontweight="bold",
+        color="#222222",
+    ),
+    layer_lines={0: "L1", 250_000: "L2/3", 500_000: "L4"},
+    layer_line_kwargs=dict(
+        # `add_layer_lines` keyword args go in here:
+        label_kwargs=dict(
+            fontfamily="serif",
+            fontsize=11,
+            fontstyle="italic",
+            color="gray",
+        ),
+        line_kwargs=dict(
+            linestyle=":",
+            color="lightgray",
+            linewidth=0.4,
+        ),
+        label_pad=0.02,           # left margin between axis edge and label
+    ),
+)
+```
+
+Each `*_kwargs` dict is merged *on top of* the function's own defaults,
+so you only need to specify what you want to change. The convenience
+shortcut args on `add_layer_lines` (`color`, `linestyle`, `linewidth`,
+`label_fontsize`) seed the defaults; the `label_kwargs` / `line_kwargs`
+dicts override them where they overlap.
+
+A few practical notes:
+
+- **Mathtext / TeX** — label strings go through `ax.text` so
+  `label=r"$\mathrm{L2/3}$"` works without extra setup. Set
+  `matplotlib.rcParams["text.usetex"] = True` first if you want true
+  LaTeX rendering (slower; pulls in your system TeX installation).
+- **`fontfamily`** is a soft match — matplotlib looks for a generic
+  family (`"serif"`, `"sans-serif"`, `"monospace"`) or a specific
+  installed font. For exact control, build a
+  `matplotlib.font_manager.FontProperties(family="...", size=...,
+  weight=...)` once and pass it as
+  `fontproperties=fp` in the same `*_kwargs` dict.
+- **Common style applied to both labels** — there's no single
+  master-style knob; if you want identical fonts for group labels and
+  layer labels, define the dict once and pass it to both:
+
+    ```python
+    LABEL_FONT = dict(fontfamily="serif", fontsize=12, color="#222")
+    plot_lineup_grid(
+        groups,
+        group_label_kwargs=LABEL_FONT,
+        layer_lines={...},
+        layer_line_kwargs=dict(label_kwargs=LABEL_FONT),
+    )
+    ```
+
 ## Working with Real Data
 
 ### CAVEclient Data Visualization
@@ -881,13 +958,55 @@ orbit_3d(pl, output="neuron.gif", n_frames=90, elevation=20.0)
 orbit_3d(pl, output="neuron.mp4", n_frames=120, framerate=30)
 ```
 
-Use `elevation` to tilt the camera above the XY plane, `factor` to control
-how far the camera sits from the scene, and `viewup` to fix the "up"
-direction (e.g. `viewup=(0, 0, 1)` to keep Z pointing up):
+Use `elevation` to tilt the camera, `factor` to control how far the
+camera sits from the scene, and `viewup` to choose the orbital axis:
 
 ```python
 orbit_3d(pl, elevation=30.0, factor=3.0, viewup=(0, 0, 1))
 ```
+
+!!! warning "`viewup` is the orbital axis"
+
+    `viewup` is both **the rotation axis** (the orbital plane normal) and
+    the camera's up direction during the orbit. The two are tied
+    together intentionally — decoupling them causes the camera to flip
+    midway through the orbit, which visually reads as a 180° back-and-
+    forth oscillation instead of a full circle.
+
+    Common values:
+
+    - `viewup=(0, 0, 1)` — orbit in the xy plane around the z axis (PyVista's default).
+    - `viewup=(0, 1, 0)` or `(0, -1, 0)` — orbit in the xz plane around the y axis. Useful when y is your depth axis (typical for cortical neurons).
+    - `viewup=(1, 0, 0)` — orbit in the yz plane around the x axis.
+
+    When `viewup=None` (default), `orbit_3d` reads the plotter's current
+    camera up vector. So if you've already set up the camera, that
+    orientation is preserved.
+
+### Higher-resolution output
+
+`orbit_3d` accepts a `window_size=(width, height)` argument that
+resizes the plotter's render window before recording. Useful for
+publication-quality GIFs/MP4s:
+
+```python
+pl = plot_cell_3d(cell, color="compartment", tube_radius="radius")
+orbit_3d(
+    pl,
+    output="neuron_hires.mp4",
+    n_frames=120,
+    framerate=30,
+    viewup=(0, 1, 0),                # rotate around the depth axis
+    window_size=(1920, 1440),        # 4:3 HD frames
+)
+```
+
+By default the plotter uses 1024 × 768 (or whatever was specified at
+`pv.Plotter(...)` construction time). For static screenshots
+(`pl.screenshot(...)`), you can pass `scale=2` etc. to multiply the
+window size further.
+
+### Reusing the plotter after orbiting
 
 By default `orbit_3d` closes the plotter when the animation finishes, so
 the returned plotter is no longer usable. Pass `close=False` to keep it

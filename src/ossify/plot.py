@@ -1,11 +1,14 @@
+import warnings
+from dataclasses import dataclass, field
 from numbers import Number
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.collections import LineCollection
+from matplotlib.collections import LineCollection, PolyCollection
 
-from .base import Cell, PointCloudLayer, SkeletonLayer
+from .base import Cell, GraphLayer, MeshLayer, PointCloudLayer, SkeletonLayer
 from .plot_utils import (
     _create_discrete_color_dict,
     _get_discrete_colormap,
@@ -23,11 +26,16 @@ __all__ = [
     "plot_annotations_2d",
     "plot_cell_multiview",
     "plot_lineup",
+    "plot_lineup_grid",
+    "LineupGroup",
     "plot_skeleton",
+    "plot_mesh_2d",
+    "plot_graph_2d",
     "plot_points",
     "single_panel_figure",
     "multi_panel_figure",
     "add_scale_bar",
+    "add_layer_lines",
     "Rotation",
     "RotateCell",
 ]
@@ -71,6 +79,11 @@ def _apply_y_inversion_to_axes(
         Axes with y-axis inverted if needed
     """
     if invert_y and _should_invert_y_axis(projection):
+        # _should_invert_y_axis only returns True for str projections, but
+        # be defensive about length — we only know how to interpret the
+        # two-character axis-pair conventions ("xy", "zy", "yx", "yz").
+        if not isinstance(projection, str) or len(projection) != 2:
+            return ax
         # Only invert if not already inverted to avoid double-inversion
         if projection[1] == "y":
             if not ax.yaxis_inverted():
@@ -671,19 +684,18 @@ def plot_skeleton(
             (path_spatial[i], path_spatial[i + 1]) for i in range(len(path_spatial) - 1)
         ]
 
-        # Extract styling for this path
-        lc_kwargs = {}
+        # Extract styling for this path. Note the slicing asymmetry:
+        # colors and alpha index by `path_plus` (per-vertex, length matches
+        # all endpoints including the parent), but linewidths index by
+        # `path` (per-segment, length matches the segment count which is
+        # len(path_plus) - 1).
+        lc_kwargs = {"zorder": zorder}
         if colors is not None:
-            # Convert vertex indices to positional indices for colors array access
             lc_kwargs["colors"] = colors[path_plus]
         if alpha is not None:
-            # Convert vertex indices to positional indices for alpha array access
             lc_kwargs["alpha"] = alpha[path_plus]
         if linewidths is not None:
-            # Convert vertex indices to positional indices for linewidths array access
             lc_kwargs["linewidths"] = linewidths[path]
-        if zorder is not None:
-            lc_kwargs["zorder"] = zorder
 
         lc = LineCollection(path_segs, capstyle="round", joinstyle="round", **lc_kwargs)
         ax.add_collection(lc)
@@ -697,11 +709,220 @@ def plot_skeleton(
     return ax
 
 
+def plot_mesh_2d(
+    mesh: MeshLayer,
+    projection: Union[str, Callable] = "xy",
+    rotation_angle: Optional[Union[float, int, Literal["best"]]] = None,
+    rotation_axis: Optional[Union[str, np.ndarray]] = None,
+    colors: Optional[np.ndarray] = None,
+    alpha: Optional[float] = None,
+    edgecolors: Optional[Union[str, tuple]] = "none",
+    linewidths: float = 0.0,
+    offset_h: float = 0.0,
+    offset_v: float = 0.0,
+    zorder: int = 1,
+    invert_y: bool = True,
+    ax: Optional[plt.Axes] = None,
+) -> plt.Axes:
+    """Plot a mesh as projected filled triangles in 2D.
+
+    Low-level mesh renderer analogous to :func:`plot_skeleton`. Accepts
+    pre-resolved per-vertex or per-face color arrays and renders projected
+    triangles via :class:`matplotlib.collections.PolyCollection`.
+
+    Parameters
+    ----------
+    mesh : MeshLayer
+        Mesh layer to render.
+    projection : str or Callable, default "xy"
+        Projection function or string mapping 3D points to 2D.
+    rotation_angle, rotation_axis : optional
+        Inline rotation specification, same conventions as
+        :func:`plot_skeleton`.
+    colors : np.ndarray, optional
+        Per-vertex ``(N, 3)`` / ``(N, 4)`` RGB/RGBA color array, or
+        per-face ``(M, 3)`` / ``(M, 4)`` array. Per-vertex colors are
+        averaged across each face's three vertices.
+    alpha : float, optional
+        Uniform fill opacity. Per-vertex / per-face opacity should be
+        baked into the alpha channel of *colors*.
+    edgecolors : str or tuple, default "none"
+        Color for triangle edges. Default ``"none"`` hides edges entirely
+        (clean fill). Pass e.g. ``"black"`` for a wireframe-on-surface look.
+    linewidths : float, default 0.0
+        Width of triangle edges in points. Only visible when
+        *edgecolors* is not ``"none"``.
+    offset_h, offset_v : float
+        Horizontal / vertical offsets applied to the projected vertices.
+    zorder : int, default 1
+        Drawing order. Default ``1`` places mesh below the skeleton
+        (which defaults to ``zorder=2``).
+    invert_y : bool, default True
+        Whether to invert the y-axis for projections containing "y".
+    ax : plt.Axes, optional
+        Existing matplotlib axes. A new one is created if omitted.
+
+    Returns
+    -------
+    plt.Axes
+        Axes with the mesh added.
+    """
+    if ax is None:
+        ax = plt.gca()
+    do_autoscale_at_end = not ax.has_data() and ax.get_autoscale_on()
+
+    orig_projection = projection
+    center = np.asarray(mesh.vertices.mean(axis=0), dtype=float)
+    projection = _resolve_rotation_params(
+        projection,
+        rotation_angle,
+        rotation_axis,
+        vertices=mesh.vertices,
+        center=center,
+        invert_y=invert_y,
+    )
+    projection = projection_factory(proj=projection)
+
+    verts_2d = projection(mesh.vertices).astype(float, copy=True)
+    verts_2d[:, 0] += offset_h
+    verts_2d[:, 1] += offset_v
+
+    faces = mesh.faces_positional
+    triangles_2d = verts_2d[faces]  # shape (M, 3, 2)
+
+    pc_kwargs: dict = {
+        "zorder": zorder,
+        "edgecolors": edgecolors,
+        "linewidths": linewidths,
+    }
+    if colors is not None:
+        # Per-vertex (N, k) → average over each face's three vertices.
+        # Per-face (M, k), scalar color string/tuple → pass through unchanged.
+        if (
+            isinstance(colors, np.ndarray)
+            and colors.ndim == 2
+            and colors.shape[0] == mesh.n_vertices
+        ):
+            pc_kwargs["facecolors"] = colors[faces].mean(axis=1)
+        else:
+            pc_kwargs["facecolors"] = colors
+    if alpha is not None:
+        pc_kwargs["alpha"] = alpha
+
+    pc = PolyCollection(triangles_2d, **pc_kwargs)
+    ax.add_collection(pc)
+
+    ax.set_aspect("equal")
+    ax = _apply_y_inversion_to_axes(ax, orig_projection, invert_y)
+    if do_autoscale_at_end:
+        ax.autoscale()
+    return ax
+
+
+def plot_graph_2d(
+    graph: GraphLayer,
+    projection: Union[str, Callable] = "xy",
+    rotation_angle: Optional[Union[float, int, Literal["best"]]] = None,
+    rotation_axis: Optional[Union[str, np.ndarray]] = None,
+    colors: Optional[np.ndarray] = None,
+    alpha: Optional[Union[float, np.ndarray]] = None,
+    linewidths: Optional[Union[float, np.ndarray]] = None,
+    offset_h: float = 0.0,
+    offset_v: float = 0.0,
+    zorder: int = 2,
+    invert_y: bool = True,
+    ax: Optional[plt.Axes] = None,
+) -> plt.Axes:
+    """Plot a graph's edges as line segments in 2D.
+
+    Low-level graph renderer analogous to :func:`plot_skeleton`. Each edge
+    becomes a single segment in a :class:`matplotlib.collections.LineCollection`;
+    per-vertex style arrays are averaged over the two endpoints.
+
+    Parameters
+    ----------
+    graph : GraphLayer
+        Graph layer to render.
+    projection : str or Callable, default "xy"
+        Projection function or string mapping 3D points to 2D.
+    rotation_angle, rotation_axis : optional
+        Inline rotation specification, same conventions as
+        :func:`plot_skeleton`.
+    colors : np.ndarray, optional
+        Per-vertex ``(N, 3)`` / ``(N, 4)`` RGB/RGBA color array.
+        Averaged over each edge's two endpoints to give per-edge colors.
+    alpha : float or np.ndarray, optional
+        Scalar opacity, or a per-vertex array averaged to per-edge.
+    linewidths : float or np.ndarray, optional
+        Scalar line width, or a per-vertex array averaged to per-edge,
+        in points.
+    offset_h, offset_v : float
+        Horizontal / vertical offsets applied to the projected vertices.
+    zorder : int, default 2
+        Drawing order.
+    invert_y : bool, default True
+        Whether to invert the y-axis for projections containing "y".
+    ax : plt.Axes, optional
+        Existing matplotlib axes. A new one is created if omitted.
+
+    Returns
+    -------
+    plt.Axes
+        Axes with the graph added.
+    """
+    if ax is None:
+        ax = plt.gca()
+    do_autoscale_at_end = not ax.has_data() and ax.get_autoscale_on()
+
+    orig_projection = projection
+    center = np.asarray(graph.vertices.mean(axis=0), dtype=float)
+    projection = _resolve_rotation_params(
+        projection,
+        rotation_angle,
+        rotation_axis,
+        vertices=graph.vertices,
+        center=center,
+        invert_y=invert_y,
+    )
+    projection = projection_factory(proj=projection)
+
+    verts_2d = projection(graph.vertices).astype(float, copy=True)
+    verts_2d[:, 0] += offset_h
+    verts_2d[:, 1] += offset_v
+
+    edges = graph.edges_positional  # shape (E, 2)
+    segments_2d = verts_2d[edges]  # shape (E, 2, 2)
+
+    lc_kwargs: dict = {"zorder": zorder, "capstyle": "round"}
+    if colors is not None:
+        # Per-vertex (N, k) → mean over each edge's two endpoints.
+        lc_kwargs["colors"] = colors[edges].mean(axis=1)
+    if alpha is not None:
+        if isinstance(alpha, np.ndarray):
+            lc_kwargs["alpha"] = alpha[edges].mean(axis=1)
+        else:
+            lc_kwargs["alpha"] = alpha
+    if linewidths is not None:
+        if isinstance(linewidths, np.ndarray):
+            lc_kwargs["linewidths"] = linewidths[edges].mean(axis=1)
+        else:
+            lc_kwargs["linewidths"] = linewidths
+
+    lc = LineCollection(segments_2d, **lc_kwargs)
+    ax.add_collection(lc)
+
+    ax.set_aspect("equal")
+    ax = _apply_y_inversion_to_axes(ax, orig_projection, invert_y)
+    if do_autoscale_at_end:
+        ax.autoscale()
+    return ax
+
+
 def plot_points(
     points: np.ndarray,
     sizes: Optional[np.ndarray] = None,
     colors: Optional[np.ndarray] = None,
-    palette: Optional[Union[str, Dict]] = None,
+    palette: Union[str, Dict] = "coolwarm",
     color_norm: Optional[Tuple[float, float]] = None,
     projection: Union[str, Callable] = "xy",
     rotation_angle: Optional[Union[float, int, Literal["best"]]] = None,
@@ -743,15 +964,17 @@ def plot_points(
     points_proj = projection(points)
     points_proj[:, 0] = points_proj[:, 0] + offset_h
     points_proj[:, 1] = points_proj[:, 1] + offset_v
-    if scatter_kws is None:
-        scatter_kws = {}
+    # Markers default to borderless (matplotlib's default is a 1-pt outline,
+    # which dominates small synapse markers).
     if "linewidths" not in scatter_kws:
         scatter_kws["linewidths"] = 0
     if isinstance(palette, str):
         scatter_kws["cmap"] = palette
         if color_norm is not None:
             scatter_kws["vmin"], scatter_kws["vmax"] = color_norm
-    elif isinstance(palette, dict) and colors:
+    elif isinstance(palette, dict) and colors is not None:
+        # Dict palette: map each feature value to its color. Works for any
+        # iterable of dict keys (1-D ndarray, list, pandas Series, …).
         colors = [palette[feature] for feature in colors]
     if colors is not None:
         if isinstance(colors, str):
@@ -947,9 +1170,14 @@ def plot_morphology_2d(
         linearly in log-space. *color_norm* bounds remain in original units
         and are converted internally. Mirrors :func:`plot_morphology_3d`.
     alpha : str, np.ndarray, or float, default 1.0
-        Alpha specification - can be feature name, array, or single value
+        Alpha specification - can be feature name, array, or single value.
+        Feature names / arrays are rescaled to ``alpha_extent``.
     alpha_norm : tuple of float, optional
-        (min, max) tuple for alpha normalization
+        (min, max) clip range for alpha values in original feature units.
+    alpha_extent : tuple of float, optional
+        ``(min, max)`` output range for rescaled alpha values.  Default
+        ``(0.0, 1.0)`` — i.e., the dimmest vertex is fully transparent.
+        Pass e.g. ``(0.1, 1.0)`` to keep low-end vertices faintly visible.
     linewidth : str, np.ndarray, or float, default 1.0
         Linewidth specification - can be feature name, array, or single value
     linewidth_norm : tuple of float, optional
@@ -996,14 +1224,15 @@ def plot_morphology_2d(
     if isinstance(resolved_color, np.ndarray):
         colors_array = resolved_color
     elif resolved_color is not None:
-        import matplotlib.colors as mcolors
-
         single_color = mcolors.to_rgba(resolved_color)
         colors_array = np.tile(single_color, (skel.n_vertices, 1))
 
-    # Process alpha: arrays without a norm are assumed pre-normalized to [0, 1]
+    # Process alpha: arrays without a norm are assumed pre-normalized to [0, 1].
+    # When alpha is a feature name or alpha_norm is given, values are rescaled
+    # to alpha_extent. Default extent is [0, 1] — pass alpha_extent=(0.1, 1.0)
+    # or similar to keep low-end vertices visible.
     if alpha_extent is None:
-        alpha_extent = (0.1, 1.0)
+        alpha_extent = (0.0, 1.0)
     rescale_alpha = isinstance(alpha, str) or alpha_norm is not None
     alpha_array = _resolve_scalar_parameter(
         alpha,
@@ -1117,6 +1346,11 @@ def plot_cell_2d(
     )
 
     if units_per_inch is not None:
+        if ax is not None:
+            raise ValueError(
+                "Pass either `ax` (to paint into an existing axes) or "
+                "`units_per_inch` (to size a new figure), not both."
+            )
         bounds = _plotted_bounds(cell.skeleton.vertices, projection, offset_h, offset_v)
         _, ax = single_panel_figure(
             data_bounds_min=bounds[:, 0],
@@ -1170,6 +1404,14 @@ def plot_cell_2d(
                 **syn_kwargs,
             )
             syn_common_kwargs["ax"] = ax
+        elif synapses == "pre":
+            # The user asked specifically for pre; missing layer is silent
+            # only when "both" or True is requested (graceful degradation).
+            warnings.warn(
+                f"synapses='pre' requested, but no '{pre_anno}' annotation "
+                f"is present on cell '{cell.name}'. Skipping.",
+                stacklevel=2,
+            )
     if synapses in ("both", "post", True):
         if post_anno in cell.annotations.names:
             ax = plot_annotations_2d(
@@ -1179,6 +1421,12 @@ def plot_cell_2d(
                 color_norm=post_color_norm,
                 **syn_common_kwargs,
                 **syn_kwargs,
+            )
+        elif synapses == "post":
+            warnings.warn(
+                f"synapses='post' requested, but no '{post_anno}' annotation "
+                f"is present on cell '{cell.name}'. Skipping.",
+                stacklevel=2,
             )
     return ax
 
@@ -1219,7 +1467,7 @@ def plot_cell_multiview(
     dpi: Optional[float] = None,
     **syn_kwargs,
 ) -> dict:
-    fig, axes = multi_panel_figure(
+    _, axes = multi_panel_figure(
         data_bounds_min=cell.skeleton.bbox[0],
         data_bounds_max=cell.skeleton.bbox[1],
         units_per_inch=units_per_inch,
@@ -1310,6 +1558,22 @@ def single_panel_figure(
     # Convert to figure size in inches
     fig_width = data_width / units_per_inch
     fig_height = data_height / units_per_inch
+
+    # Clamp degenerate dimensions so the figure is still renderable and
+    # compatible with peers in a lineup or panel. We warn — the data is
+    # degenerate, and the caller likely wants to know.
+    _MIN_INCHES = 0.5
+    if fig_width < _MIN_INCHES or fig_height < _MIN_INCHES:
+        warnings.warn(
+            f"single_panel_figure received degenerate bounds "
+            f"({data_width:.3g} × {data_height:.3g} units → "
+            f"{fig_width:.3g} × {fig_height:.3g} inches at "
+            f"units_per_inch={units_per_inch}). Clamping figure dimensions "
+            f'to at least {_MIN_INCHES}" so the plot remains visible.',
+            stacklevel=2,
+        )
+        fig_width = max(fig_width, _MIN_INCHES)
+        fig_height = max(fig_height, _MIN_INCHES)
 
     # Create figure and axis
     fig = plt.figure(figsize=(fig_width, fig_height), dpi=dpi)
@@ -1637,6 +1901,11 @@ def add_scale_bar(
                 y_end = y_start - length
             else:
                 y_end = y_start + length
+        case _:
+            raise ValueError(
+                f"orientation must be 'h', 'horizontal', 'v', or 'vertical'; "
+                f"got {orientation!r}"
+            )
 
     # Draw the scale bar line
     ax.plot(
@@ -1661,6 +1930,10 @@ def add_scale_bar(
                 else:
                     feature_x = x_start + feature_offset * x_range
                     feature_y = y_start + length / 2
+            case _:
+                # Unreachable — the first match would have raised, but
+                # keeps the match exhaustive so the type checker is happy.
+                raise ValueError(f"orientation must be h/v; got {orientation!r}")
 
         ax.text(
             feature_x,
@@ -1906,11 +2179,11 @@ def plot_lineup(
         ymin = min(b[1, 0] for b in all_bounds)
         ymax = max(b[1, 1] for b in all_bounds)
         _, ax = single_panel_figure(
-            np.array([xmin, ymin]),
-            np.array([xmax, ymax]),
-            units_per_inch,
-            despine,
-            dpi,
+            data_bounds_min=np.array([xmin, ymin]),
+            data_bounds_max=np.array([xmax, ymax]),
+            units_per_inch=units_per_inch,
+            despine=despine,
+            dpi=dpi,
         )
 
     if ax is None:
@@ -1938,5 +2211,662 @@ def plot_lineup(
             invert_y=invert_y,
             ax=ax,
         )
+
+    return ax
+
+
+# ===========================================================================
+# plot_lineup_grid: groups, multi-row, layer guides
+# ===========================================================================
+
+
+# Style fields on LineupGroup that broadcast per-cell when given as a list
+# (everything plot_cell_2d takes that we expect users to vary by cell).
+_GROUP_PER_CELL_FIELDS = (
+    "color",
+    "palette",
+    "color_norm",
+    "color_scale",
+    "alpha",
+    "alpha_norm",
+    "alpha_extent",
+    "linewidth",
+    "linewidth_norm",
+    "widths",
+    "root_marker",
+    "root_size",
+    "root_color",
+)
+
+# Style fields treated uniformly across the group (passed through as-is).
+_GROUP_UNIFORM_FIELDS = (
+    "synapses",
+    "pre_anno",
+    "pre_color",
+    "pre_palette",
+    "pre_color_norm",
+    "post_anno",
+    "post_color",
+    "post_palette",
+    "post_color_norm",
+    "syn_alpha",
+    "syn_color_scale",
+    "syn_size",
+    "syn_size_norm",
+    "syn_size_scale",
+    "syn_sizes",
+)
+
+
+@dataclass
+class LineupGroup:
+    """A labeled bag of cells with shared styling, used by :func:`plot_lineup_grid`.
+
+    Each style field mirrors the matching keyword on :func:`plot_cell_2d`.
+    Per-cell fields (``color``, ``palette``, ``alpha``, ``linewidth``, the
+    root markers, etc.) accept either a scalar (broadcast across all cells
+    in the group) or a list with one entry per cell. Synapse-related
+    fields are uniform across the group.
+
+    Parameters
+    ----------
+    cells : list of Cell
+        The cells in this group.
+    label : str, optional
+        Title displayed above the group's cells. ``None`` suppresses it.
+
+    Examples
+    --------
+    Define named styles once, then build groups:
+
+    >>> L2A = dict(color="compartment", palette={SWC_AXON: "tab:blue",
+    ...                                          SWC_DENDRITE: "navy"})
+    >>> L2B = dict(color="compartment", palette={SWC_AXON: "lightblue",
+    ...                                          SWC_DENDRITE: "steelblue"})
+    >>> groups = [
+    ...     LineupGroup(l2a_cells, label="L2a", **L2A),
+    ...     LineupGroup(l2b_cells, label="L2b", **L2B),
+    ... ]
+    >>> plot_lineup_grid(groups=groups, row_max_width=2000,
+    ...                  layer_lines={0: "L1", 250: "L2/3", 500: "L4"})
+
+    Mix styles within a single group via per-cell broadcasts:
+
+    >>> LineupGroup(cells, label="Comparison",
+    ...             color=["compartment"] * len(cells),
+    ...             palette=[L2A["palette"], L3A["palette"], L2A["palette"]],
+    ...             alpha=[1.0, 1.0, 0.3])
+    """
+
+    cells: List[Cell]
+    label: Optional[str] = None
+
+    # --- Per-cell projection / rotation (handled separately from styling).
+    # The rotation_* fields integrate with each cell's own PCA, so even
+    # ``rotation_angle="best"`` works in a lineup: each cell rotates around
+    # its own root with its own per-cell optimal angle, then the laid-out
+    # bounds are recomputed from the resulting projections.
+    rotation_angle: Optional[Union[float, int, Literal["best"], List]] = None
+    rotation_axis: Optional[Union[str, np.ndarray, List]] = None
+
+    # --- Skeleton styling (per-cell broadcastable) ---
+    color: Optional[Union[str, np.ndarray, tuple, List]] = None
+    palette: Union[str, dict, List] = "coolwarm"
+    color_norm: Optional[Union[Tuple[float, float], List]] = None
+    color_scale: Optional[Union[Literal["log"], List]] = None
+    alpha: Union[str, np.ndarray, float, List] = 1.0
+    alpha_norm: Optional[Union[Tuple[float, float], List]] = None
+    alpha_extent: Optional[Union[Tuple[float, float], List]] = None
+    linewidth: Union[str, np.ndarray, float, List] = 1.0
+    linewidth_norm: Optional[Union[Tuple[float, float], List]] = None
+    widths: Optional[Union[tuple, List]] = (1, 50)
+    root_marker: Union[bool, List[bool]] = False
+    root_size: Union[float, List[float]] = 100.0
+    root_color: Optional[Union[str, tuple, List]] = None
+
+    # --- Synapse styling (uniform across the group) ---
+    synapses: Literal["pre", "post", "both", True, False] = False
+    pre_anno: str = "pre_syn"
+    pre_color: Optional[Union[str, tuple]] = None
+    pre_palette: Union[str, dict] = "coolwarm"
+    pre_color_norm: Optional[Tuple[float, float]] = None
+    post_anno: str = "post_syn"
+    post_color: Optional[Union[str, tuple]] = None
+    post_palette: Union[str, dict] = "coolwarm"
+    post_color_norm: Optional[Tuple[float, float]] = None
+    syn_alpha: float = 1.0
+    syn_color_scale: Optional[Literal["log"]] = None
+    syn_size: Optional[Union[str, np.ndarray, float]] = None
+    syn_size_norm: Optional[Tuple[float, float]] = None
+    syn_size_scale: Optional[Literal["log", "sqrt", "cbrt"]] = None
+    syn_sizes: Optional[np.ndarray] = (1, 30)
+
+    # Escape hatch for any plot_cell_2d kwarg we don't expose explicitly.
+    extra_kwargs: Optional[Dict[str, Any]] = field(default_factory=dict)
+
+
+def _resolve_cell_style(group: LineupGroup, cell_idx: int) -> Dict[str, Any]:
+    """Resolve a single cell's plot_cell_2d kwargs from its group's fields.
+
+    Per-cell broadcastable fields are indexed into when given as a list;
+    uniform fields pass through unchanged. Rotation fields are *not*
+    included — those are handled separately via :func:`_resolve_group_projections`.
+    """
+    n = len(group.cells)
+    out: Dict[str, Any] = {}
+    for name in _GROUP_PER_CELL_FIELDS:
+        val = getattr(group, name)
+        if isinstance(val, list):
+            if len(val) != n:
+                raise ValueError(
+                    f"LineupGroup field {name!r} has length {len(val)} "
+                    f"but group has {n} cells."
+                )
+            out[name] = val[cell_idx]
+        else:
+            out[name] = val
+    for name in _GROUP_UNIFORM_FIELDS:
+        out[name] = getattr(group, name)
+    if group.extra_kwargs:
+        out.update(group.extra_kwargs)
+    return out
+
+
+def _resolve_group_projections(
+    group: LineupGroup,
+    base_projection: Union[str, Callable],
+    invert_y: bool,
+) -> List[Callable]:
+    """Build a per-cell projection callable for each cell in *group*.
+
+    When the group's ``rotation_angle``/``rotation_axis`` are unset, every
+    cell uses *base_projection* directly. When set (including
+    ``rotation_angle="best"``), each cell's projection is its own
+    rotation callable built from the cell's vertices and root location.
+    """
+    n = len(group.cells)
+    rot_angle_list = _broadcast_param(group.rotation_angle, n)
+    rot_axis_list = _broadcast_param(group.rotation_axis, n)
+
+    projections: List[Callable] = []
+    for ci, cell in enumerate(group.cells):
+        ra = rot_angle_list[ci]
+        rx = rot_axis_list[ci]
+        if ra is None and rx is None:
+            projections.append(projection_factory(base_projection))
+            continue
+        skel = cell.skeleton
+        center = (
+            np.asarray(skel.root_location, dtype=float)
+            if skel is not None and skel.root_location is not None
+            else None
+        )
+        vertices = skel.vertices if skel is not None else None
+        resolved = _resolve_rotation_params(
+            base_projection,
+            ra,
+            rx,
+            vertices=vertices,
+            center=center,
+            invert_y=invert_y,
+        )
+        projections.append(projection_factory(resolved))
+    return projections
+
+
+def _grid_offsets(
+    groups: List[LineupGroup],
+    projection: Union[Callable, List[List[Callable]]],
+    align: Literal["natural", "soma", "point"],
+    inter_cell_gap: float,
+    inter_group_gap: float,
+    row_max_cells: Optional[int],
+    row_max_width: Optional[float],
+    row_gap: float,
+    alignment_points: Optional[List[List[np.ndarray]]],
+    y_axis_inverted: bool = False,
+) -> Tuple[
+    List[List[Tuple[float, float]]],
+    List[Optional[Tuple[float, float, float]]],
+]:
+    """Compute per-cell offsets and per-group label anchors.
+
+    Groups are placed left-to-right; when ``row_max_cells`` or
+    ``row_max_width`` is set, groups wrap to a new row as a unit (a single
+    group is never split between rows).
+
+    Parameters
+    ----------
+    projection : Callable or list of list of Callable
+        Either a single projection callable applied to all cells, or a
+        per-cell projection (``projection[gi][ci]`` for cell ``ci`` of
+        group ``gi``). The per-cell form supports per-cell rotation —
+        e.g. ``rotation_angle="best"`` produces a different rotation
+        callable for every cell.
+    y_axis_inverted : bool, default False
+        Whether the rendered y axis will be inverted on display (matplotlib's
+        ``ax.invert_yaxis()``). Controls the row-stacking direction:
+        subsequent rows should always appear *below* the previous one on
+        screen, so when the axis is inverted we stack toward larger data y;
+        when it isn't we stack toward smaller data y. Caller should compute
+        this as ``invert_y and _should_invert_y_axis(projection_str)``.
+
+    Returns
+    -------
+    cell_offsets : list of list of (float, float)
+        ``cell_offsets[gi][ci]`` is the ``(offset_h, offset_v)`` for cell
+        ``ci`` in group ``gi``, in projected data coordinates.
+    group_label_anchors : list of (center_x, ymin, ymax) or None
+        For each group, the horizontal center plus the min and max
+        projected y of its rendered cells (after offsets applied), or
+        ``None`` if the group has no label. The caller chooses whether to
+        place the label above ymin or below ymax based on the axis
+        inversion state.
+    """
+    # Normalize projection to per-cell list-of-lists so the rest of the
+    # function only has one shape to handle.
+    if callable(projection):
+        per_cell_projections: List[List[Callable]] = [
+            [projection] * len(g.cells) for g in groups
+        ]
+    else:
+        per_cell_projections = projection
+
+    # Step 1: gather per-cell projected bounds using each cell's own projection.
+    group_data: List[Dict[str, Any]] = []
+    for gi, group in enumerate(groups):
+        cells_data = []
+        for ci, cell in enumerate(group.cells):
+            proj = per_cell_projections[gi][ci]
+            bounds = _plotted_bounds(cell.skeleton.vertices, proj)
+            xmin, xmax = bounds[0]
+            ymin, ymax = bounds[1]
+            cells_data.append(
+                {
+                    "xmin": xmin,
+                    "xmax": xmax,
+                    "ymin": ymin,
+                    "ymax": ymax,
+                    "width": xmax - xmin,
+                }
+            )
+        total_width = sum(c["width"] for c in cells_data) + inter_cell_gap * max(
+            len(cells_data) - 1, 0
+        )
+        group_data.append(
+            {
+                "cells": cells_data,
+                "total_width": total_width,
+                "count": len(cells_data),
+            }
+        )
+
+    # Step 2: pack groups into rows.
+    rows: List[List[int]] = []
+    current: List[int] = []
+    current_width = 0.0
+    current_count = 0
+    for gi, gd in enumerate(group_data):
+        if not current:
+            current.append(gi)
+            current_width = gd["total_width"]
+            current_count = gd["count"]
+            continue
+        tentative_width = current_width + inter_group_gap + gd["total_width"]
+        tentative_count = current_count + gd["count"]
+        wrap_by_count = row_max_cells is not None and tentative_count > row_max_cells
+        wrap_by_width = row_max_width is not None and tentative_width > row_max_width
+        if wrap_by_count or wrap_by_width:
+            rows.append(current)
+            current = [gi]
+            current_width = gd["total_width"]
+            current_count = gd["count"]
+        else:
+            current.append(gi)
+            current_width = tentative_width
+            current_count = tentative_count
+    if current:
+        rows.append(current)
+
+    # Step 3: per-row y baseline. Each row's height is the max cell ymax
+    # minus min cell ymin in projected coords. Subsequent rows always
+    # appear *below* on screen — we just choose the sign of the data-y
+    # step based on whether the axis will be inverted on render.
+    row_step_sign = +1.0 if y_axis_inverted else -1.0
+    row_baselines = [0.0]
+    for r in range(len(rows) - 1):
+        # Height = max(ymax) - min(ymin) across all cells in this row.
+        row_cells_data = [cd for gi in rows[r] for cd in group_data[gi]["cells"]]
+        if row_cells_data:
+            row_height = max(c["ymax"] for c in row_cells_data) - min(
+                c["ymin"] for c in row_cells_data
+            )
+        else:
+            row_height = 0.0
+        row_baselines.append(row_baselines[-1] + row_step_sign * (row_height + row_gap))
+
+    # Step 4: compute per-cell (offset_h, offset_v) and group label anchors.
+    cell_offsets: List[List[Tuple[float, float]]] = [[] for _ in groups]
+    group_label_anchors: List[Optional[Tuple[float, float, float]]] = [None] * len(
+        groups
+    )
+
+    for row_idx, row_group_indices in enumerate(rows):
+        cursor_x = 0.0
+        row_y = row_baselines[row_idx]
+        for gi in row_group_indices:
+            gd = group_data[gi]
+            group_x_start = cursor_x
+            group_min_y_plotted = float("inf")
+            group_max_y_plotted = float("-inf")
+            for ci, cd in enumerate(gd["cells"]):
+                cell = groups[gi].cells[ci]
+                cell_proj = per_cell_projections[gi][ci]
+                offset_h = cursor_x - cd["xmin"]
+                if align == "natural":
+                    offset_v = row_y
+                elif align == "soma":
+                    soma_y = _project_point_y(cell.skeleton.root_location, cell_proj)
+                    offset_v = row_y - soma_y
+                else:  # "point"
+                    pt = alignment_points[gi][ci]  # type: ignore[index]
+                    offset_v = row_y - _project_point_y(pt, cell_proj)
+                cell_offsets[gi].append((offset_h, offset_v))
+                plotted_ymin = cd["ymin"] + offset_v
+                plotted_ymax = cd["ymax"] + offset_v
+                group_min_y_plotted = min(group_min_y_plotted, plotted_ymin)
+                group_max_y_plotted = max(group_max_y_plotted, plotted_ymax)
+                cursor_x += cd["width"] + inter_cell_gap
+            # Remove trailing inter_cell_gap, add inter_group_gap.
+            if gd["count"] > 0:
+                cursor_x -= inter_cell_gap
+            cursor_x += inter_group_gap
+            # Record group label anchor: horizontal center + plotted y extent.
+            if groups[gi].label is not None and gd["count"] > 0:
+                center_x = (group_x_start + cursor_x - inter_group_gap) / 2.0
+                group_label_anchors[gi] = (
+                    center_x,
+                    group_min_y_plotted,
+                    group_max_y_plotted,
+                )
+
+    return cell_offsets, group_label_anchors
+
+
+def add_layer_lines(
+    ax: plt.Axes,
+    layer_lines: Dict[float, Optional[str]],
+    color: str = "gray",
+    linestyle: str = "--",
+    linewidth: float = 0.5,
+    label_fontsize: float = 9.0,
+    label_pad: float = 0.01,
+    label_kwargs: Optional[dict] = None,
+    line_kwargs: Optional[dict] = None,
+) -> plt.Axes:
+    """Add horizontal layer reference lines with optional left-margin labels.
+
+    Parameters
+    ----------
+    ax : plt.Axes
+        Axes to annotate.
+    layer_lines : dict of float -> str or None
+        Mapping from y-coordinate (in data units) to a label string. Pass
+        ``None`` as the value to draw the line without a label.
+    color : str, default "gray"
+        Color for both lines and labels.
+    linestyle : str, default "--"
+        Line style for the reference lines.
+    linewidth : float, default 0.5
+        Width of the reference lines in points.
+    label_fontsize : float, default 9.0
+        Font size for labels.
+    label_pad : float, default 0.01
+        Horizontal pad between the axis edge and each label, expressed
+        as a fraction of the axes width.
+    label_kwargs : dict, optional
+        Extra keyword arguments forwarded to :meth:`Axes.text` for the
+        labels. Overrides any of the defaults above.
+    line_kwargs : dict, optional
+        Extra keyword arguments forwarded to :meth:`Axes.axhline`.
+        Overrides any of the defaults above.
+
+    Returns
+    -------
+    plt.Axes
+        The same axes, with lines and labels added.
+
+    Examples
+    --------
+    >>> add_layer_lines(ax, {0: "L1", 250: "L2/3", 500: "L4",
+    ...                      800: "L5", 1100: "L6"})
+    """
+    line_defaults = {
+        "color": color,
+        "linestyle": linestyle,
+        "linewidth": linewidth,
+    }
+    line_defaults.update(line_kwargs or {})
+
+    label_defaults = {
+        "color": color,
+        "fontsize": label_fontsize,
+        "ha": "right",
+        "va": "center",
+    }
+    label_defaults.update(label_kwargs or {})
+
+    # Labels positioned in axes x-coords (fraction), data y-coords.
+    text_transform = ax.get_yaxis_transform()
+    label_x = -label_pad
+
+    for y, label in layer_lines.items():
+        ax.axhline(y, **line_defaults)
+        if label is not None:
+            ax.text(label_x, y, label, transform=text_transform, **label_defaults)
+    return ax
+
+
+def plot_lineup_grid(
+    groups: List[LineupGroup],
+    *,
+    projection: Union[str, Callable] = "xy",
+    align: Literal["natural", "soma", "point"] = "natural",
+    inter_cell_gap: float = 0.0,
+    inter_group_gap: float = 0.0,
+    row_max_cells: Optional[int] = None,
+    row_max_width: Optional[float] = None,
+    row_gap: float = 0.0,
+    layer_lines: Optional[Dict[float, Optional[str]]] = None,
+    layer_line_kwargs: Optional[dict] = None,
+    group_label_offset: float = 0.0,
+    group_label_kwargs: Optional[dict] = None,
+    alignment_points: Optional[List[List[np.ndarray]]] = None,
+    invert_y: bool = True,
+    units_per_inch: Optional[float] = None,
+    dpi: Optional[float] = None,
+    despine: bool = True,
+    ax: Optional[plt.Axes] = None,
+) -> plt.Axes:
+    """Plot a grid of cell groups with per-group styling and multi-row layout.
+
+    Each group's cells are placed contiguously, with optional gaps between
+    cells and between groups. When ``row_max_cells`` or ``row_max_width``
+    is set, groups wrap to new rows as units — a single group is never
+    split across rows. Group labels float above each group's plotted cells
+    (locally per group, not globally per row). Optional layer guide lines
+    can be drawn across the full plot.
+
+    Parameters
+    ----------
+    groups : list of LineupGroup
+        Groups of cells with shared styling. Build these by spreading
+        named style dicts into the constructor; see :class:`LineupGroup`
+        for examples.
+    projection : str or Callable, default "xy"
+        Shared projection for all cells.
+    align : {"natural", "soma", "point"}, default "natural"
+        Vertical alignment mode. ``"natural"`` preserves each cell's y
+        coordinate (anatomical depth); ``"soma"`` aligns each cell's
+        soma to the row's reference y; ``"point"`` aligns the per-cell
+        ``alignment_points`` to the row reference.
+    inter_cell_gap : float, default 0.0
+        Horizontal spacing between adjacent cells within a group, in
+        data units.
+    inter_group_gap : float, default 0.0
+        Extra horizontal spacing between adjacent groups, in data units.
+    row_max_cells : int, optional
+        Wrap to a new row before the running cell count exceeds this.
+    row_max_width : float, optional
+        Wrap to a new row before the running row width (data units)
+        exceeds this. When both ``row_max_cells`` and ``row_max_width``
+        are given, whichever fires first triggers the wrap.
+    row_gap : float, default 0.0
+        Vertical spacing between rows, in data units.
+    layer_lines : dict of float -> str or None, optional
+        ``{y: label}`` mapping passed to :func:`add_layer_lines`. Pass
+        ``None`` as a value to draw the line without a label.
+    layer_line_kwargs : dict, optional
+        Extra kwargs forwarded to :func:`add_layer_lines`.
+    group_label_offset : float, default 0.0
+        Vertical offset from each group's projected top edge to its
+        label, in data units. Direction is "above on screen": for
+        y-inverted plots (the default) the label sits at
+        ``min_plotted_y - group_label_offset``; otherwise at
+        ``max_plotted_y + group_label_offset``.
+    group_label_kwargs : dict, optional
+        Extra keyword arguments forwarded to :meth:`Axes.text` for the
+        group labels (e.g. ``fontsize``, ``color``, ``fontweight``).
+    alignment_points : list of list of np.ndarray, optional
+        Required when ``align="point"``. ``alignment_points[gi][ci]`` is
+        the 3D anchor point for cell ``ci`` in group ``gi``.
+    invert_y : bool, default True
+        Invert the y-axis for string projections containing ``"y"``.
+        Mirrors the behavior of other plot functions.
+    units_per_inch, dpi, despine : optional
+        Passed to :func:`single_panel_figure` when ``ax`` is ``None`` and
+        ``units_per_inch`` is given.
+    ax : plt.Axes, optional
+        Existing axes to render into. A new figure is created when
+        ``None``.
+
+    Returns
+    -------
+    plt.Axes
+        Axes with all cells, layer lines, and group labels drawn.
+    """
+    if not groups:
+        raise ValueError("groups must be a non-empty list")
+    if row_max_cells is not None and row_max_cells <= 0:
+        raise ValueError("row_max_cells must be positive when given")
+    if row_max_width is not None and row_max_width <= 0:
+        raise ValueError("row_max_width must be positive when given")
+    if align == "point" and alignment_points is None:
+        raise ValueError("alignment_points is required when align='point'")
+
+    # Resolve per-cell projection callables. When a group sets
+    # rotation_angle/rotation_axis, each of its cells gets its own
+    # rotation callable derived from the cell's own vertices and root.
+    per_cell_projections: List[List[Callable]] = [
+        _resolve_group_projections(group, projection, invert_y) for group in groups
+    ]
+
+    # Whether the rendered y axis will be inverted — drives row-stacking
+    # direction so subsequent rows appear below on screen regardless of
+    # projection orientation.
+    y_axis_inverted = invert_y and _should_invert_y_axis(projection)
+
+    cell_offsets, label_anchors = _grid_offsets(
+        groups,
+        projection=per_cell_projections,
+        align=align,
+        inter_cell_gap=inter_cell_gap,
+        inter_group_gap=inter_group_gap,
+        row_max_cells=row_max_cells,
+        row_max_width=row_max_width,
+        row_gap=row_gap,
+        alignment_points=alignment_points,
+        y_axis_inverted=y_axis_inverted,
+    )
+
+    # If no ax given and units_per_inch is set, size the figure to the
+    # plotted-bounds envelope. We need to know the final bounds *after*
+    # offsets, so recompute each cell's projected bounds with its offset
+    # AND its own per-cell projection (which may include rotation).
+    if ax is None and units_per_inch is not None:
+        per_cell_bounds = [
+            _plotted_bounds(
+                groups[gi].cells[ci].skeleton.vertices,
+                per_cell_projections[gi][ci],
+                cell_offsets[gi][ci][0],
+                cell_offsets[gi][ci][1],
+            )
+            for gi in range(len(groups))
+            for ci in range(len(groups[gi].cells))
+        ]
+        xmin = min(b[0, 0] for b in per_cell_bounds)
+        xmax = max(b[0, 1] for b in per_cell_bounds)
+        ymin = min(b[1, 0] for b in per_cell_bounds)
+        ymax = max(b[1, 1] for b in per_cell_bounds)
+        # Pad bounds to accommodate group labels above the cells.
+        if group_label_offset != 0.0:
+            ymin -= group_label_offset
+            ymax += group_label_offset
+        _, ax = single_panel_figure(
+            data_bounds_min=np.array([xmin, ymin]),
+            data_bounds_max=np.array([xmax, ymax]),
+            units_per_inch=units_per_inch,
+            despine=despine,
+            dpi=dpi,
+        )
+
+    if ax is None:
+        _, ax = plt.subplots()
+
+    # Render each cell with its group's resolved style and per-cell projection.
+    # The projection has already absorbed any rotation, so plot_cell_2d
+    # sees a plain callable and skips its own rotation resolution.
+    for gi, group in enumerate(groups):
+        for ci, cell in enumerate(group.cells):
+            offset_h, offset_v = cell_offsets[gi][ci]
+            style = _resolve_cell_style(group, ci)
+            plot_cell_2d(
+                cell,
+                projection=per_cell_projections[gi][ci],
+                offset_h=offset_h,
+                offset_v=offset_v,
+                invert_y=invert_y,
+                ax=ax,
+                **style,
+            )
+
+    # Layer guide lines.
+    if layer_lines:
+        add_layer_lines(ax, layer_lines, **(layer_line_kwargs or {}))
+
+    # Group labels: always *above the group on screen*. With y_axis_inverted
+    # the screen up direction is smaller data y, so we anchor at the
+    # group's ymin and move further negative. Without inversion, we anchor
+    # at ymax and move further positive.
+    text_defaults = {"ha": "center", "va": "bottom", "fontsize": 10}
+    if y_axis_inverted:
+        text_defaults["va"] = "top"
+    text_defaults.update(group_label_kwargs or {})
+    for gi, anchor in enumerate(label_anchors):
+        if anchor is None:
+            continue
+        center_x, ymin_plotted, ymax_plotted = anchor
+        if y_axis_inverted:
+            label_y = ymin_plotted - group_label_offset
+        else:
+            label_y = ymax_plotted + group_label_offset
+        ax.text(center_x, label_y, groups[gi].label, **text_defaults)
+
+    # Apply y-axis inversion at the lineup level. plot_cell_2d sees only
+    # our per-cell projection *callables* (which absorb any rotation), and
+    # callables can't be detected as "y"-bearing by _apply_y_inversion_to_axes.
+    # So nothing inside the cells triggered the inversion — we apply it here
+    # based on the original `projection` argument.
+    ax = _apply_y_inversion_to_axes(ax, projection, invert_y)
 
     return ax
