@@ -21,6 +21,8 @@ __all__ = [
     "TransitionSchema",
     "tree_map_decode",
     "decode_tree",
+    "tree_absorb_small_compartments",
+    "absorb_small_compartments",
 ]
 
 
@@ -41,8 +43,12 @@ class TransitionSchema:
     root_classes : sequence, optional
         Labels the root node is allowed to take. Defaults to all classes.
     default_cost : float
-        Cost for any transition not named in ``transitions``. Default 0.0
-        (endorsed).
+        Cost for any *label change* not named in ``transitions``. Default 0.0
+        (endorsed). Self-transitions are always free (diagonal forced to 0), so
+        a nonzero ``default_cost`` is a uniform switching penalty: a node needs
+        its unary advantage to exceed ``default_cost`` to flip away from its
+        parent's label. Acts as a total-variation regularizer on the number of
+        label changes over the tree.
     """
 
     def __init__(
@@ -77,9 +83,16 @@ class TransitionSchema:
 
     @property
     def cost_matrix(self) -> np.ndarray:
-        """``(K, K)`` matrix ``C[parent, child]`` of transition costs."""
+        """``(K, K)`` matrix ``C[parent, child]`` of transition costs.
+
+        Self-transitions (the diagonal) are 0 -- staying on a label is free --
+        so ``default_cost`` acts purely as a switching penalty on label
+        *changes*. An explicit ``(a, a)`` entry in ``transitions`` still
+        overrides its diagonal cell.
+        """
         K = self.n_classes
         C = np.full((K, K), self.default_cost, dtype=float)
+        np.fill_diagonal(C, 0.0)
         for (a, b), cost in self.transitions.items():
             C[self._index[a], self._index[b]] = float(cost)
         return C
@@ -222,3 +235,157 @@ def decode_tree(
     elif return_labels_as != "index":
         raise ValueError("return_labels_as must be 'index' or 'label'.")
     return labels, edge_cost
+
+
+def tree_absorb_small_compartments(
+    parent_array: np.ndarray,
+    root: int,
+    labels: np.ndarray,
+    min_size: Optional[int] = None,
+    node_weight: Optional[np.ndarray] = None,
+    min_weight: Optional[float] = None,
+) -> np.ndarray:
+    """Merge small same-label compartments into their parent's label.
+
+    A *compartment* is a maximal connected run of equally-labeled nodes on the
+    rooted tree -- its boundaries are exactly the edges where the label changes.
+    Any non-root compartment that is too small is relabeled to the label of the
+    node just above it (its parent compartment's label). This is a post-decode
+    cleanup for the short, noise-driven label flips a tree decode produces at
+    terminals and around skeletonization artifacts.
+
+    Two independent size criteria are offered; a compartment is absorbed if it
+    falls under *either* active threshold:
+
+    * ``min_size`` -- node count. A good tell for skeletonization/topology
+      artifacts, which show up as a few stray vertices regardless of scale.
+    * ``min_weight`` -- summed ``node_weight`` (e.g. path length). The
+      scale-aware criterion: how much evidence the compartment actually spans.
+
+    The rule is applied root-first to a fixpoint, so absorptions cascade: a
+    cleaned compartment can in turn absorb a child that has now become adjacent
+    to a different label. The root compartment has no parent and is never
+    changed.
+
+    Parameters
+    ----------
+    parent_array : np.ndarray
+        ``(n,)`` positional parent of each node; the root's parent is ``< 0``.
+    root : int
+        Positional index of the root node.
+    labels : np.ndarray
+        ``(n,)`` per-node labels (e.g. the output of :func:`tree_map_decode`).
+        Not modified in place.
+    min_size : int, optional
+        Absorb compartments with this many nodes or fewer.
+    node_weight : np.ndarray, optional
+        ``(n,)`` per-node weights (e.g. path length) summed to size a
+        compartment. Required when ``min_weight`` is given.
+    min_weight : float, optional
+        Absorb compartments whose summed ``node_weight`` is this or less.
+
+    Returns
+    -------
+    labels : np.ndarray
+        ``(n,)`` cleaned labels (a new array; the input is left untouched).
+    """
+    if min_size is None and min_weight is None:
+        raise ValueError("set min_size and/or min_weight.")
+    if min_weight is not None and node_weight is None:
+        raise ValueError("min_weight requires node_weight.")
+    parent_array = np.asarray(parent_array)
+    labels = np.asarray(labels).copy()
+    n = labels.shape[0]
+    if node_weight is not None:
+        node_weight = np.asarray(node_weight, dtype=float)
+
+    children: List[List[int]] = [[] for _ in range(n)]
+    for v in range(n):
+        p = parent_array[v]
+        if v != root and p >= 0:
+            children[p].append(v)
+
+    # Root-first order: every node precedes its descendants.
+    order: List[int] = []
+    stack = [root]
+    while stack:
+        v = stack.pop()
+        order.append(v)
+        stack.extend(children[v])
+
+    while True:
+        # Compartment id = top-most node of each maximal same-label run.
+        comp = np.empty(n, dtype=int)
+        for v in order:
+            p = parent_array[v]
+            if v == root or p < 0 or labels[p] != labels[v]:
+                comp[v] = v
+            else:
+                comp[v] = comp[p]
+
+        small = np.zeros(n, dtype=bool)  # indexed by compartment representative
+        if min_size is not None:
+            small |= np.bincount(comp, minlength=n) <= min_size
+        if min_weight is not None:
+            small |= np.bincount(comp, weights=node_weight, minlength=n) <= min_weight
+
+        # Root-first relabel: a small compartment takes its parent node's
+        # (already-updated) label, which cascades down the whole compartment.
+        changed = False
+        for v in order:
+            p = parent_array[v]
+            if v == root or p < 0 or not small[comp[v]]:
+                continue
+            if labels[v] != labels[p]:
+                labels[v] = labels[p]
+                changed = True
+        if not changed:
+            return labels
+
+
+def absorb_small_compartments(
+    skeleton,
+    labels: np.ndarray,
+    min_size: Optional[int] = None,
+    node_weight: Optional[np.ndarray] = None,
+    min_weight: Optional[float] = None,
+) -> np.ndarray:
+    """Clean small compartments on a skeleton/segment graph.
+
+    Thin wrapper over :func:`tree_absorb_small_compartments` that pulls topology
+    from a SkeletonLayer-like object (``parent_node_array``, ``root_positional``).
+    When ``min_weight`` is given without an explicit ``node_weight``, the
+    per-node weight defaults to ``skeleton.half_edge_length`` -- the per-vertex
+    cable length that sums to true cable length over a compartment -- so
+    ``min_weight`` reads directly as a cable-length threshold.
+
+    Parameters
+    ----------
+    skeleton : SkeletonLayer or SegmentGraph
+        Provides ``parent_node_array``, ``root_positional``, and (for the
+        ``min_weight`` default) ``half_edge_length``.
+    labels : np.ndarray
+        ``(n_nodes,)`` per-node labels (e.g. from :func:`decode_tree`).
+    min_size : int, optional
+        Absorb compartments with this many nodes or fewer.
+    node_weight : np.ndarray, optional
+        ``(n_nodes,)`` per-node weights. Defaults to ``skeleton.half_edge_length``
+        when ``min_weight`` is set and this is omitted.
+    min_weight : float, optional
+        Absorb compartments whose summed ``node_weight`` is this or less.
+
+    Returns
+    -------
+    labels : np.ndarray
+        ``(n_nodes,)`` cleaned labels (a new array).
+    """
+    if min_weight is not None and node_weight is None:
+        node_weight = skeleton.half_edge_length
+    return tree_absorb_small_compartments(
+        skeleton.parent_node_array,
+        skeleton.root_positional,
+        labels,
+        min_size=min_size,
+        node_weight=node_weight,
+        min_weight=min_weight,
+    )
