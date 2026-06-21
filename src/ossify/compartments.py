@@ -20,6 +20,7 @@ Notes for future generalization (kept intentionally close to l2label for now):
 
 import json
 import pathlib
+import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Callable, List, Literal, Optional, Union
@@ -45,8 +46,9 @@ __all__ = [
     "make_skel_prop_df",
     "make_skel_prop_df_base",
     "SkeletonVertexModel",
+    "ProbaVertexModel",
+    "StructuredLabeler",
     "AxonLabel",
-    "CompartmentLabel",
     "get_models",
     "load_model_config",
     "MappedFeature",
@@ -420,9 +422,18 @@ class SkeletonVertexModel(ABC):
 
     - :meth:`score` (required): per-vertex prediction from the feature dataframe
       (e.g. a model's class probabilities, or a heuristic statistic).
-    - :meth:`assign` (required): turn the (smoothed) scores into final labels.
+    - :meth:`assign` (optional): turn the (smoothed) scores into final labels.
+      The default takes the per-vertex argmax over score columns -- the
+      structure-free baseline. Override for a domain-specific label step.
     - :meth:`smooth` (optional): graph-aware smoothing of the scores; the default
       is the identity. Override e.g. with :func:`ossify.algorithms.smooth_features`.
+
+    A model is used in one of two ways. On its own it is a per-vertex labeler
+    (``predict``). As an **encoder** it produces unaries (``predict_unaries``)
+    for a :class:`StructuredLabeler`, which applies the
+    :class:`~ossify.structured_prediction.TransitionSchema` priors and an exact
+    tree decode -- the ``encode -> decode -> clean`` pipeline. The same model
+    fills either role; :meth:`assign` matters only for the standalone path.
 
     Feature extraction is shared and driven by ``feature_spec`` (see
     :func:`make_skel_prop_df`); subclasses with different feature needs just pass
@@ -465,9 +476,15 @@ class SkeletonVertexModel(ABC):
         """Optionally smooth scores along the skeleton graph. Default: identity."""
         return scores
 
-    @abstractmethod
     def assign(self, cell: Cell, scores: np.ndarray) -> np.ndarray:
-        """Turn (smoothed) per-vertex scores into final labels."""
+        """Turn (smoothed) per-vertex scores into final labels.
+
+        Default: per-vertex argmax over the score columns -- the structure-free
+        baseline that ignores graph topology. Override for a domain-specific
+        label step, or feed :meth:`predict_unaries` to a :class:`StructuredLabeler`
+        for a topology-aware decode instead.
+        """
+        return np.asarray(scores).argmax(axis=1)
 
     def predict(self, cell: Cell) -> np.ndarray:
         """Run the full extract -> score -> smooth -> assign flow."""
@@ -514,6 +531,15 @@ class SkeletonVertexModel(ABC):
 class AxonLabel(SkeletonVertexModel):
     """XGBoost axon/dendrite compartment classifier on ossify cells.
 
+    .. deprecated::
+        Use a :class:`ProbaVertexModel` encoder fed to a :class:`StructuredLabeler`
+        (the ``encode -> decode -> clean`` pipeline). The bundled XGBoost models
+        load via :meth:`ProbaVertexModel.from_config` /
+        :meth:`StructuredLabeler.from_config`. The structured decode replaces this
+        class's segment-vote/root-component heuristic with an exact tree-MAP under
+        declared :class:`~ossify.structured_prediction.TransitionSchema` priors,
+        and generalizes past the hard-coded binary axon/dendrite target.
+
     A concrete :class:`SkeletonVertexModel`: :meth:`score` is the XGBoost class
     probability, :meth:`smooth` is Laplacian smoothing along the skeleton, and
     :meth:`assign` applies the segment-vote + root-component (+ optional
@@ -539,6 +565,14 @@ class AxonLabel(SkeletonVertexModel):
         feature_columns: Optional[list] = None,
         feature_spec: Optional[List[FeatureDef]] = None,
     ):
+        warnings.warn(
+            "AxonLabel is deprecated; build a ProbaVertexModel encoder and feed it "
+            "to a StructuredLabeler (see StructuredLabeler.from_config for the "
+            "bundled XGBoost models). AxonLabel's segment-vote/root-component "
+            "heuristic is superseded by the structured tree decode.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if config is not None or (
             downstream_hops is None
             and upstream_hops is None
@@ -854,7 +888,7 @@ class AxonLabel(SkeletonVertexModel):
         )
 
 
-# --- Structured-decode compartment classifier ------------------------------
+# --- Probability encoder ----------------------------------------------------
 
 
 def _load_xgboost_classifier(filepath):
@@ -867,46 +901,35 @@ def _load_xgboost_classifier(filepath):
     return model
 
 
-class CompartmentLabel(SkeletonVertexModel):
-    """Estimator-agnostic compartment labeler with an exact tree decode.
+class ProbaVertexModel(SkeletonVertexModel):
+    """Per-vertex probability encoder wrapping any ``predict_proba`` estimator.
 
-    Mirrors :class:`AxonLabel` -- the shared ``extract -> score -> smooth ->
-    assign`` flow -- but replaces the segment-vote/root-component heuristic
-    ``assign`` with the principled structured-prediction tail: per-vertex class
-    probabilities become unaries, an exact tree-MAP :func:`decode_tree` applies
-    the :class:`~ossify.structured_prediction.TransitionSchema` priors, and an
-    optional :func:`~ossify.structured_prediction.absorb_small_compartments`
-    pass cleans up short, noise-driven label flips.
+    The **encode** stage of the ``encode -> decode -> clean`` pipeline. It owns
+    the feature extraction, the fitted classifier, and the optional probability
+    smoothing; its :meth:`predict_unaries` output feeds a :class:`StructuredLabeler`
+    for the topology-aware decode. Used on its own, :meth:`predict` returns the
+    structure-free per-vertex argmax.
 
-    The per-vertex classifier is **any fitted estimator exposing
-    ``predict_proba``** (XGBoost, scikit-learn ``RandomForestClassifier``, ...).
-    Its ``classes_`` define the probability column order; ``schema.classes`` must
-    line up with that order, which the constructor validates.
+    The classifier is **any fitted estimator exposing ``predict_proba``**
+    (XGBoost, scikit-learn ``RandomForestClassifier``, a future GNN wrapper, ...);
+    nothing here is XGBoost-specific. Its ``classes_`` (when present) define the
+    probability column order, which a :class:`StructuredLabeler` validates against
+    its schema.
 
     Parameters
     ----------
     estimator : object
-        Fitted classifier with ``predict_proba(X) -> (n, K)``. Its ``classes_``
-        attribute (when present) sets the column order.
+        Fitted classifier with ``predict_proba(X) -> (n, K)``.
     feature_columns : list of str
         Columns of the extracted feature frame to feed the estimator, in the
         order it was trained on.
-    schema : TransitionSchema
-        Declares the class names, transition priors, and ``default_cost``. There
-        is intentionally no default: a new estimator must declare its own priors.
-        ``schema.classes`` must match the estimator's class order (see above).
     downstream_hops, upstream_hops, bidirectional_hops : int
         Neighborhood-aggregation radii for feature extraction (must match how
         the estimator was trained).
     smooth_alpha : float, optional
         If given, Laplacian-smooth the probabilities along the skeleton with this
-        alpha before decoding. Default ``None`` leaves the decoder's transition
-        costs to do the graph coupling.
-    absorb_min_size : int, optional
-        Absorb decoded compartments with this many vertices or fewer.
-    absorb_min_weight : float, optional
-        Absorb decoded compartments whose cable length (``half_edge_length``) is
-        this or less.
+        alpha. Default ``None`` leaves graph coupling to the decoder's transition
+        costs.
     feature_spec : list of feature definitions, optional
         See :func:`make_skel_prop_df`. Defaults to :data:`DEFAULT_FEATURE_SPEC`.
     """
@@ -915,23 +938,16 @@ class CompartmentLabel(SkeletonVertexModel):
         self,
         estimator,
         feature_columns: List[str],
-        schema: TransitionSchema,
         *,
         downstream_hops: int = 0,
         upstream_hops: int = 0,
         bidirectional_hops: int = 0,
         smooth_alpha: Optional[float] = None,
-        absorb_min_size: Optional[int] = None,
-        absorb_min_weight: Optional[float] = None,
         feature_spec: Optional[List[FeatureDef]] = None,
     ):
         self._estimator = estimator
         self._feature_columns = list(feature_columns)
-        self._schema = schema
         self._smooth_alpha = smooth_alpha
-        self._absorb_min_size = absorb_min_size
-        self._absorb_min_weight = absorb_min_weight
-        self._validate_classes()
         super().__init__(
             downstream_hops=downstream_hops,
             upstream_hops=upstream_hops,
@@ -939,40 +955,114 @@ class CompartmentLabel(SkeletonVertexModel):
             feature_spec=feature_spec,
         )
 
-    def _validate_classes(self) -> None:
-        """Check schema.classes lines up with the estimator's class order.
+    @classmethod
+    def from_config(
+        cls,
+        config: Optional[Union[dict, str]] = None,
+        *,
+        smooth_alpha: Optional[float] = None,
+        feature_spec: Optional[List[FeatureDef]] = None,
+    ) -> "ProbaVertexModel":
+        """Build from a bundled XGBoost model config.
 
-        The estimator owns the column count and order (``predict_proba`` columns
-        follow ``classes_``). When ``classes_`` is just ``range(K)`` (or the
-        ``[False, True]`` placeholder), the schema supplies the names and only
-        the count is checked; when it carries meaningful labels, the order must
-        match exactly.
+        Loads the estimator, feature columns, and hop settings from a shipped
+        model config (see :func:`load_model_config`). ``smooth_alpha`` defaults
+        to the config's ``spread_alpha`` when not overridden.
         """
-        est_classes = getattr(self._estimator, "classes_", None)
-        if est_classes is None:
-            return  # validated against predict_proba width at score() time
-        est_classes = list(est_classes)
-        K = len(est_classes)
-        if len(self._schema.classes) != K:
-            raise ValueError(
-                f"schema has {len(self._schema.classes)} classes but the "
-                f"estimator predicts {K}."
-            )
-        if est_classes != list(range(K)) and est_classes != list(self._schema.classes):
-            raise ValueError(
-                f"estimator.classes_={est_classes} must match schema.classes="
-                f"{list(self._schema.classes)} in order; these define the "
-                "predict_proba column order the unaries inherit."
-            )
+        if not isinstance(config, dict):
+            config = load_model_config(config, dir=None)
+        if smooth_alpha is None:
+            smooth_alpha = config.get("spread_alpha")
+        return cls(
+            _load_xgboost_classifier(config["model_file"]),
+            config["feature_columns"],
+            downstream_hops=config.get("downstream_hops", 0),
+            upstream_hops=config.get("upstream_hops", 0),
+            bidirectional_hops=config.get("bidirectional_hops", 0),
+            smooth_alpha=smooth_alpha,
+            feature_spec=feature_spec,
+        )
 
     @property
-    def classes(self) -> tuple:
-        """Class labels, in unary/probability column order (from the schema)."""
-        return tuple(self._schema.classes)
+    def estimator(self):
+        return self._estimator
 
     @property
-    def schema(self) -> TransitionSchema:
-        return self._schema
+    def feature_columns(self) -> list:
+        return list(self._feature_columns)
+
+    @property
+    def classes_(self):
+        """The estimator's class order, if it exposes ``classes_`` (else None)."""
+        c = getattr(self._estimator, "classes_", None)
+        return None if c is None else list(c)
+
+    # --- SkeletonVertexModel hooks -----------------------------------------
+
+    def score(self, features: pd.DataFrame) -> np.ndarray:
+        """Per-vertex class probabilities ``(n_vertices, K)`` from the estimator."""
+        return self._estimator.predict_proba(features[self._feature_columns].values)
+
+    def smooth(self, cell: Cell, scores: np.ndarray) -> np.ndarray:
+        """Optional Laplacian smoothing of probabilities; identity if no alpha."""
+        if self._smooth_alpha is None:
+            return scores
+        return smooth_features(
+            cell.skeleton, scores.astype(float), alpha=self._smooth_alpha
+        )
+
+
+# --- Structured compartment labeler -----------------------------------------
+
+
+class StructuredLabeler:
+    """Compose an encoder + transition priors into a tree-decoded labeler.
+
+    The **decode -> clean** seat of the ``encode -> decode -> clean`` pipeline,
+    and the principled successor to :class:`AxonLabel`'s segment-vote/root-component
+    heuristic. It pulls per-vertex unaries from any :class:`SkeletonVertexModel`
+    encoder (:meth:`~SkeletonVertexModel.predict_unaries`), applies the
+    :class:`~ossify.structured_prediction.TransitionSchema` priors via an exact
+    tree-MAP :func:`~ossify.structured_prediction.decode_tree`, and optionally
+    runs :func:`~ossify.structured_prediction.absorb_small_compartments` to clean
+    up short, noise-driven label flips.
+
+    Keeping the encoder a separate object is the point: ossify owns the priors and
+    the exact inference, the encoder owns features->probabilities, and either side
+    can be swapped (a tabular classifier today, a GNN later) without touching the
+    other. The decode/schema/absorb stack is fully K-class, so multi-compartment
+    targets (soma / basal / apical / axon) need only a richer estimator and schema.
+
+    Parameters
+    ----------
+    encoder : SkeletonVertexModel
+        Produces ``(n_vertices, K)`` unaries via ``predict_unaries`` -- typically
+        a :class:`ProbaVertexModel`, but any subclass works.
+    schema : TransitionSchema
+        Declares the class names, transition priors, and ``default_cost``. There
+        is intentionally no default: a new estimator must declare its own priors.
+        ``schema.classes`` must match the encoder's class order (validated when
+        the encoder exposes ``classes_``).
+    absorb_min_size : int, optional
+        Absorb decoded compartments with this many vertices or fewer.
+    absorb_min_weight : float, optional
+        Absorb decoded compartments whose cable length (``half_edge_length``) is
+        this or less.
+    """
+
+    def __init__(
+        self,
+        encoder: SkeletonVertexModel,
+        schema: TransitionSchema,
+        *,
+        absorb_min_size: Optional[int] = None,
+        absorb_min_weight: Optional[float] = None,
+    ):
+        self._encoder = encoder
+        self._schema = schema
+        self._absorb_min_size = absorb_min_size
+        self._absorb_min_weight = absorb_min_weight
+        self._validate_classes()
 
     @classmethod
     def from_config(
@@ -984,54 +1074,76 @@ class CompartmentLabel(SkeletonVertexModel):
         absorb_min_size: Optional[int] = None,
         absorb_min_weight: Optional[float] = None,
         feature_spec: Optional[List[FeatureDef]] = None,
-    ) -> "CompartmentLabel":
+    ) -> "StructuredLabeler":
         """Build from a bundled XGBoost model config plus an explicit schema.
 
-        Loads the estimator, feature columns, and hop settings from a shipped
-        model config (see :func:`load_model_config`); ``schema`` is required
-        because the config carries no transition priors. ``smooth_alpha``
-        defaults to the config's ``spread_alpha`` when not overridden.
+        Convenience for the common tabular case: builds a
+        :class:`ProbaVertexModel` via :meth:`ProbaVertexModel.from_config` and
+        wraps it. ``schema`` is required because the config carries no transition
+        priors; ``smooth_alpha`` defaults to the config's ``spread_alpha``.
         """
-        if not isinstance(config, dict):
-            config = load_model_config(config, dir=None)
-        if smooth_alpha is None:
-            smooth_alpha = config.get("spread_alpha")
+        encoder = ProbaVertexModel.from_config(
+            config, smooth_alpha=smooth_alpha, feature_spec=feature_spec
+        )
         return cls(
-            _load_xgboost_classifier(config["model_file"]),
-            config["feature_columns"],
+            encoder,
             schema,
-            downstream_hops=config.get("downstream_hops", 0),
-            upstream_hops=config.get("upstream_hops", 0),
-            bidirectional_hops=config.get("bidirectional_hops", 0),
-            smooth_alpha=smooth_alpha,
             absorb_min_size=absorb_min_size,
             absorb_min_weight=absorb_min_weight,
-            feature_spec=feature_spec,
         )
 
-    # --- SkeletonVertexModel hooks -----------------------------------------
+    def _validate_classes(self) -> None:
+        """Check schema.classes lines up with the encoder's class order.
 
-    def score(self, features: pd.DataFrame) -> np.ndarray:
-        """Per-vertex class probabilities ``(n_vertices, K)`` from the estimator."""
-        proba = self._estimator.predict_proba(features[self._feature_columns].values)
-        if proba.shape[1] != len(self._schema.classes):
+        When the encoder exposes ``classes_`` (e.g. a :class:`ProbaVertexModel`
+        over a fitted estimator), the column count and order are checked: a
+        ``range(K)`` / ``[False, True]`` placeholder just supplies the count and
+        the schema names the classes; meaningful labels must match in order. An
+        encoder without ``classes_`` is validated against the unary width at
+        decode time.
+        """
+        est_classes = getattr(self._encoder, "classes_", None)
+        if est_classes is None:
+            return  # validated against unary width in _decode()
+        est_classes = list(est_classes)
+        K = len(est_classes)
+        if len(self._schema.classes) != K:
             raise ValueError(
-                f"estimator returned {proba.shape[1]} probability columns but "
-                f"schema has {len(self._schema.classes)} classes."
+                f"schema has {len(self._schema.classes)} classes but the "
+                f"encoder predicts {K}."
             )
-        return proba
+        if est_classes != list(range(K)) and est_classes != list(self._schema.classes):
+            raise ValueError(
+                f"encoder.classes_={est_classes} must match schema.classes="
+                f"{list(self._schema.classes)} in order; these define the "
+                "probability/unary column order."
+            )
 
-    def smooth(self, cell: Cell, scores: np.ndarray) -> np.ndarray:
-        """Optional Laplacian smoothing of probabilities; identity if no alpha."""
-        if self._smooth_alpha is None:
-            return scores
-        return smooth_features(
-            cell.skeleton, scores.astype(float), alpha=self._smooth_alpha
-        )
+    @property
+    def encoder(self) -> SkeletonVertexModel:
+        return self._encoder
 
-    def _decode(self, cell: Cell, scores: np.ndarray):
-        """Decode (smoothed) probabilities to labels + per-edge violation costs."""
-        unaries = self.to_unaries(scores)
+    @property
+    def classes(self) -> tuple:
+        """Class labels, in unary/probability column order (from the schema)."""
+        return tuple(self._schema.classes)
+
+    @property
+    def schema(self) -> TransitionSchema:
+        return self._schema
+
+    def predict_unaries(self, cell: Cell) -> np.ndarray:
+        """The encoder's ``(n_vertices, K)`` log-potentials for this cell."""
+        return self._encoder.predict_unaries(cell)
+
+    def _decode(self, cell: Cell):
+        """Decode the encoder's unaries to labels + per-edge violation costs."""
+        unaries = self._encoder.predict_unaries(cell)
+        if unaries.shape[1] != len(self._schema.classes):
+            raise ValueError(
+                f"encoder produced {unaries.shape[1]} unary columns but schema "
+                f"has {len(self._schema.classes)} classes."
+            )
         labels, edge_cost = decode_tree(
             cell.skeleton, unaries, self._schema, return_labels_as="index"
         )
@@ -1043,22 +1155,6 @@ class CompartmentLabel(SkeletonVertexModel):
                 min_weight=self._absorb_min_weight,
             )
         return labels, edge_cost
-
-    def assign(self, cell: Cell, scores: np.ndarray) -> np.ndarray:
-        """Decode (+absorb) the scores into per-vertex class indices."""
-        labels, _ = self._decode(cell, scores)
-        return labels
-
-    def _run(self, cell: Cell):
-        """Full extract -> score -> smooth -> decode (+absorb) flow.
-
-        Returns ``(label_indices, edge_cost)``; the single path shared by
-        :meth:`predict` and :meth:`predict_with_violations`.
-        """
-        scores = self.smooth(cell, self.score(self.extract_features(cell)))
-        return self._decode(cell, scores)
-
-    # --- Domain API --------------------------------------------------------
 
     def _as_labels(self, indices: np.ndarray, return_labels_as: str) -> np.ndarray:
         if return_labels_as == "index":
@@ -1073,7 +1169,7 @@ class CompartmentLabel(SkeletonVertexModel):
         ``return_labels_as`` is ``"label"`` (schema class labels, default) or
         ``"index"`` (class indices).
         """
-        labels, _ = self._run(cell)
+        labels, _ = self._decode(cell)
         return self._as_labels(labels, return_labels_as)
 
     def predict_with_violations(self, cell: Cell, return_labels_as: str = "label"):
@@ -1083,5 +1179,5 @@ class CompartmentLabel(SkeletonVertexModel):
         decoder's transition violations (a morphology QC signal). Costs are from
         the decode, before any small-compartment absorption.
         """
-        labels, edge_cost = self._run(cell)
+        labels, edge_cost = self._decode(cell)
         return self._as_labels(labels, return_labels_as), edge_cost

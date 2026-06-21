@@ -1,6 +1,7 @@
-"""Tests for ossify.compartments.CompartmentLabel.
+"""Tests for the structured compartment-labeling composition.
 
-Decode/validation tests run with a tiny synthetic skeleton and a fake estimator
+``ProbaVertexModel`` (encode) feeds ``StructuredLabeler`` (decode + clean). The
+decode/validation tests run with a tiny synthetic skeleton and a fake estimator
 (no ML framework or sample data needed). The end-to-end tests -- including the
 "any sklearn estimator" path -- are gated on the v1dd sample meshwork and the
 optional xgboost/sklearn extras.
@@ -12,7 +13,7 @@ import numpy as np
 import pytest
 
 from ossify import Cell
-from ossify.compartments import CompartmentLabel
+from ossify.compartments import ProbaVertexModel, StructuredLabeler
 from ossify.structured_prediction import TransitionSchema
 
 DATA = pathlib.Path(__file__).parent / "data"
@@ -45,6 +46,26 @@ class _FakeProba:
         return np.asarray(X, dtype=float)
 
 
+class _FixedEncoder:
+    """Encoder stub: returns pre-set per-vertex probabilities as unaries.
+
+    Duck-types the bits ``StructuredLabeler`` uses (``predict_unaries`` and
+    ``classes_``), so the decode tail can be exercised with synthetic scores
+    without any feature extraction or fitted model.
+    """
+
+    def __init__(self, scores, classes):
+        self._scores = np.asarray(scores, dtype=float)
+        self.classes_ = list(classes)
+
+    def predict_unaries(self, cell):
+        return np.log(np.clip(self._scores, 1e-9, None))
+
+
+def _encoder(estimator, feature_columns=("f",), **kwargs):
+    return ProbaVertexModel(estimator, list(feature_columns), **kwargs)
+
+
 def _schema(revert=50.0, default_cost=0.0):
     return TransitionSchema(
         classes=["dendrite", "axon"],
@@ -64,56 +85,72 @@ def _chain_cell(n=6):
 
 class TestClassValidation:
     def test_integer_placeholder_classes_ok(self):
-        m = CompartmentLabel(_FakeProba([0, 1]), ["f"], _schema())
+        m = StructuredLabeler(_encoder(_FakeProba([0, 1])), _schema())
         assert m.classes == ("dendrite", "axon")
 
     def test_bool_placeholder_classes_ok(self):
         # [False, True] == [0, 1] -> treated as positional placeholders.
-        CompartmentLabel(_FakeProba([False, True]), ["f"], _schema())
+        StructuredLabeler(_encoder(_FakeProba([False, True])), _schema())
 
     def test_string_classes_must_match_order(self):
-        CompartmentLabel(_FakeProba(["dendrite", "axon"]), ["f"], _schema())
+        StructuredLabeler(_encoder(_FakeProba(["dendrite", "axon"])), _schema())
         with pytest.raises(ValueError, match="must match schema.classes"):
-            CompartmentLabel(_FakeProba(["axon", "dendrite"]), ["f"], _schema())
+            StructuredLabeler(_encoder(_FakeProba(["axon", "dendrite"])), _schema())
 
     def test_count_mismatch_raises(self):
         with pytest.raises(ValueError, match="predicts 3"):
-            CompartmentLabel(_FakeProba([0, 1, 2]), ["f"], _schema())
+            StructuredLabeler(_encoder(_FakeProba([0, 1, 2])), _schema())
 
     def test_missing_classes_attr_is_allowed(self):
         class NoClasses:
             def predict_proba(self, X):
                 return np.asarray(X, dtype=float)
 
-        CompartmentLabel(NoClasses(), ["f"], _schema())  # validated at score()
+        # No classes_ on the estimator -> validated against unary width at decode.
+        StructuredLabeler(_encoder(NoClasses()), _schema())
 
 
 class TestDecodeTail:
     def test_absorb_collapses_noisy_tip(self):
         cell = _chain_cell(6)
         scores = np.array([[0.99, 0.01]] * 4 + [[0.4, 0.6]] * 2)
-        on = CompartmentLabel(_FakeProba([0, 1]), ["f"], _schema(), absorb_min_size=2)
-        off = CompartmentLabel(_FakeProba([0, 1]), ["f"], _schema())
-        np.testing.assert_array_equal(on.assign(cell, scores), [0, 0, 0, 0, 0, 0])
-        np.testing.assert_array_equal(off.assign(cell, scores), [0, 0, 0, 0, 1, 1])
+        on = StructuredLabeler(
+            _FixedEncoder(scores, [0, 1]), _schema(), absorb_min_size=2
+        )
+        off = StructuredLabeler(_FixedEncoder(scores, [0, 1]), _schema())
+        np.testing.assert_array_equal(
+            on.predict(cell, return_labels_as="index"), [0, 0, 0, 0, 0, 0]
+        )
+        np.testing.assert_array_equal(
+            off.predict(cell, return_labels_as="index"), [0, 0, 0, 0, 1, 1]
+        )
 
     def test_default_cost_resists_trivial_flip(self):
         cell = _chain_cell(4)
         # a single weakly-axon leaf; with no switching penalty it flips...
         scores = np.array([[0.99, 0.01]] * 3 + [[0.45, 0.55]])
-        weak = CompartmentLabel(_FakeProba([0, 1]), ["f"], _schema(default_cost=0.0))
-        np.testing.assert_array_equal(weak.assign(cell, scores), [0, 0, 0, 1])
+        weak = StructuredLabeler(
+            _FixedEncoder(scores, [0, 1]), _schema(default_cost=0.0)
+        )
+        np.testing.assert_array_equal(
+            weak.predict(cell, return_labels_as="index"), [0, 0, 0, 1]
+        )
         # ...but a switching penalty larger than its log-odds pins it to dendrite.
-        firm = CompartmentLabel(_FakeProba([0, 1]), ["f"], _schema(default_cost=1.0))
-        np.testing.assert_array_equal(firm.assign(cell, scores), [0, 0, 0, 0])
+        firm = StructuredLabeler(
+            _FixedEncoder(scores, [0, 1]), _schema(default_cost=1.0)
+        )
+        np.testing.assert_array_equal(
+            firm.predict(cell, return_labels_as="index"), [0, 0, 0, 0]
+        )
 
     def test_label_index_mapping(self):
         cell = _chain_cell(4)
         scores = np.array([[0.99, 0.01]] * 2 + [[0.1, 0.9]] * 2)
-        m = CompartmentLabel(_FakeProba([0, 1]), ["f"], _schema())
-        idx = m.assign(cell, scores)
+        m = StructuredLabeler(_FixedEncoder(scores, [0, 1]), _schema())
+        idx = m.predict(cell, return_labels_as="index")
         np.testing.assert_array_equal(
-            m._as_labels(idx, "label"), ["dendrite", "dendrite", "axon", "axon"]
+            m.predict(cell, return_labels_as="label"),
+            ["dendrite", "dendrite", "axon", "axon"],
         )
         np.testing.assert_array_equal(m._as_labels(idx, "index"), idx)
         with pytest.raises(ValueError):
@@ -135,7 +172,7 @@ def test_from_config_end_to_end():
 
     cell, _ = ossify.import_legacy_meshwork(str(MESHWORK), as_pcg_skel=True)
     schema = _schema(revert=10.0)
-    m = CompartmentLabel.from_config(schema, MODEL, absorb_min_size=3)
+    m = StructuredLabeler.from_config(schema, MODEL, absorb_min_size=3)
     n = cell.skeleton.n_vertices
 
     labels = m.predict(cell)
@@ -156,21 +193,23 @@ def test_accepts_plain_sklearn_estimator():
     from sklearn.ensemble import RandomForestClassifier
 
     import ossify
-    from ossify.compartments import AxonLabel, make_skel_prop_df
+    from ossify.compartments import ProbaVertexModel, make_skel_prop_df
 
     cell, _ = ossify.import_legacy_meshwork(str(MESHWORK), as_pcg_skel=True)
     feats = make_skel_prop_df(cell, downstream_hops=15)
     X = feats[FEATURE_COLUMNS].values
-    # supervise on the bundled model's mask just to obtain a fitted sklearn model
-    y = AxonLabel(MODEL).predict(cell).astype(int)
+    # supervise on the bundled model's structured labels just to fit a sklearn model
+    y = (
+        StructuredLabeler.from_config(_schema(revert=10.0), MODEL)
+        .predict(cell, return_labels_as="index")
+        .astype(int)
+    )
     rf = RandomForestClassifier(n_estimators=20, random_state=0).fit(X, y)
     assert list(rf.classes_) == [0, 1]  # positional placeholders; schema names them
 
-    m = CompartmentLabel(
-        rf,
-        FEATURE_COLUMNS,
+    m = StructuredLabeler(
+        ProbaVertexModel(rf, FEATURE_COLUMNS, downstream_hops=15),
         _schema(revert=10.0),
-        downstream_hops=15,
         absorb_min_size=3,
     )
     labels = m.predict(cell)
