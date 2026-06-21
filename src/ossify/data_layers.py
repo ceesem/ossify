@@ -32,6 +32,29 @@ if TYPE_CHECKING:
 SKEL_LAYER_NAME = "skeleton"
 GRAPH_LAYER_NAME = "graph"
 MESH_LAYER_NAME = "mesh"
+SEGMENT_GRAPH_LAYER_NAME = "segment_graph"
+
+
+def _annotation_filter_mask(df: pd.DataFrame, where) -> np.ndarray:
+    """Boolean mask selecting rows of an annotation/proximity frame.
+
+    ``where`` is one of:
+    - a dict ``{column: value}`` or ``{column: iterable_of_values}`` -- equality
+      / membership, AND-combined across keys;
+    - a pandas eval string (e.g. ``"target_type == 'spine'"``);
+    - a callable taking the frame and returning a boolean mask.
+    """
+    if callable(where):
+        return np.asarray(where(df), dtype=bool)
+    if isinstance(where, str):
+        return np.asarray(df.eval(where), dtype=bool)
+    mask = np.ones(len(df), dtype=bool)
+    for col, val in where.items():
+        if isinstance(val, (list, tuple, set, np.ndarray, pd.Series)):
+            mask &= df[col].isin(list(val)).to_numpy()
+        else:
+            mask &= (df[col] == val).to_numpy()
+    return mask
 
 
 class EdgeMixin(ABC):
@@ -1516,6 +1539,7 @@ class GraphLayer(PointMixin, EdgeMixin):
         agg_direction: Literal["undirected", "upstream", "downstream"] = "undirected",
         compute_net_path: bool = False,
         node_weight: Optional[np.ndarray] = None,
+        where: Union[dict, str, Callable, None] = None,
     ) -> pd.DataFrame:
         prox_df = self.proximity_mapping(
             distance_threshold=distance_threshold,
@@ -1554,6 +1578,8 @@ class GraphLayer(PointMixin, EdgeMixin):
             how="left",
         )
         anno_df.drop(columns=local_vertex_col, inplace=True)
+        if where is not None:
+            prox_df = prox_df[_annotation_filter_mask(prox_df, where)]
         if agg == "count":
             count_ser = prox_df.groupby("idx")[local_vertex_col].count()
             count_ser.name = f"{annotation}_count"
@@ -1573,6 +1599,7 @@ class GraphLayer(PointMixin, EdgeMixin):
         agg: Union[str, dict] = "count",
         chunk_size: int = 1000,
         validate: bool = False,
+        where: Union[dict, str, Callable, None] = None,
     ) -> Union[pd.Series, pd.DataFrame]:
         """Aggregate a point annotation to a feature on the layer.
 
@@ -1588,6 +1615,10 @@ class GraphLayer(PointMixin, EdgeMixin):
             Size of processing chunks for memory efficiency. Default 1000.
         validate : bool, optional
             Whether to validate mapping consistency. Default False.
+        where : dict, str, or callable, optional
+            Filter on the annotation's properties before aggregating, e.g.
+            ``{"target_type": "spine"}`` to count only spine-targeting synapses.
+            See :func:`_annotation_filter_mask`.
 
         Returns
         -------
@@ -1601,7 +1632,148 @@ class GraphLayer(PointMixin, EdgeMixin):
             chunk_size=chunk_size,
             validate=validate,
             agg_direction="undirected",
+            where=where,
         )
+
+    def aggregate_features(
+        self,
+        features: Union[str, list],
+        radius: float,
+        metric: Literal["hops", "distance"] = "hops",
+        direction: Literal["undirected", "upstream", "downstream"] = "undirected",
+        agg: Union[str, dict] = "mean",
+        weight: Optional[Callable] = None,
+        inclusive: bool = True,
+        chunk_size: int = 1000,
+    ) -> pd.DataFrame:
+        """Aggregate existing vertex features over each vertex's graph neighborhood.
+
+        For each vertex, gathers the neighborhood of vertices within ``radius``
+        (measured in integer hops or euclidean distance) and reduces the named
+        feature(s) over that neighborhood. With a ``weight`` kernel this acts as
+        a local, finite-support smoothing operation; see :func:`ossify.algorithms.smooth_features`
+        for global heat-equation smoothing instead.
+
+        Parameters
+        ----------
+        features : Union[str, list, np.ndarray, pd.Series, pd.DataFrame]
+            Feature column name(s) on this layer to aggregate, or precomputed
+            values aligned to this layer's vertices (array/Series/DataFrame). A
+            DataFrame or Series whose index matches the vertex index is reordered
+            to vertex order; otherwise values are assumed to already be in
+            positional order.
+        radius : float
+            Neighborhood size. Number of hops if ``metric="hops"`` (integer), or
+            maximum euclidean path distance if ``metric="distance"``.
+        metric : Literal["hops", "distance"], optional
+            Whether ``radius`` counts graph hops (default) or euclidean path distance.
+        direction : Literal["undirected", "upstream", "downstream"], optional
+            Direction along the graph to gather neighbors. "upstream"/"downstream"
+            are only valid for skeletons. Default "undirected".
+        agg : Union[str, dict], optional
+            Reduction over the neighborhood. Anything pandas ``groupby.agg`` accepts.
+            "sum" and "mean" use a fast sparse matmul and support weighting; other
+            reductions (e.g. "max", "median") fall back to a grouped aggregation and
+            require ``weight=None``. Default "mean".
+        weight : Optional[Callable], optional
+            A kernel ``weight(distances) -> weights`` applied to neighbors before
+            aggregation, where ``distances`` is the neighbor distance array (hops or
+            euclidean per ``metric``). Only valid with ``agg`` of "sum" or "mean".
+            ``None`` (default) gives uniform weights.
+        inclusive : bool, optional
+            Whether each vertex includes itself in its neighborhood. Default True.
+        chunk_size : int, optional
+            Number of source vertices to process per dijkstra chunk. Default 1000.
+
+        Returns
+        -------
+        pd.DataFrame
+            Aggregated features indexed by this layer's vertex index.
+        """
+        if direction in ("upstream", "downstream") and not isinstance(
+            self, SkeletonLayer
+        ):
+            raise ValueError(
+                "direction can only be 'undirected' for non-skeleton graph layers."
+            )
+        if isinstance(features, str):
+            features = [features]
+        weighted = weight is not None
+        if weighted and not (isinstance(agg, str) and agg in ("sum", "mean")):
+            raise ValueError(
+                "A weight kernel is only supported with agg='sum' or agg='mean'."
+            )
+
+        if isinstance(features, list) and all(isinstance(f, str) for f in features):
+            cols = list(features)
+            X = self.nodes[cols].to_numpy(dtype=float)
+        else:
+            vals = features
+            if isinstance(vals, pd.Series):
+                vals = vals.to_frame()
+            if isinstance(vals, pd.DataFrame):
+                cols = list(vals.columns)
+                if not vals.index.equals(pd.Index(self.vertex_index)):
+                    try:
+                        vals = vals.loc[self.vertex_index]
+                    except KeyError:
+                        pass
+                X = vals.to_numpy(dtype=float)
+            else:
+                X = np.asarray(vals, dtype=float)
+                if X.ndim == 1:
+                    X = X[:, None]
+                cols = [f"feature_{i}" for i in range(X.shape[1])]
+        if X.shape[0] != self.n_vertices:
+            raise ValueError(
+                "Feature values must have one row per vertex "
+                f"({self.n_vertices}); got {X.shape[0]}."
+            )
+
+        if metric == "hops":
+            graph = self.csgraph_binary
+            limit = radius + 0.5
+        elif metric == "distance":
+            graph = self.csgraph
+            limit = radius
+        else:
+            raise ValueError("metric must be 'hops' or 'distance'.")
+
+        idx, prox, dist = gf.build_proximity_lists_chunked(
+            self.vertices,
+            graph,
+            distance_threshold=limit,
+            chunk_size=chunk_size,
+            orientation=direction,
+            return_distances=True,
+        )
+        if not inclusive:
+            keep = idx != prox
+            idx, prox, dist = idx[keep], prox[keep], dist[keep]
+
+        n = self.n_vertices
+        if weighted:
+            w = np.asarray(weight(dist), dtype=float)
+        else:
+            w = np.ones(len(idx), dtype=float)
+
+        if isinstance(agg, str) and agg in ("sum", "mean"):
+            W = sparse.csr_matrix((w, (idx, prox)), shape=(n, n))
+            num = W @ X
+            if agg == "mean":
+                denom = np.asarray(W.sum(axis=1)).flatten()
+                denom[denom == 0] = np.nan
+                result = num / denom[:, None]
+            else:
+                result = num
+            return pd.DataFrame(result, columns=cols, index=self.vertex_index)
+        else:
+            long_df = pd.DataFrame(X[prox], columns=cols)
+            long_df["__idx"] = idx
+            grouped = long_df.groupby("__idx").agg(agg)
+            grouped = grouped.reindex(np.arange(n))
+            grouped.index = self.vertex_index
+            return grouped
 
     def _get_layer_metrics(self) -> str:
         """Get layer metrics including vertex and edge count."""
@@ -2063,6 +2235,47 @@ class SkeletonLayer(GraphLayer):
         )
         return self
 
+    def cut_graph(
+        self,
+        vertices: Union[int, np.ndarray, list],
+        directed: bool = True,
+        euclidean_weight: bool = True,
+        as_positional: bool = False,
+    ) -> sparse.csr_matrix:
+        """Return a sparse graph with the given vertices cut off from their parents.
+
+        Each vertex in ``vertices`` has the edge to its parent removed, splitting
+        the skeleton into separate connected components below those cut points.
+
+        Parameters
+        ----------
+        vertices : Union[int, np.ndarray, list]
+            The vertices to cut from their parents.
+        directed : bool, optional
+            Whether to return a directed graph (child -> parent). Default True.
+        euclidean_weight : bool, optional
+            Whether edges are weighted by euclidean length (True) or unweighted (False).
+            Default True.
+        as_positional : bool, optional
+            Whether ``vertices`` are positional indices. If False, they are treated
+            as vertex indices. Default False.
+
+        Returns
+        -------
+        sparse.csr_matrix
+            The cut graph in positional indices.
+        """
+        if isinstance(vertices, Number):
+            vertices = [vertices]
+        vertices, _ = self._vertices_to_positional(vertices, as_positional)
+        return gf.cut_graph(
+            self.vertices,
+            self.edges_positional,
+            vertices,
+            directed=directed,
+            euclidean_weight=euclidean_weight,
+        )
+
     def distance_to_root(
         self, vertices: Optional[np.ndarray] = None, as_positional=False
     ) -> np.ndarray:
@@ -2420,6 +2633,96 @@ class SkeletonLayer(GraphLayer):
         else:
             return [self.segments[ii] for ii in segment_ids]
 
+    def segment_graph(
+        self,
+        max_length: Optional[float] = None,
+        features: Optional[List[str]] = None,
+        agg: Optional[dict] = None,
+        include_length: bool = True,
+    ) -> "SegmentGraph":
+        """Contract unbranched segments into a reduced topological tree.
+
+        Each (optionally length-capped) segment becomes a single node positioned
+        at its distal endpoint; the root is split into its own node. The result
+        is a :class:`SegmentGraph` (a full :class:`SkeletonLayer`), so the same
+        rooted-tree machinery runs on the contracted tree, and per-node values
+        can be broadcast back to vertices via :meth:`SegmentGraph.to_vertices`.
+
+        Parameters
+        ----------
+        max_length : float, optional
+            Cap on segment length; long unbranched runs are split into multiple
+            chunk-nodes so their features are not averaged over an entire highway.
+            ``None`` (default) uses the natural branch-point-to-branch-point
+            segments.
+        features : list of str, optional
+            Source-skeleton feature columns to roll up onto the nodes.
+        agg : dict, optional
+            Per-feature reducer keyed by column name. Each value is one of
+            ``"sum"``, ``"mean"``, ``"max"``, ``"min"``, ``"median"``,
+            ``"distal"`` (value at the distal endpoint), ``"proximal"`` (value at
+            the proximal endpoint), or a callable applied to the node's value
+            array. Columns not present default to ``"mean"``. Weighted means are
+            not a reducer: use sum-then-derive (roll up ``x * half_edge_length``
+            and ``half_edge_length`` by ``"sum"``, then divide).
+        include_length : bool, default True
+            Add a ``length`` feature = sum of ``half_edge_length`` over each
+            node's vertices (conserves total cable length).
+
+        Returns
+        -------
+        SegmentGraph
+        """
+        if max_length is not None:
+            segments, _ = self.segments_capped(max_length, positional=False)
+        else:
+            segments = self.segments_positional
+        (
+            node_vertices,
+            vertex_node_map,
+            distal_vertex,
+            edges,
+            root_node,
+        ) = gf.build_segment_graph(
+            segments, self.parent_node_array, self.root_positional
+        )
+
+        coords = self.vertices[distal_vertex]
+        # Per-node arc-length depth (from the source skeleton) drives the
+        # SegmentGraph's cable-weighted csgraph, so its distances are true cable
+        # lengths rather than chord distances between distal endpoints.
+        node_distance_to_root = self.distance_to_root(as_positional=True)[distal_vertex]
+        feat = {}
+        if include_length:
+            half_edge_length = self.half_edge_length
+            feat["length"] = np.array(
+                [half_edge_length[vs].sum() for vs in node_vertices]
+            )
+        if features:
+            agg = agg or {}
+            source = self.features
+            for col in features:
+                feat[col] = _reduce_segment_nodes(
+                    source[col].to_numpy(),
+                    node_vertices,
+                    distal_vertex,
+                    agg.get(col, "mean"),
+                )
+        feat_df = pd.DataFrame(feat, index=np.arange(len(node_vertices)))
+
+        return SegmentGraph(
+            name=SEGMENT_GRAPH_LAYER_NAME,
+            vertices=coords,
+            edges=edges,
+            spatial_columns=self.spatial_columns,
+            root=root_node,
+            features=feat_df if len(feat_df.columns) else None,
+            node_distance_to_root=node_distance_to_root,
+            vertex_segment_map=vertex_node_map,
+            node_source_vertices=node_vertices,
+            source_skeleton=self,
+        )
+
     def map_annotations_to_feature(
         self,
         annotation: str,
@@ -2428,6 +2731,7 @@ class SkeletonLayer(GraphLayer):
         chunk_size: int = 1000,
         validate: bool = False,
         agg_direction: Literal["undirected", "upstream", "downstream"] = "undirected",
+        where: Union[dict, str, Callable, None] = None,
     ) -> Union[pd.Series, pd.DataFrame]:
         """Aggregates a point annotation to a feature on the layer based on a maximum proximity.
 
@@ -2467,6 +2771,7 @@ class SkeletonLayer(GraphLayer):
             agg_direction=agg_direction,
             compute_net_path=compute_net_path,
             node_weight=self.half_edge_length,
+            where=where,
         )
         if agg == "density":
             value_column = f"{annotation}_count"
@@ -2669,6 +2974,198 @@ class SkeletonLayer(GraphLayer):
 
     def __repr__(self) -> str:
         return f"SkeletonLayer(name={self.name}, vertices={self.vertices.shape[0]}, edges={self.edges.shape[0]})"
+
+
+def _reduce_segment_nodes(
+    values: np.ndarray,
+    node_vertices: List[np.ndarray],
+    distal_vertex: np.ndarray,
+    reducer: Union[str, Callable],
+) -> np.ndarray:
+    """Reduce a per-vertex array to a per-node array over segment-graph nodes."""
+    values = np.asarray(values)
+    if reducer == "distal":
+        return values[distal_vertex]
+    if reducer == "proximal":
+        return np.array([values[vs[-1]] for vs in node_vertices])
+    fn = reducer if callable(reducer) else getattr(np, reducer)
+    return np.array([fn(values[vs]) for vs in node_vertices])
+
+
+class SegmentGraph(SkeletonLayer):
+    """Reduced topological tree whose nodes are (capped) skeleton segments.
+
+    Built by :meth:`SkeletonLayer.segment_graph`. Each node is a contracted
+    unbranched segment positioned at its distal endpoint, with the root split
+    into its own node, so the node set is ``{root} U {branch points} U {tips}``.
+    Because it subclasses :class:`SkeletonLayer`, the full rooted-tree API
+    (``distance_to_root``, ``segments``, smoothing, ``strahler_number`` via
+    :mod:`ossify.algorithms`, etc.) works on the contracted tree.
+
+    Note
+    ----
+    Node coordinates are distal endpoints, intended for position / plotting.
+    The raw coordinate geometry is the chord between branch points, *not* arc
+    length -- so distances are NOT taken from coordinates. Instead the weighted
+    :attr:`csgraph` is overridden with source-skeleton cable lengths, making
+    ``distance_to_root``, ``cable_length``, and ``path_length`` true arc-length
+    measures. The per-node ``length`` feature (sum of ``half_edge_length``)
+    conserves total cable length.
+    """
+
+    layer_name = SEGMENT_GRAPH_LAYER_NAME
+    layer_type = "skeleton"
+
+    def __init__(
+        self,
+        *args,
+        node_distance_to_root: Optional[np.ndarray] = None,
+        vertex_segment_map: Optional[np.ndarray] = None,
+        node_source_vertices: Optional[List[np.ndarray]] = None,
+        source_skeleton: Optional["SkeletonLayer"] = None,
+        **kwargs,
+    ):
+        # Set before super().__init__: the weighted csgraph override is read
+        # while base properties are snapshotted inside SkeletonLayer.__init__.
+        self._node_dtr = node_distance_to_root
+        super().__init__(*args, **kwargs)
+        self._vertex_segment_map = vertex_segment_map
+        self._node_source_vertices = node_source_vertices
+        self._source_skeleton = source_skeleton
+
+    @property
+    def csgraph(self) -> sparse.csr_matrix:
+        """Weighted graph whose edge weights are the source-skeleton **cable
+        length** (arc length) between adjacent nodes' distal endpoints, not the
+        chord distance between node coordinates.
+
+        This is what makes ``distance_to_root``, ``cable_length``, and
+        ``path_length`` correct on the contracted tree. Falls back to the
+        euclidean base implementation if per-node depths are unavailable (e.g.
+        a SegmentGraph reconstructed by masking).
+        """
+        if self._csgraph is None:
+            node_dtr = getattr(self, "_node_dtr", None)
+            edges = self.edges_positional
+            if node_dtr is None:
+                self._csgraph = super().csgraph
+            elif len(edges) == 0:
+                self._csgraph = sparse.csr_matrix(
+                    (self.n_vertices, self.n_vertices), dtype=np.float32
+                )
+            else:
+                weights = (node_dtr[edges[:, 0]] - node_dtr[edges[:, 1]]).astype(
+                    np.float32
+                )
+                self._csgraph = sparse.csr_matrix(
+                    (weights, (edges[:, 0], edges[:, 1])),
+                    shape=(self.n_vertices, self.n_vertices),
+                )
+        return self._csgraph
+
+    @property
+    def vertex_segment_map(self) -> Optional[np.ndarray]:
+        """Map from each source-skeleton vertex (positional) to its node id."""
+        return self._vertex_segment_map
+
+    @property
+    def node_source_vertices(self) -> Optional[List[np.ndarray]]:
+        """Source-skeleton positional vertices contained in each node."""
+        return self._node_source_vertices
+
+    @property
+    def source_skeleton(self) -> Optional["SkeletonLayer"]:
+        """The skeleton this segment graph was contracted from."""
+        return self._source_skeleton
+
+    def to_vertices(self, node_values: np.ndarray) -> np.ndarray:
+        """Broadcast a per-node array back to per-vertex (positional) order.
+
+        Uses :attr:`vertex_segment_map`, so ``node_values`` must be in node
+        (positional) order. Returns a per-vertex array on the source skeleton.
+        """
+        if self._vertex_segment_map is None:
+            raise ValueError(
+                "This SegmentGraph has no vertex_segment_map (e.g. it was derived "
+                "by masking); broadcasting back to vertices is unavailable."
+            )
+        return np.asarray(node_values)[self._vertex_segment_map]
+
+    def aggregate_vertices(
+        self,
+        values: np.ndarray,
+        agg: Union[str, Callable] = "mean",
+        weight: Union[str, np.ndarray, None] = "length",
+    ) -> np.ndarray:
+        """Aggregate a per-source-vertex array onto the segment nodes.
+
+        The post-hoc, vertex->node counterpart of :meth:`to_vertices`, and the
+        after-construction analog of building features at
+        :meth:`SkeletonLayer.segment_graph` time -- for values computed later,
+        such as model unaries. Accepts a 1D ``(n_vertices,)`` or 2D
+        ``(n_vertices, K)`` array (2D aggregates each column independently), so
+        it maps per-vertex unaries to per-node unaries.
+
+        Parameters
+        ----------
+        values : np.ndarray
+            Per-source-vertex values in skeleton positional order.
+        agg : {"mean", "sum", "max", "min"} or callable
+            ``"mean"`` and ``"sum"`` honor ``weight`` (length-weighted by
+            default); ``"max"``/``"min"`` ignore it. A callable receives each
+            node's value array (axis 0 over the node's vertices).
+        weight : {"length"}, array, or None
+            Per-vertex weights for ``"mean"``/``"sum"``. ``"length"`` (default)
+            uses the source skeleton's ``half_edge_length``; an array supplies
+            custom weights; ``None`` weights uniformly.
+
+        Returns
+        -------
+        np.ndarray
+            ``(n_nodes,)`` or ``(n_nodes, K)`` per-node aggregate.
+        """
+        if self._node_source_vertices is None:
+            raise ValueError(
+                "This SegmentGraph has no node_source_vertices (e.g. it was "
+                "derived by masking); vertex aggregation is unavailable."
+            )
+        values = np.asarray(values, dtype=float)
+        squeeze = values.ndim == 1
+        v2d = values[:, None] if squeeze else values
+
+        if isinstance(weight, str):
+            if weight != "length":
+                raise ValueError("weight string must be 'length'.")
+            if self._source_skeleton is None:
+                raise ValueError("weight='length' needs the source skeleton.")
+            w = self._source_skeleton.half_edge_length
+        elif weight is None:
+            w = None
+        else:
+            w = np.asarray(weight, dtype=float)
+
+        out = np.empty((len(self._node_source_vertices), v2d.shape[1]), dtype=float)
+        for nid, vs in enumerate(self._node_source_vertices):
+            block = v2d[vs]
+            if agg == "mean":
+                out[nid] = np.average(
+                    block, axis=0, weights=None if w is None else w[vs]
+                )
+            elif agg == "sum":
+                out[nid] = (
+                    block.sum(axis=0)
+                    if w is None
+                    else (block * w[vs][:, None]).sum(axis=0)
+                )
+            elif agg == "max":
+                out[nid] = block.max(axis=0)
+            elif agg == "min":
+                out[nid] = block.min(axis=0)
+            elif callable(agg):
+                out[nid] = agg(block)
+            else:
+                raise ValueError(f"Unsupported agg {agg!r}.")
+        return out[:, 0] if squeeze else out
 
 
 class PointCloudLayer(PointMixin):

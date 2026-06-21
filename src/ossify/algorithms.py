@@ -7,12 +7,97 @@ from .base import Cell, SkeletonLayer
 
 __all__ = [
     "strahler_number",
+    "branch_order",
     "smooth_features",
     "label_axon_from_synapse_flow",
     "label_axon_from_spectral_split",
     "synapse_betweenness",
     "segregation_index",
+    "segment_aggregate",
+    "subtree_aggregate",
+    "path_to_root_aggregate",
+    "root_connected_mask",
 ]
+
+
+def _as_skeleton(cell: Union[Cell, SkeletonLayer]) -> SkeletonLayer:
+    """Return the SkeletonLayer from a Cell or pass a SkeletonLayer through."""
+    if isinstance(cell, Cell):
+        skel = cell.skeleton
+        if skel is None:
+            raise ValueError("Cell does not have a skeleton.")
+        return skel
+    return cell
+
+
+def segment_aggregate(
+    cell: Union[Cell, SkeletonLayer],
+    values: np.ndarray,
+    agg: Union[str, callable] = "mean",
+) -> np.ndarray:
+    """Replace each vertex value with an aggregate over its skeleton segment.
+
+    A segment is an unbranched span between topological points. This computes a
+    single aggregate per segment and broadcasts it back to every vertex in that
+    segment, producing a piecewise-constant per-vertex array.
+
+    Parameters
+    ----------
+    cell : Union[Cell, SkeletonLayer]
+        The skeleton (or a Cell with one).
+    values : np.ndarray
+        Per-vertex values in skeleton positional order.
+    agg : Union[str, callable], optional
+        Aggregation applied within each segment. A string is looked up as a numpy
+        reduction (e.g. "mean", "max", "median", "sum"); a callable is applied to
+        each segment's value array. Default "mean".
+
+    Returns
+    -------
+    np.ndarray
+        Per-vertex array (positional) with each vertex set to its segment aggregate.
+    """
+    skel = _as_skeleton(cell)
+    values = np.asarray(values)
+    fn = agg if callable(agg) else getattr(np, agg)
+    seg_vals = np.array([fn(values[seg]) for seg in skel.segments_positional])
+    return seg_vals[skel.segment_map]
+
+
+def root_connected_mask(
+    cell: Union[Cell, SkeletonLayer],
+    cut_vertices: np.ndarray,
+    as_positional: bool = False,
+) -> np.ndarray:
+    """Boolean mask of vertices still connected to the root after cutting edges.
+
+    Each vertex in ``cut_vertices`` is severed from its parent, then the mask
+    marks every vertex in the same connected component as the root. Useful for
+    restricting a candidate region to the part that remains attached to the root.
+
+    Parameters
+    ----------
+    cell : Union[Cell, SkeletonLayer]
+        The skeleton (or a Cell with one).
+    cut_vertices : np.ndarray
+        Vertices to cut from their parents.
+    as_positional : bool, optional
+        Whether ``cut_vertices`` are positional indices. Default False.
+
+    Returns
+    -------
+    np.ndarray
+        Boolean array (positional) marking vertices in the root's component.
+    """
+    skel = _as_skeleton(cell)
+    G = skel.cut_graph(
+        cut_vertices,
+        directed=False,
+        euclidean_weight=False,
+        as_positional=as_positional,
+    )
+    _, comp_labels = sparse.csgraph.connected_components(G, directed=False)
+    return comp_labels == comp_labels[skel.root_positional]
 
 
 def _strahler_path(baseline):
@@ -115,6 +200,141 @@ def strahler_number(cell: Union[Cell, SkeletonLayer]) -> np.ndarray:
             elif strahler_number[pth[-1]] == strahler_number[pind]:
                 strahler_number[pind] += 1
     return strahler_number
+
+
+def subtree_aggregate(
+    cell: Union[Cell, SkeletonLayer],
+    values: np.ndarray,
+    agg: str = "sum",
+) -> np.ndarray:
+    """Aggregate a per-vertex value over each vertex's downstream subtree.
+
+    For each vertex, combines its own value with the values of every vertex
+    downstream of it (toward the tips), inclusive -- the classic post-order
+    accumulation, in one O(n) pass.
+
+    Parameters
+    ----------
+    cell : Cell or SkeletonLayer
+    values : np.ndarray
+        Per-vertex values in skeleton positional order.
+    agg : {"sum", "max", "min"}
+        Associative reducer combining a vertex with its descendants. For a
+        (length-)weighted subtree mean, use sum-then-derive: aggregate ``x * w``
+        and ``w`` with ``"sum"`` and divide.
+
+    Returns
+    -------
+    np.ndarray
+        Per-vertex (positional) subtree aggregate.
+    """
+    skel = _as_skeleton(cell)
+    values = np.asarray(values, dtype=float)
+    if values.shape[0] != skel.n_vertices:
+        raise ValueError("values must have one entry per skeleton vertex.")
+    out = values.copy()
+    parent = skel.parent_node_array
+    # Leaves first: a child always has more hops to root than its parent, so by
+    # the time a vertex is visited its full subtree has already folded into it.
+    order = np.argsort(skel.hops_to_root(as_positional=True), kind="stable")[::-1]
+    if agg == "sum":
+        for v in order:
+            p = parent[v]
+            if p >= 0:
+                out[p] += out[v]
+    elif agg == "max":
+        for v in order:
+            p = parent[v]
+            if p >= 0 and out[v] > out[p]:
+                out[p] = out[v]
+    elif agg == "min":
+        for v in order:
+            p = parent[v]
+            if p >= 0 and out[v] < out[p]:
+                out[p] = out[v]
+    else:
+        raise ValueError(f"Unsupported agg {agg!r}; use 'sum', 'max', or 'min'.")
+    return out
+
+
+def path_to_root_aggregate(
+    cell: Union[Cell, SkeletonLayer],
+    values: np.ndarray,
+    agg: str = "sum",
+    inclusive: bool = True,
+) -> np.ndarray:
+    """Aggregate a per-vertex value along each vertex's path to the root.
+
+    The upstream analog of :func:`subtree_aggregate`: upstream on a rooted tree
+    is a single path (not a branching subtree), so this combines values over the
+    path from each vertex up to the root, in one O(n) root-first pass.
+
+    Parameters
+    ----------
+    cell : Cell or SkeletonLayer
+    values : np.ndarray
+        Per-vertex values in skeleton positional order.
+    agg : {"sum", "max", "min"}
+        Associative reducer combining a vertex with its ancestors.
+    inclusive : bool
+        Include the vertex's own value (True) or aggregate only its ancestors
+        (False). For ``False`` the root gets 0 (sum) or NaN (max/min).
+
+    Returns
+    -------
+    np.ndarray
+        Per-vertex (positional) path-to-root aggregate.
+    """
+    skel = _as_skeleton(cell)
+    values = np.asarray(values, dtype=float)
+    if values.shape[0] != skel.n_vertices:
+        raise ValueError("values must have one entry per skeleton vertex.")
+    parent = skel.parent_node_array
+    # Root first: a parent always has fewer hops to root than its child, so its
+    # full path-to-root is complete before the child is visited.
+    order = np.argsort(skel.hops_to_root(as_positional=True), kind="stable")
+    if agg == "sum":
+        combine, default = np.add, 0.0
+    elif agg == "max":
+        combine, default = np.maximum, np.nan
+    elif agg == "min":
+        combine, default = np.minimum, np.nan
+    else:
+        raise ValueError(f"Unsupported agg {agg!r}; use 'sum', 'max', or 'min'.")
+    inc = values.copy()
+    for v in order:
+        p = parent[v]
+        if p >= 0:
+            inc[v] = combine(inc[v], inc[p])
+    if inclusive:
+        return inc
+    excl = np.full_like(inc, default)
+    mask = parent >= 0
+    excl[mask] = inc[parent[mask]]
+    return excl
+
+
+def branch_order(cell: Union[Cell, SkeletonLayer]) -> np.ndarray:
+    """Number of branch-point ancestors on each vertex's path to root.
+
+    Increments by one each time the path from the root crosses a branch point.
+    This is the from-root topological order that complements
+    :func:`strahler_number` (the from-tips order).
+
+    Parameters
+    ----------
+    cell : Cell or SkeletonLayer
+
+    Returns
+    -------
+    np.ndarray
+        Per-vertex (positional) branch order, starting at 0 at the root.
+    """
+    skel = _as_skeleton(cell)
+    is_branch = np.zeros(skel.n_vertices, dtype=float)
+    is_branch[skel.branch_points_positional] = 1.0
+    inclusive = path_to_root_aggregate(skel, is_branch, agg="sum", inclusive=True)
+    return (inclusive - is_branch).astype(np.int64)
 
 
 def _distribution_entropy(counts: np.ndarray) -> float:

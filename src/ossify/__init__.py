@@ -1,6 +1,6 @@
 import importlib as _importlib
 
-from . import algorithms, plot
+from . import algorithms, plot, structured_prediction
 from .base import *
 from .file_io import *
 from .translate import *
@@ -29,4 +29,8 @@ def __getattr__(name):
                 "ossify.plot3d requires pyvista. Install with "
                 "`pip install ossify[viz]` (or `uv add 'ossify[viz]'`)."
             ) from e
+    if name == "compartments":
+        # Module imports cleanly without xgboost; xgboost is only needed at
+        # predict/load time (with a clear error). Lazy to mirror the optional extra.
+        return _importlib.import_module(".compartments", __name__)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

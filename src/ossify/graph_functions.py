@@ -837,6 +837,79 @@ def split_segment(
     return np.split(path_inds, split_indices[:-1])
 
 
+def build_segment_graph(
+    segments: List[np.ndarray],
+    parent_node_array: np.ndarray,
+    root: int,
+) -> Tuple[List[np.ndarray], np.ndarray, np.ndarray, np.ndarray, int]:
+    """Contract unbranched segments into a reduced rooted tree.
+
+    Each segment becomes a single node, positioned (by the caller) at its distal
+    (tip-ward) endpoint. The root vertex is always split into its own one-node
+    segment, so the node set is exactly ``{root} U {branch points} U {tips}`` --
+    the classic reduced/topological tree.
+
+    Parameters
+    ----------
+    segments : list of np.ndarray
+        Positional vertex arrays, one per segment, each ordered distal
+        (``seg[0]``) to proximal (``seg[-1]``) as produced by
+        :func:`build_segments` / :func:`build_capped_segments`.
+    parent_node_array : np.ndarray
+        Positional parent of each vertex, ``-1`` for the root's parent.
+    root : int
+        Positional index of the root vertex.
+
+    Returns
+    -------
+    node_vertices : list of np.ndarray
+        Positional source vertices for each node (root split into its own node).
+    vertex_node_map : np.ndarray
+        ``(n_vertices,)`` map from each source vertex to its node id.
+    distal_vertex : np.ndarray
+        ``(n_nodes,)`` positional source vertex at each node's distal endpoint.
+    edges : np.ndarray
+        ``(n_edges, 2)`` ``[child_node, parent_node]`` edges (root has no parent).
+    root_node : int
+        Node id containing the root vertex.
+    """
+    node_vertices = []
+    for seg in segments:
+        seg = np.asarray(seg)
+        if root in seg and len(seg) > 1:
+            # Split the root into its own singleton node; the root is the
+            # proximal (root-ward) end of its segment, so the remaining run
+            # keeps its distal->proximal order with the root removed.
+            rest = seg[seg != root]
+            node_vertices.append(rest)
+            node_vertices.append(np.asarray([root]))
+        else:
+            node_vertices.append(seg)
+
+    n_vertices = len(parent_node_array)
+    vertex_node_map = np.full(n_vertices, -1, dtype=int)
+    distal_vertex = np.empty(len(node_vertices), dtype=int)
+    for nid, vs in enumerate(node_vertices):
+        vertex_node_map[vs] = nid
+        distal_vertex[nid] = vs[0]
+
+    root_node = int(vertex_node_map[root])
+    edges = []
+    for nid, vs in enumerate(node_vertices):
+        if nid == root_node:
+            continue
+        proximal = vs[-1]
+        parent_vertex = parent_node_array[proximal]
+        if parent_vertex < 0:
+            continue
+        parent_node = vertex_node_map[parent_vertex]
+        if parent_node != nid:
+            edges.append([nid, parent_node])
+    edges = np.asarray(edges, dtype=int) if edges else np.empty((0, 2), dtype=int)
+
+    return node_vertices, vertex_node_map, distal_vertex, edges, root_node
+
+
 def build_cover_paths(
     end_points: np.ndarray,
     parent_node_array: np.ndarray,
@@ -870,10 +943,12 @@ def build_proximity_lists_chunked(
     distance_threshold,
     chunk_size=1000,
     orientation: Literal["downstream", "upstream", "undirected"] = "undirected",
+    return_distances: bool = False,
 ):
     n_vertices = len(vertices)
     index_list = []
     proximity_list = []
+    distance_list = []
     for start_idx in range(0, n_vertices, chunk_size):
         end_idx = min(start_idx + chunk_size, n_vertices)
         indices = np.arange(start_idx, end_idx)
@@ -899,8 +974,19 @@ def build_proximity_lists_chunked(
             proximal_indices = np.flatnonzero(distances[ii] <= distance_threshold)
             index_list.append([idx] * len(proximal_indices))
             proximity_list.append(proximal_indices.tolist())
+            if return_distances:
+                distance_list.append(distances[ii][proximal_indices])
 
-    return np.concatenate(index_list), np.concatenate(proximity_list)
+    idx = np.concatenate(index_list) if index_list else np.array([], dtype=int)
+    prox = np.concatenate(proximity_list) if proximity_list else np.array([], dtype=int)
+    if return_distances:
+        dist = (
+            np.concatenate(distance_list)
+            if distance_list
+            else np.array([], dtype=float)
+        )
+        return idx, prox, dist
+    return idx, prox
 
 
 def resample_segment(

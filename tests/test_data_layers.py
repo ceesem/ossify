@@ -1049,3 +1049,345 @@ class TestSkeletonResample:
         resampled = skeleton.resample(spacing=0.3)
 
         assert len(resampled.edges) == resampled.n_vertices - 1
+
+
+class TestAggregateFeatures:
+    """Tests for GraphLayer/SkeletonLayer.aggregate_features."""
+
+    def _linear_cell(self):
+        """Linear skeleton 0(root)-1-2-3-4(tip) with feature val=[10,20,30,40,50]."""
+        verts = np.array([[i, 0.0, 0.0] for i in range(5)])
+        edges = np.array([[1, 0], [2, 1], [3, 2], [4, 3]])
+        feat = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
+        cell = Cell()
+        cell.add_skeleton(verts, edges, features={"val": feat}, root=0)
+        return cell
+
+    def test_undirected_hop_mean(self):
+        s = self._linear_cell().skeleton
+        r = s.aggregate_features("val", radius=1, metric="hops", agg="mean")
+        np.testing.assert_allclose(r["val"].values, [15, 20, 30, 40, 45])
+
+    def test_downstream_hop_sum(self):
+        s = self._linear_cell().skeleton
+        r = s.aggregate_features(
+            "val", radius=1, metric="hops", direction="downstream", agg="sum"
+        )
+        np.testing.assert_allclose(r["val"].values, [30, 50, 70, 90, 50])
+
+    def test_upstream_hop_sum(self):
+        s = self._linear_cell().skeleton
+        r = s.aggregate_features(
+            "val", radius=1, metric="hops", direction="upstream", agg="sum"
+        )
+        np.testing.assert_allclose(r["val"].values, [10, 30, 50, 70, 90])
+
+    def test_max_fallback(self):
+        s = self._linear_cell().skeleton
+        r = s.aggregate_features("val", radius=2, metric="hops", agg="max")
+        np.testing.assert_allclose(r["val"].values, [30, 40, 50, 50, 50])
+
+    def test_distance_metric(self):
+        s = self._linear_cell().skeleton
+        r = s.aggregate_features("val", radius=1.5, metric="distance", agg="mean")
+        np.testing.assert_allclose(r["val"].values, [15, 20, 30, 40, 45])
+
+    def test_weighted_smoothing_symmetry(self):
+        s = self._linear_cell().skeleton
+        r = s.aggregate_features(
+            "val", radius=2, metric="hops", agg="mean", weight=lambda d: np.exp(-d)
+        )
+        # Center vertex's neighborhood is symmetric, so weighted mean stays at 30.
+        assert r["val"].values[2] == pytest.approx(30.0)
+
+    def test_exclusive_drops_self(self):
+        s = self._linear_cell().skeleton
+        r = s.aggregate_features(
+            "val", radius=1, metric="hops", agg="mean", inclusive=False
+        )
+        # Root (0) only neighbor is vertex 1 -> 20; tip (4) only neighbor is 3 -> 40.
+        assert r["val"].values[0] == pytest.approx(20.0)
+        assert r["val"].values[4] == pytest.approx(40.0)
+
+    def test_output_indexed_by_vertex_index(self):
+        s = self._linear_cell().skeleton
+        r = s.aggregate_features("val", radius=1, metric="hops", agg="mean")
+        np.testing.assert_array_equal(r.index.values, s.vertex_index)
+
+    def test_weight_requires_sum_or_mean(self):
+        s = self._linear_cell().skeleton
+        with pytest.raises(ValueError):
+            s.aggregate_features(
+                "val", radius=1, metric="hops", agg="max", weight=lambda d: d
+            )
+
+    def test_direction_requires_skeleton(self, simple_graph_data):
+        from ossify.data_layers import GraphLayer
+
+        vertices, edges, vertex_indices = simple_graph_data
+        rng = np.random.default_rng(0)
+        g = GraphLayer(
+            "test_graph",
+            vertices,
+            edges,
+            spatial_columns=["x", "y", "z"],
+            features={"weight": rng.uniform(0, 1, len(vertices))},
+        )
+        with pytest.raises(ValueError):
+            g.aggregate_features("weight", radius=1, direction="downstream")
+
+
+class TestSegmentGraph:
+    """Tests for SkeletonLayer.segment_graph and SegmentGraph."""
+
+    def _branched_cell(self, features=None):
+        """root(0)->branch(1)->{run 2->4, tip 3}."""
+        verts = np.array(
+            [[0, 0, 0], [1, 0, 0], [2, 1, 0], [2, -1, 0], [3, 1, 0]], dtype=float
+        )
+        edges = np.array([[1, 0], [2, 1], [3, 1], [4, 2]])
+        cell = Cell()
+        cell.add_skeleton(verts, edges, features=features, root=0)
+        return cell
+
+    def _linear_cell(self, n=11, features=None):
+        """Unit-spaced linear chain 0(root)..n-1(tip), total cable length n-1."""
+        verts = np.array([[i, 0.0, 0.0] for i in range(n)])
+        edges = np.array([[i + 1, i] for i in range(n - 1)])
+        cell = Cell()
+        cell.add_skeleton(verts, edges, features=features, root=0)
+        return cell
+
+    @staticmethod
+    def _by_distal(sg, values):
+        """Map a per-node array to {distal_source_vertex: value} (order-robust)."""
+        return {int(vs[0]): values[i] for i, vs in enumerate(sg.node_source_vertices)}
+
+    def test_node_set_is_reduced_tree(self):
+        sk = self._branched_cell().skeleton
+        sg = sk.segment_graph()
+        # node set == {root} U {branch points} U {tips}
+        distal = {int(vs[0]) for vs in sg.node_source_vertices}
+        expected = (
+            {sk.root_positional}
+            | set(sk.branch_points_positional)
+            | set(sk.end_points_positional)
+        )
+        assert distal == expected
+        assert sg.n_vertices == 4
+
+    def test_valid_rooted_tree(self):
+        sk = self._branched_cell().skeleton
+        sg = sk.segment_graph()
+        assert (sg.parent_node_array == -1).sum() == 1  # exactly one root
+        assert sg.edges.shape[0] == sg.n_vertices - 1  # tree
+        # every node reachable from root
+        d = sg.distance_to_root(as_positional=True)
+        assert np.all(np.isfinite(d))
+
+    def test_length_conservation(self):
+        sk = self._branched_cell().skeleton
+        sg = sk.segment_graph()
+        total_cable = sk.half_edge_length.sum()
+        np.testing.assert_allclose(sg.get_feature("length").sum(), total_cable)
+
+    def test_round_trip_to_vertices(self):
+        sk = self._branched_cell().skeleton
+        sg = sk.segment_graph()
+        np.testing.assert_array_equal(
+            sg.to_vertices(np.arange(sg.n_vertices)), sg.vertex_segment_map
+        )
+        # broadcasting a per-node label: all source vertices in a node share it
+        for nid, vs in enumerate(sg.node_source_vertices):
+            assert np.all(sg.vertex_segment_map[vs] == nid)
+
+    def test_capping_splits_long_runs(self):
+        sk = self._linear_cell(n=11).skeleton  # cable length 10
+        sg0 = sk.segment_graph()
+        sgc = sk.segment_graph(max_length=2.5)
+        assert sg0.n_vertices == 2  # root singleton + one long run
+        assert sgc.n_vertices > sg0.n_vertices
+        total = sk.half_edge_length.sum()
+        np.testing.assert_allclose(sg0.get_feature("length").sum(), total)
+        np.testing.assert_allclose(sgc.get_feature("length").sum(), total)
+        assert sgc.get_feature("length").max() <= 2.5 + 1e-9
+        assert sgc.get_feature("length").max() < sg0.get_feature("length").max()
+
+    def test_feature_rollup_reducers(self):
+        val = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
+        sk = self._linear_cell(n=5, features={"val": val}).skeleton
+        for reducer, expected in [
+            ("sum", {4: 140.0, 0: 10.0}),
+            ("mean", {4: 35.0, 0: 10.0}),
+            ("max", {4: 50.0, 0: 10.0}),
+            ("distal", {4: 50.0, 0: 10.0}),
+            ("proximal", {4: 20.0, 0: 10.0}),
+        ]:
+            sg = sk.segment_graph(features=["val"], agg={"val": reducer})
+            got = self._by_distal(sg, sg.get_feature("val"))
+            assert got == expected, reducer
+
+    def test_sum_then_derive_weighted_mean(self):
+        verts = np.array([[i, 0.0, 0.0] for i in range(5)])
+        edges = np.array([[i + 1, i] for i in range(4)])
+        base = Cell()
+        base.add_skeleton(verts, edges, root=0)
+        w = base.skeleton.half_edge_length  # [0.5, 1, 1, 1, 0.5]
+        r = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        cell = Cell()
+        cell.add_skeleton(verts, edges, features={"rw": r * w, "w": w}, root=0)
+        sg = cell.skeleton.segment_graph(
+            features=["rw", "w"], agg={"rw": "sum", "w": "sum"}
+        )
+        wmean = self._by_distal(sg, sg.get_feature("rw") / sg.get_feature("w"))
+        # run node = vertices {1,2,3,4}: length-weighted mean of r
+        run = [1, 2, 3, 4]
+        expected = np.sum(r[run] * w[run]) / np.sum(w[run])
+        np.testing.assert_allclose(wmean[4], expected)
+
+    def test_distances_are_cable_not_chord(self):
+        sk = self._branched_cell().skeleton
+        sg = sk.segment_graph()
+        src_dtr = sk.distance_to_root(as_positional=True)
+        distal = np.array([int(vs[0]) for vs in sg.node_source_vertices])
+        sg_dtr = sg.distance_to_root(as_positional=True)
+        # segment-graph distances equal the source skeleton's arc-length depths
+        np.testing.assert_allclose(sg_dtr, src_dtr[distal], rtol=1e-5)
+        # tip-4 node: cable length 2 + sqrt(2), NOT the chord sqrt(10) between
+        # the root and the tip coordinates
+        d = self._by_distal(sg, sg_dtr)
+        np.testing.assert_allclose(d[4], 2 + np.sqrt(2), rtol=1e-5)
+        chord = np.linalg.norm(sk.vertices[4] - sk.vertices[0])
+        assert not np.isclose(d[4], chord)
+
+    def test_cable_length_conserved(self):
+        sk = self._branched_cell().skeleton
+        # capping must not change the total cable length recovered from the graph
+        for max_length in (None, 0.6):
+            sg = sk.segment_graph(max_length=max_length)
+            np.testing.assert_allclose(sg.cable_length(), sk.cable_length(), rtol=1e-5)
+
+    def test_aggregate_vertices_length_weighted_mean(self):
+        sk = self._branched_cell().skeleton
+        sg = sk.segment_graph()
+        r = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+        node_r = sg.aggregate_vertices(r, agg="mean", weight="length")
+        half = sk.half_edge_length
+        by_distal = self._by_distal(sg, node_r)
+        # run node {2,4}: length-weighted mean of r over those vertices
+        run = [2, 4]
+        np.testing.assert_allclose(by_distal[4], np.average(r[run], weights=half[run]))
+
+    def test_aggregate_vertices_2d_unaries(self):
+        sk = self._branched_cell().skeleton
+        sg = sk.segment_graph()
+        unaries = np.random.default_rng(0).normal(size=(5, 2))
+        node_u = sg.aggregate_vertices(unaries, agg="mean", weight="length")
+        assert node_u.shape == (sg.n_vertices, 2)
+
+    def test_aggregate_vertices_uniform_and_sum(self):
+        sk = self._branched_cell().skeleton
+        sg = sk.segment_graph()
+        ones = np.ones(5)
+        # uniform sum == subtree-free node sizes; length-weighted sum == cable
+        node_sum = sg.aggregate_vertices(ones, agg="sum", weight=None)
+        np.testing.assert_allclose(node_sum.sum(), 5)  # every vertex counted once
+        node_len = sg.aggregate_vertices(np.ones(5), agg="sum", weight="length")
+        np.testing.assert_allclose(node_len.sum(), sk.half_edge_length.sum())
+
+    def test_aggregate_then_to_vertices_roundtrip_piecewise(self):
+        sk = self._branched_cell().skeleton
+        sg = sk.segment_graph()
+        node_ids = np.arange(sg.n_vertices, dtype=float)
+        per_vertex = sg.to_vertices(node_ids)
+        # aggregating a piecewise-constant-per-node array recovers the node ids
+        back = sg.aggregate_vertices(per_vertex, agg="mean", weight="length")
+        np.testing.assert_allclose(back, node_ids)
+
+    def test_is_skeleton_layer(self):
+        from ossify.data_layers import SegmentGraph, SkeletonLayer
+
+        sk = self._branched_cell().skeleton
+        sg = sk.segment_graph()
+        assert isinstance(sg, SkeletonLayer)
+        assert isinstance(sg, SegmentGraph)
+        assert sg.layer_name == "segment_graph"
+        assert sg.source_skeleton is sk
+
+
+class TestAnnotationWhereFilter:
+    """Tests for the `where` filter on annotation counting and CountFeature."""
+
+    def _cell_with_labeled_synapses(self):
+        # linear skeleton 0..4; 5 synapses anchored to vertices with a 'kind' label
+        verts = np.array([[i, 0.0, 0.0] for i in range(5)])
+        edges = np.array([[i + 1, i] for i in range(4)])
+        cell = Cell()
+        cell.add_skeleton(verts, edges, root=0)
+        anno = pd.DataFrame(
+            {
+                "x": [0.0, 1.0, 1.0, 2.0, 4.0],
+                "y": [0.0, 0.0, 0.0, 0.0, 0.0],
+                "z": [0.0, 0.0, 0.0, 0.0, 0.0],
+                "anchor": [0, 1, 1, 2, 4],  # skeleton vertex each synapse sits on
+                "kind": ["spine", "spine", "shaft", "spine", "shaft"],
+            }
+        )
+        cell.add_point_annotations(
+            "syn",
+            vertices=anno,
+            spatial_columns=["x", "y", "z"],
+            linkage=Link(mapping="anchor", target="skeleton"),
+        )
+        return cell
+
+    def _count(self, skel, **kw):
+        return (
+            skel.map_annotations_to_feature(
+                "syn", distance_threshold=0, agg="count", **kw
+            )
+            .reindex(skel.vertex_index)
+            .fillna(0)
+            .to_numpy()
+            .ravel()
+        )
+
+    def test_where_partitions_total(self):
+        skel = self._cell_with_labeled_synapses().skeleton
+        total = self._count(skel)
+        spine = self._count(skel, where={"kind": "spine"})
+        shaft = self._count(skel, where={"kind": "shaft"})
+        np.testing.assert_array_equal(total, [1, 2, 1, 0, 1])
+        np.testing.assert_array_equal(spine, [1, 1, 1, 0, 0])
+        np.testing.assert_array_equal(shaft, [0, 1, 0, 0, 1])
+        np.testing.assert_array_equal(spine + shaft, total)
+
+    def test_where_dict_string_callable_agree(self):
+        skel = self._cell_with_labeled_synapses().skeleton
+        by_dict = self._count(skel, where={"kind": "spine"})
+        by_str = self._count(skel, where="kind == 'spine'")
+        by_call = self._count(skel, where=lambda df: df["kind"] == "spine")
+        np.testing.assert_array_equal(by_dict, by_str)
+        np.testing.assert_array_equal(by_dict, by_call)
+
+    def test_where_membership_list(self):
+        skel = self._cell_with_labeled_synapses().skeleton
+        both = self._count(skel, where={"kind": ["spine", "shaft"]})
+        np.testing.assert_array_equal(both, self._count(skel))
+
+    def test_count_feature_where_end_to_end(self):
+        import ossify.compartments as cp
+
+        cell = self._cell_with_labeled_synapses()
+        df = cp.make_skel_prop_df_base(
+            cell,
+            feature_spec=[
+                cp.CountFeature("syn_in", "syn"),
+                cp.CountFeature("spine_in", "syn", where={"kind": "spine"}),
+                cp.CountFeature("shaft_in", "syn", where="kind == 'shaft'"),
+            ],
+        )
+        np.testing.assert_array_equal(
+            (df["spine_in"] + df["shaft_in"]).to_numpy(), df["syn_in"].to_numpy()
+        )
+        np.testing.assert_array_equal(df["spine_in"].to_numpy(), [1, 1, 1, 0, 0])

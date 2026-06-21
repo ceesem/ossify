@@ -343,3 +343,102 @@ class TestAlgorithmIntegration:
 
         assert len(smoothed) == n_vertices
         assert all(0 <= val <= 1 for val in smoothed)
+
+
+class TestSegmentAggregate:
+    """Tests for segment_aggregate and root_connected_mask."""
+
+    def _branched(self):
+        # 0(root)-1(branch)-{2-4 branch, 3 tip}
+        verts = np.array(
+            [[0, 0, 0], [1, 0, 0], [2, 1, 0], [2, -1, 0], [3, 1, 0]], dtype=float
+        )
+        edges = np.array([[1, 0], [2, 1], [3, 1], [4, 2]])
+        cell = Cell()
+        cell.add_skeleton(verts, edges, root=0)
+        return cell
+
+    def test_segment_aggregate_mean(self):
+        cell = self._branched()
+        vals = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
+        out = algorithms.segment_aggregate(cell, vals, "mean")
+        # segments: {0,1}->15, {2,4}->40, {3}->40
+        np.testing.assert_allclose(out, [15, 15, 40, 40, 40])
+
+    def test_segment_aggregate_max_and_callable(self):
+        cell = self._branched()
+        vals = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
+        np.testing.assert_allclose(
+            algorithms.segment_aggregate(cell, vals, "max"), [20, 20, 50, 40, 50]
+        )
+        np.testing.assert_allclose(
+            algorithms.segment_aggregate(cell, vals, lambda x: x.max()),
+            [20, 20, 50, 40, 50],
+        )
+
+    def test_root_connected_mask(self):
+        cell = self._branched()
+        # Cutting vertex 2 isolates the {2,4} branch from the root.
+        mask = algorithms.root_connected_mask(cell, [2], as_positional=True)
+        np.testing.assert_array_equal(mask, [True, True, False, True, False])
+
+
+class TestSubtreeAndPathAggregates:
+    """Tests for subtree_aggregate, path_to_root_aggregate, branch_order."""
+
+    def _branched_cell(self):
+        """root(0)->branch(1)->{run 2->4, tip 3}."""
+        verts = np.array(
+            [[0, 0, 0], [1, 0, 0], [2, 1, 0], [2, -1, 0], [3, 1, 0]], dtype=float
+        )
+        edges = np.array([[1, 0], [2, 1], [3, 1], [4, 2]])
+        cell = Cell()
+        cell.add_skeleton(verts, edges, root=0)
+        return cell
+
+    def test_subtree_sum_counts_subtree_size(self):
+        sk = self._branched_cell().skeleton
+        sizes = algorithms.subtree_aggregate(sk, np.ones(5), agg="sum")
+        # subtree sizes (inclusive): v0=5, v1=4, v2={2,4}=2, v3=1, v4=1
+        np.testing.assert_array_equal(sizes, [5, 4, 2, 1, 1])
+
+    def test_subtree_sum_values(self):
+        sk = self._branched_cell().skeleton
+        v = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        got = algorithms.subtree_aggregate(sk, v, agg="sum")
+        np.testing.assert_allclose(got, [15, 14, 8, 4, 5])
+
+    def test_subtree_max(self):
+        sk = self._branched_cell().skeleton
+        v = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        got = algorithms.subtree_aggregate(sk, v, agg="max")
+        np.testing.assert_allclose(got, [5, 5, 5, 4, 5])
+
+    def test_path_to_root_sum_inclusive(self):
+        sk = self._branched_cell().skeleton
+        v = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        got = algorithms.path_to_root_aggregate(sk, v, agg="sum", inclusive=True)
+        np.testing.assert_allclose(got, [1, 3, 6, 7, 11])
+
+    def test_path_to_root_sum_exclusive(self):
+        sk = self._branched_cell().skeleton
+        v = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        got = algorithms.path_to_root_aggregate(sk, v, agg="sum", inclusive=False)
+        # ancestors only: v0=0, v1=val0=1, v2=incl1=3, v3=incl1=3, v4=incl2=6
+        np.testing.assert_allclose(got, [0, 1, 3, 3, 6])
+
+    def test_branch_order(self):
+        sk = self._branched_cell().skeleton
+        got = algorithms.branch_order(sk)
+        # only node 1 is a branch point; 2,3,4 have it as an ancestor
+        np.testing.assert_array_equal(got, [0, 0, 1, 1, 1])
+
+    def test_subtree_aggregate_validates_length(self):
+        sk = self._branched_cell().skeleton
+        with pytest.raises(ValueError):
+            algorithms.subtree_aggregate(sk, np.ones(3))
+
+    def test_bad_agg_raises(self):
+        sk = self._branched_cell().skeleton
+        with pytest.raises(ValueError):
+            algorithms.subtree_aggregate(sk, np.ones(5), agg="median")
