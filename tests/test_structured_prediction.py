@@ -6,7 +6,9 @@ import pytest
 from ossify import Cell
 from ossify.structured_prediction import (
     TransitionSchema,
+    absorb_small_compartments,
     decode_tree,
+    tree_absorb_small_compartments,
     tree_map_decode,
 )
 
@@ -52,6 +54,24 @@ class TestTransitionSchema:
         C = s.cost_matrix
         np.testing.assert_array_equal(C, [[0.0, 0.0], [100.0, 0.0]])
         np.testing.assert_array_equal(s.root_allowed_mask, [True, False])
+
+    def test_default_cost_is_switching_penalty(self):
+        # Nonzero default_cost penalizes label changes only; the diagonal
+        # (staying on a label) stays free, and explicit pairs still override.
+        s = TransitionSchema(
+            classes=["dendrite", "axon"],
+            transitions={("axon", "dendrite"): 100.0},
+            default_cost=3.0,
+        )
+        np.testing.assert_array_equal(s.cost_matrix, [[0.0, 3.0], [100.0, 0.0]])
+
+    def test_explicit_diagonal_overrides(self):
+        s = TransitionSchema(
+            classes=["a", "b"],
+            transitions={("a", "a"): 2.0},
+            default_cost=5.0,
+        )
+        np.testing.assert_array_equal(s.cost_matrix, [[2.0, 5.0], [5.0, 0.0]])
 
     def test_validation(self):
         with pytest.raises(ValueError):
@@ -183,3 +203,127 @@ class TestDecodeTreeWrapper:
         # broadcast a per-node labeling back to vertices
         per_vertex = sg.to_vertices(labels)
         assert per_vertex.shape[0] == cell.skeleton.n_vertices
+
+
+class TestAbsorbSmallCompartments:
+    def _chain(self, n):
+        # 0 -> 1 -> 2 -> ... -> n-1, rooted at 0
+        return np.array([-1] + list(range(n - 1))), 0
+
+    def test_terminal_island_absorbed_by_count(self):
+        # dendrite trunk with a 2-vertex axon tip; min_size=2 absorbs it.
+        parent, root = self._chain(6)
+        labels = np.array([0, 0, 0, 0, 1, 1])
+        out = tree_absorb_small_compartments(parent, root, labels, min_size=2)
+        np.testing.assert_array_equal(out, [0, 0, 0, 0, 0, 0])
+
+    def test_island_kept_when_above_threshold(self):
+        parent, root = self._chain(6)
+        labels = np.array([0, 0, 0, 0, 1, 1])
+        out = tree_absorb_small_compartments(parent, root, labels, min_size=1)
+        np.testing.assert_array_equal(out, labels)  # 2-vertex tip survives
+
+    def test_interior_island_absorbed(self):
+        # dendrite, one axon vertex in the middle, then dendrite again.
+        parent, root = self._chain(5)
+        labels = np.array([0, 0, 1, 0, 0])
+        out = tree_absorb_small_compartments(parent, root, labels, min_size=1)
+        np.testing.assert_array_equal(out, [0, 0, 0, 0, 0])
+
+    def test_input_not_mutated(self):
+        parent, root = self._chain(4)
+        labels = np.array([0, 0, 1, 1])
+        original = labels.copy()
+        tree_absorb_small_compartments(parent, root, labels, min_size=2)
+        np.testing.assert_array_equal(labels, original)
+
+    def test_root_compartment_never_changed(self):
+        # whole tree is a single small compartment; nothing to inherit.
+        parent, root = self._chain(3)
+        labels = np.array([1, 1, 1])
+        out = tree_absorb_small_compartments(parent, root, labels, min_size=10)
+        np.testing.assert_array_equal(out, [1, 1, 1])
+
+    def test_cascade_nested_islands(self):
+        # dend -> axon(1) -> soma(2); both small, both collapse to dendrite.
+        parent, root = self._chain(4)
+        labels = np.array([0, 1, 2, 2])  # comp sizes: {0:1, 1:1, 2:2}
+        out = tree_absorb_small_compartments(parent, root, labels, min_size=2)
+        np.testing.assert_array_equal(out, [0, 0, 0, 0])
+
+    def test_min_weight_uses_node_weight(self):
+        # 5 vertices but the axon tip spans little length -> absorbed by weight,
+        # while min_size alone (tip has 2 vertices) would need min_size>=2.
+        parent, root = self._chain(5)
+        labels = np.array([0, 0, 0, 1, 1])
+        weight = np.array([10.0, 10.0, 10.0, 0.4, 0.4])  # tip length 0.8
+        out = tree_absorb_small_compartments(
+            parent, root, labels, node_weight=weight, min_weight=1.0
+        )
+        np.testing.assert_array_equal(out, [0, 0, 0, 0, 0])
+
+    def test_either_threshold_triggers(self):
+        parent, root = self._chain(5)
+        labels = np.array([0, 0, 0, 1, 1])  # tip: 2 vertices, length 20
+        weight = np.array([1.0, 1.0, 1.0, 10.0, 10.0])
+        # min_size won't fire (tip has 2 > 1) but min_weight will not either
+        # (20 > 5); neither active threshold triggers -> unchanged.
+        out = tree_absorb_small_compartments(
+            parent, root, labels, min_size=1, node_weight=weight, min_weight=5.0
+        )
+        np.testing.assert_array_equal(out, labels)
+        # raising min_size to 2 trips the count criterion alone.
+        out2 = tree_absorb_small_compartments(
+            parent, root, labels, min_size=2, node_weight=weight, min_weight=5.0
+        )
+        np.testing.assert_array_equal(out2, [0, 0, 0, 0, 0])
+
+    def test_requires_a_threshold(self):
+        parent, root = self._chain(3)
+        labels = np.array([0, 1, 1])
+        with pytest.raises(ValueError):
+            tree_absorb_small_compartments(parent, root, labels)
+        with pytest.raises(ValueError):
+            tree_absorb_small_compartments(parent, root, labels, min_weight=1.0)
+
+
+class _WeightedFakeSkeleton(_FakeSkeleton):
+    def __init__(self, parent, root, half_edge_length):
+        super().__init__(parent, root)
+        self.half_edge_length = np.asarray(half_edge_length, dtype=float)
+
+
+class TestAbsorbSmallCompartmentsWrapper:
+    def _chain(self, n):
+        return np.array([-1] + list(range(n - 1))), 0
+
+    def test_pulls_topology_min_size_only(self):
+        # min_size alone needs no weights, so a plain skeleton is enough.
+        parent, root = self._chain(6)
+        skel = _FakeSkeleton(parent, root)
+        labels = np.array([0, 0, 0, 0, 1, 1])
+        out = absorb_small_compartments(skel, labels, min_size=2)
+        np.testing.assert_array_equal(out, [0, 0, 0, 0, 0, 0])
+
+    def test_min_weight_defaults_to_half_edge_length(self):
+        # short tip (cable 0.8) absorbed; the wrapper supplies half_edge_length.
+        parent, root = self._chain(5)
+        weight = np.array([10.0, 10.0, 10.0, 0.4, 0.4])
+        skel = _WeightedFakeSkeleton(parent, root, weight)
+        labels = np.array([0, 0, 0, 1, 1])
+        out = absorb_small_compartments(skel, labels, min_weight=1.0)
+        np.testing.assert_array_equal(out, [0, 0, 0, 0, 0])
+        # equivalent to passing the same weights explicitly
+        explicit = tree_absorb_small_compartments(
+            parent, root, labels, node_weight=weight, min_weight=1.0
+        )
+        np.testing.assert_array_equal(out, explicit)
+
+    def test_explicit_node_weight_overrides_default(self):
+        parent, root = self._chain(5)
+        skel = _WeightedFakeSkeleton(parent, root, np.full(5, 100.0))  # would keep
+        labels = np.array([0, 0, 0, 1, 1])
+        out = absorb_small_compartments(
+            skel, labels, node_weight=np.array([9, 9, 9, 0.4, 0.4]), min_weight=1.0
+        )
+        np.testing.assert_array_equal(out, [0, 0, 0, 0, 0])  # explicit weight wins
