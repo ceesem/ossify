@@ -81,6 +81,21 @@ class TransitionSchema:
     def class_index(self, label) -> int:
         return self._index[label]
 
+    def with_root_classes(self, root_classes: Sequence) -> "TransitionSchema":
+        """Return a copy of this schema with ``root_classes`` replaced.
+
+        Useful for per-cell rooting decisions: build one base schema (classes,
+        transition priors, ``default_cost``) and swap only which labels the root
+        may take -- e.g. ``["dendrite"]`` for a soma-rooted cell vs ``["axon"]``
+        for a terminal axon fragment -- without rebuilding the cost matrix.
+        """
+        return TransitionSchema(
+            classes=self.classes,
+            transitions=self.transitions,
+            root_classes=root_classes,
+            default_cost=self.default_cost,
+        )
+
     @property
     def cost_matrix(self) -> np.ndarray:
         """``(K, K)`` matrix ``C[parent, child]`` of transition costs.
