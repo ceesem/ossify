@@ -56,12 +56,19 @@ __all__ = [
     "DerivedFeature",
     "ComputedFeature",
     "DEFAULT_FEATURE_SPEC",
+    "DEFAULT_UNARY_CLIP",
 ]
 
 # --- Model registry -------------------------------------------------------
 
 MODEL_DIR = pathlib.Path(__file__).parent / "compartment_models"
 DEFAULT_MODEL = "minnie65_ds15_us0_bd0.json"
+
+#: Default symmetric clamp (in log-score / nat units) on per-vertex log-potentials.
+#: A deliberately large rail: far above any realistic classifier log-odds and any
+#: typical transition cost, so it never binds on real evidence and only tames
+#: degenerate ``log(0) = -inf`` / float-limit values. See :class:`ProbaVertexModel`.
+DEFAULT_UNARY_CLIP = 100.0
 
 
 def get_models(dir: Optional[str] = None) -> list:
@@ -534,8 +541,7 @@ class AxonLabel(SkeletonVertexModel):
     .. deprecated::
         Use a :class:`ProbaVertexModel` encoder fed to a :class:`StructuredLabeler`
         (the ``encode -> decode -> clean`` pipeline). The bundled XGBoost models
-        load via :meth:`ProbaVertexModel.from_config` /
-        :meth:`StructuredLabeler.from_config`. The structured decode replaces this
+        load via :meth:`ProbaVertexModel.from_config`. The structured decode replaces this
         class's segment-vote/root-component heuristic with an exact tree-MAP under
         declared :class:`~ossify.structured_prediction.TransitionSchema` priors,
         and generalizes past the hard-coded binary axon/dendrite target.
@@ -567,7 +573,7 @@ class AxonLabel(SkeletonVertexModel):
     ):
         warnings.warn(
             "AxonLabel is deprecated; build a ProbaVertexModel encoder and feed it "
-            "to a StructuredLabeler (see StructuredLabeler.from_config for the "
+            "to a StructuredLabeler (see ProbaVertexModel.from_config for the "
             "bundled XGBoost models). AxonLabel's segment-vote/root-component "
             "heuristic is superseded by the structured tree decode.",
             DeprecationWarning,
@@ -930,6 +936,20 @@ class ProbaVertexModel(SkeletonVertexModel):
         If given, Laplacian-smooth the probabilities along the skeleton with this
         alpha. Default ``None`` leaves graph coupling to the decoder's transition
         costs.
+    unary_clip : float
+        Numerical guard on the per-vertex log-potentials: :meth:`to_unaries`
+        clamps each class's unary to ``[-unary_clip, +unary_clip]``, keeping a
+        zero probability from becoming ``log(0) = -inf`` (which would poison the
+        decode's sums) and bounding magnitudes that float precision makes
+        meaningless. It is expressed in the same log-score (nat) units as a
+        :class:`~ossify.structured_prediction.TransitionSchema`'s transition
+        costs. The default :data:`DEFAULT_UNARY_CLIP` is a deliberately large rail
+        -- **comfortably above any transition cost** -- so it never binds on real
+        evidence and does not change the labeling; it only tames degenerate
+        ``0``/``1`` probabilities. Set *below* a transition cost it stops being a
+        pure guard and becomes a confidence cap that can change results (it then
+        caps the log-odds between any two classes at ``unary_clip`` -- equivalent
+        to flooring probabilities at ``exp(-unary_clip)``); that regime is opt-in.
     feature_spec : list of feature definitions, optional
         See :func:`make_skel_prop_df`. Defaults to :data:`DEFAULT_FEATURE_SPEC`.
     """
@@ -943,11 +963,17 @@ class ProbaVertexModel(SkeletonVertexModel):
         upstream_hops: int = 0,
         bidirectional_hops: int = 0,
         smooth_alpha: Optional[float] = None,
+        unary_clip: float = DEFAULT_UNARY_CLIP,
         feature_spec: Optional[List[FeatureDef]] = None,
     ):
+        if unary_clip is None or unary_clip <= 0.0:
+            raise ValueError(
+                f"unary_clip must be a positive number; got {unary_clip!r}."
+            )
         self._estimator = estimator
         self._feature_columns = list(feature_columns)
         self._smooth_alpha = smooth_alpha
+        self._unary_clip = float(unary_clip)
         super().__init__(
             downstream_hops=downstream_hops,
             upstream_hops=upstream_hops,
@@ -961,18 +987,22 @@ class ProbaVertexModel(SkeletonVertexModel):
         config: Optional[Union[dict, str]] = None,
         *,
         smooth_alpha: Optional[float] = None,
+        unary_clip: Optional[float] = None,
         feature_spec: Optional[List[FeatureDef]] = None,
     ) -> "ProbaVertexModel":
         """Build from a bundled XGBoost model config.
 
         Loads the estimator, feature columns, and hop settings from a shipped
-        model config (see :func:`load_model_config`). ``smooth_alpha`` defaults
-        to the config's ``spread_alpha`` when not overridden.
+        model config (see :func:`load_model_config`). ``smooth_alpha`` defaults to
+        the config's ``spread_alpha``; ``unary_clip`` to the config's ``unary_clip``
+        key, falling back to :data:`DEFAULT_UNARY_CLIP`.
         """
         if not isinstance(config, dict):
             config = load_model_config(config, dir=None)
         if smooth_alpha is None:
             smooth_alpha = config.get("spread_alpha")
+        if unary_clip is None:
+            unary_clip = config.get("unary_clip", DEFAULT_UNARY_CLIP)
         return cls(
             _load_xgboost_classifier(config["model_file"]),
             config["feature_columns"],
@@ -980,6 +1010,7 @@ class ProbaVertexModel(SkeletonVertexModel):
             upstream_hops=config.get("upstream_hops", 0),
             bidirectional_hops=config.get("bidirectional_hops", 0),
             smooth_alpha=smooth_alpha,
+            unary_clip=unary_clip,
             feature_spec=feature_spec,
         )
 
@@ -1010,6 +1041,20 @@ class ProbaVertexModel(SkeletonVertexModel):
         return smooth_features(
             cell.skeleton, scores.astype(float), alpha=self._smooth_alpha
         )
+
+    def to_unaries(self, scores: np.ndarray) -> np.ndarray:
+        """Log-potentials from probabilities, clamped to ``+/- unary_clip``.
+
+        Primarily a numerical guard: ``log(p)`` sends a zero probability to
+        ``-inf``, which poisons the decode's sums, and float limits make very
+        large magnitudes meaningless anyway. ``unary_clip`` bounds the result to a
+        finite range; at the default :data:`DEFAULT_UNARY_CLIP` it never binds on
+        real evidence and so does not change the labeling. See ``unary_clip`` in
+        the class docstring.
+        """
+        floor = float(np.exp(-self._unary_clip))
+        clipped = np.clip(np.asarray(scores, dtype=float), floor, None)
+        return np.clip(np.log(clipped), -self._unary_clip, self._unary_clip)
 
 
 # --- Structured compartment labeler -----------------------------------------
@@ -1063,34 +1108,6 @@ class StructuredLabeler:
         self._absorb_min_size = absorb_min_size
         self._absorb_min_weight = absorb_min_weight
         self._validate_classes()
-
-    @classmethod
-    def from_config(
-        cls,
-        schema: TransitionSchema,
-        config: Optional[Union[dict, str]] = None,
-        *,
-        smooth_alpha: Optional[float] = None,
-        absorb_min_size: Optional[int] = None,
-        absorb_min_weight: Optional[float] = None,
-        feature_spec: Optional[List[FeatureDef]] = None,
-    ) -> "StructuredLabeler":
-        """Build from a bundled XGBoost model config plus an explicit schema.
-
-        Convenience for the common tabular case: builds a
-        :class:`ProbaVertexModel` via :meth:`ProbaVertexModel.from_config` and
-        wraps it. ``schema`` is required because the config carries no transition
-        priors; ``smooth_alpha`` defaults to the config's ``spread_alpha``.
-        """
-        encoder = ProbaVertexModel.from_config(
-            config, smooth_alpha=smooth_alpha, feature_spec=feature_spec
-        )
-        return cls(
-            encoder,
-            schema,
-            absorb_min_size=absorb_min_size,
-            absorb_min_weight=absorb_min_weight,
-        )
 
     def _validate_classes(self) -> None:
         """Check schema.classes lines up with the encoder's class order.

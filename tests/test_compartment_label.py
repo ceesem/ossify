@@ -13,7 +13,11 @@ import numpy as np
 import pytest
 
 from ossify import Cell
-from ossify.compartments import ProbaVertexModel, StructuredLabeler
+from ossify.compartments import (
+    DEFAULT_UNARY_CLIP,
+    ProbaVertexModel,
+    StructuredLabeler,
+)
 from ossify.structured_prediction import TransitionSchema
 
 DATA = pathlib.Path(__file__).parent / "data"
@@ -54,12 +58,16 @@ class _FixedEncoder:
     without any feature extraction or fitted model.
     """
 
-    def __init__(self, scores, classes):
+    def __init__(self, scores, classes, unary_clip=None):
         self._scores = np.asarray(scores, dtype=float)
         self.classes_ = list(classes)
+        self._unary_clip = unary_clip
 
     def predict_unaries(self, cell):
-        return np.log(np.clip(self._scores, 1e-9, None))
+        floor = 1e-9 if self._unary_clip is None else np.exp(-self._unary_clip)
+        return np.clip(
+            np.log(np.clip(self._scores, floor, None)), None, self._unary_clip
+        )
 
 
 def _encoder(estimator, feature_columns=("f",), **kwargs):
@@ -108,6 +116,61 @@ class TestClassValidation:
 
         # No classes_ on the estimator -> validated against unary width at decode.
         StructuredLabeler(_encoder(NoClasses()), _schema())
+
+
+class TestUnaryClipping:
+    def test_unary_clip_validation(self):
+        for bad in (0.0, -0.1, -50.0, None):
+            with pytest.raises(ValueError, match="unary_clip"):
+                ProbaVertexModel(_FakeProba([0, 1]), ["f"], unary_clip=bad)
+
+    def test_guards_log_of_zero(self):
+        # The point of the clip: log(0) -> -inf would poison the decode; the clip
+        # bounds the zero column to exactly -unary_clip and keeps everything finite.
+        u = _encoder(_FakeProba([0, 1]), unary_clip=50.0).to_unaries(
+            np.array([[1.0, 0.0]])
+        )
+        assert np.all(np.isfinite(u))
+        np.testing.assert_allclose(u[0, 1], -50.0, rtol=1e-12)
+        # the certain class sits at log(1) = 0, so the log-odds gap is exactly 50.
+        np.testing.assert_allclose(u[0, 0] - u[0, 1], 50.0, rtol=1e-12)
+
+    def test_large_clip_does_not_change_a_decode(self):
+        # A clip set comfortably above the costs never binds -> identical labels.
+        cell = _chain_cell(6)
+        scores = np.array([[0.99, 0.01]] * 4 + [[0.4, 0.6]] * 2)
+        schema = _schema(revert=10.0, default_cost=1.0)
+        guarded = StructuredLabeler(
+            _FixedEncoder(scores, [0, 1], unary_clip=50.0), schema
+        )
+        plain = StructuredLabeler(_FixedEncoder(scores, [0, 1]), schema)
+        np.testing.assert_array_equal(
+            guarded.predict(cell, return_labels_as="index"),
+            plain.predict(cell, return_labels_as="index"),
+        )
+
+    def test_default_clip_is_a_finite_rail(self):
+        enc = _encoder(_FakeProba([0, 1]))  # uses DEFAULT_UNARY_CLIP
+        u = enc.to_unaries(np.array([[1.0, 0.0]]))
+        # the zero column lands at -DEFAULT_UNARY_CLIP rather than blowing up to -inf
+        assert np.all(np.isfinite(u))
+        np.testing.assert_allclose(u[0, 1], -DEFAULT_UNARY_CLIP, rtol=1e-12)
+
+    def test_small_clip_can_change_results(self):
+        # Opt-in regime: set *below* a cost and the guard becomes a confidence cap.
+        # A leaf strongly labeled axon against a default_cost=2.0 switch penalty:
+        # at full strength its log-odds (~6.9) flips it; clipping below 2.0 holds it.
+        cell = _chain_cell(4)
+        scores = np.array([[0.999, 0.001]] * 3 + [[0.001, 0.999]])
+        schema = _schema(default_cost=2.0)
+        loud = StructuredLabeler(_FixedEncoder(scores, [0, 1]), schema)
+        np.testing.assert_array_equal(
+            loud.predict(cell, return_labels_as="index"), [0, 0, 0, 1]
+        )
+        quiet = StructuredLabeler(_FixedEncoder(scores, [0, 1], unary_clip=1.5), schema)
+        np.testing.assert_array_equal(
+            quiet.predict(cell, return_labels_as="index"), [0, 0, 0, 0]
+        )
 
 
 class TestDecodeTail:
@@ -172,7 +235,9 @@ def test_from_config_end_to_end():
 
     cell, _ = ossify.import_legacy_meshwork(str(MESHWORK), as_pcg_skel=True)
     schema = _schema(revert=10.0)
-    m = StructuredLabeler.from_config(schema, MODEL, absorb_min_size=3)
+    m = StructuredLabeler(
+        ProbaVertexModel.from_config(MODEL), schema, absorb_min_size=3
+    )
     n = cell.skeleton.n_vertices
 
     labels = m.predict(cell)
@@ -200,7 +265,7 @@ def test_accepts_plain_sklearn_estimator():
     X = feats[FEATURE_COLUMNS].values
     # supervise on the bundled model's structured labels just to fit a sklearn model
     y = (
-        StructuredLabeler.from_config(_schema(revert=10.0), MODEL)
+        StructuredLabeler(ProbaVertexModel.from_config(MODEL), _schema(revert=10.0))
         .predict(cell, return_labels_as="index")
         .astype(int)
     )
