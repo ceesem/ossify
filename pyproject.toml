@@ -48,6 +48,21 @@ artifacts = [
     "src/ossify/compartment_models/**/*.ubj",
 ]
 
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "tests/",
+    "docs/",
+    "*.osy",
+    "*.h5",
+    "uv.lock",
+    ".claude/",
+    ".bmv-post-commit.sh",
+    "CLAUDE.md",
+    "DOC_PLAN.md",
+    "PROJECT_SUMMARY.md",
+    "rotation_plan.md",
+]
+
 [dependency-groups]
 dev = [
     "pytest",
