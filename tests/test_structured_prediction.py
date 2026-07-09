@@ -7,30 +7,55 @@ from ossify import Cell
 from ossify.structured_prediction import (
     TransitionSchema,
     absorb_small_compartments,
+    count_components,
     decode_tree,
     tree_absorb_small_compartments,
     tree_map_decode,
 )
 
 
-def _objective(parent, root, unaries, C, labels):
-    """Score of a labeling under the MAP objective (for brute-force checks)."""
+def _component_counts(parent, root, labels):
+    """Number of connected same-label components per label index."""
+    counts = {}
+    for v in range(len(labels)):
+        p = parent[v]
+        if v == root or p < 0 or labels[p] != labels[v]:
+            counts[int(labels[v])] = counts.get(int(labels[v]), 0) + 1
+    return counts
+
+
+def _objective(parent, root, unaries, C, labels, onset_penalty=None, max_components=2):
+    """Score of a labeling under the MAP objective (for brute-force checks).
+
+    With ``onset_penalty`` the cardinality term is subtracted too, with onset
+    counts saturated at ``max_components`` to mirror the decoder's bounded state.
+    """
     n = len(labels)
     s = unaries[np.arange(n), labels].sum()
     for v in range(n):
         p = parent[v]
         if v != root and p >= 0:
             s -= C[labels[p], labels[v]]
+    if onset_penalty is not None:
+        cap = max(1, int(max_components))
+        for k, cnt in _component_counts(parent, root, labels).items():
+            c = min(cnt, cap)
+            if c > 1:
+                s -= onset_penalty[k] * (c - 1)
     return s
 
 
-def _brute_force(parent, root, unaries, C, root_mask):
+def _brute_force(
+    parent, root, unaries, C, root_mask, onset_penalty=None, max_components=2
+):
     n, K = unaries.shape
     best_score, best = -np.inf, None
     for assign in itertools.product(range(K), repeat=n):
         if not root_mask[assign[root]]:
             continue
-        score = _objective(parent, root, unaries, C, np.array(assign))
+        score = _objective(
+            parent, root, unaries, C, np.array(assign), onset_penalty, max_components
+        )
         if score > best_score:
             best_score, best = score, np.array(assign)
     return best_score, best
@@ -166,6 +191,197 @@ class TestTreeMapDecode:
         got = _objective(parent, root, unaries, C, labels)
         best, _ = _brute_force(parent, root, unaries, C, root_mask)
         np.testing.assert_allclose(got, best, rtol=1e-9)
+
+
+class TestCardinalityConstraint:
+    def _two_branch_tree(self):
+        # root -> {1, 2}; 1 -> 3; 2 -> 4. dendrite=0, axon=1. Two dendrite
+        # spacers separate two would-be axon tips into distinct components.
+        parent = np.array([-1, 0, 0, 1, 2])
+        unaries = np.array(
+            [
+                [10.0, 0.0],  # root: dendrite
+                [1.0, 0.0],  # dendrite spacer
+                [1.0, 0.0],  # dendrite spacer
+                [0.0, 6.0],  # axon tip, stronger evidence
+                [0.0, 5.0],  # axon tip, weaker evidence
+            ]
+        )
+        C = np.zeros((2, 2))
+        return parent, 0, unaries, C, np.array([True, False])
+
+    def test_two_components_survive_when_evidence_strong(self):
+        parent, root, unaries, C, mask = self._two_branch_tree()
+        op = np.array([0.0, 1.0])  # cheap: both axon tips clear it
+        labels, _ = tree_map_decode(parent, root, unaries, C, mask, onset_penalty=op)
+        np.testing.assert_array_equal(labels, [0, 0, 0, 1, 1])
+
+    def test_weak_second_component_suppressed(self):
+        parent, root, unaries, C, mask = self._two_branch_tree()
+        op = np.array([0.0, 10.0])  # exceeds the weaker tip's evidence (5)
+        labels, _ = tree_map_decode(parent, root, unaries, C, mask, onset_penalty=op)
+        # only the stronger axon (node 3) survives; the weaker reverts to dendrite
+        np.testing.assert_array_equal(labels, [0, 0, 0, 1, 0])
+
+    def test_hard_cap_forces_single_component(self):
+        parent, root, unaries, C, mask = self._two_branch_tree()
+        op = np.array([0.0, np.inf])
+        labels, _ = tree_map_decode(parent, root, unaries, C, mask, onset_penalty=op)
+        assert _component_counts(parent, root, labels).get(1, 0) == 1
+        np.testing.assert_array_equal(labels, [0, 0, 0, 1, 0])
+
+    def test_zero_penalty_matches_unconstrained(self):
+        parent, root, unaries, C, mask = self._two_branch_tree()
+        base, _ = tree_map_decode(parent, root, unaries, C, mask)
+        zero, _ = tree_map_decode(
+            parent, root, unaries, C, mask, onset_penalty=np.zeros(2)
+        )
+        np.testing.assert_array_equal(base, zero)
+
+    def test_root_component_counts_as_free_first(self):
+        # A chain rooted in axon is one contiguous axon component -- the free
+        # first one -- so a large penalty must not perturb it.
+        parent = np.array([-1, 0, 1, 2])
+        unaries = np.zeros((4, 2))
+        unaries[:, 1] = 5.0
+        labels, _ = tree_map_decode(
+            parent,
+            0,
+            unaries,
+            np.zeros((2, 2)),
+            np.array([True, True]),
+            onset_penalty=np.array([0.0, 1000.0]),
+        )
+        np.testing.assert_array_equal(labels, [1, 1, 1, 1])
+
+    def test_independent_caps_per_class(self):
+        # root dendrite; two axon tips and two apical tips. Axon penalty is cheap
+        # (both survive); apical penalty is steep (only the stronger survives).
+        parent = np.array([-1, 0, 0, 1, 2, 0, 0, 5, 6])
+        unaries = np.zeros((9, 3))  # dendrite=0, axon=1, apical=2
+        unaries[0, 0] = 10.0
+        unaries[[1, 2, 5, 6], 0] = 1.0
+        unaries[[3, 4], 1] = 5.0
+        unaries[7, 2] = 6.0  # stronger apical
+        unaries[8, 2] = 5.0  # weaker apical
+        op = np.array([0.0, 1.0, 100.0])
+        labels, _ = tree_map_decode(
+            parent,
+            0,
+            unaries,
+            np.zeros((3, 3)),
+            np.array([True, False, False]),
+            onset_penalty=op,
+        )
+        np.testing.assert_array_equal(labels, [0, 0, 0, 1, 1, 0, 0, 2, 0])
+        counts = _component_counts(parent, 0, labels)
+        assert counts.get(1, 0) == 2  # two axons kept
+        assert counts.get(2, 0) == 1  # one apical kept
+
+    def test_max_components_controls_saturation(self):
+        # Three separated axon tips. At cap 2 the penalty saturates after the
+        # first extra, so the third tip is free and all three survive; at cap 3
+        # the penalty keeps accruing and only one survives.
+        parent = np.array([-1, 0, 0, 0, 1, 2, 3])
+        unaries = np.zeros((7, 2))
+        unaries[0, 0] = 10.0
+        unaries[[1, 2, 3], 0] = 1.0
+        unaries[[4, 5, 6], 1] = 5.0
+        C = np.zeros((2, 2))
+        mask = np.array([True, False])
+        op = np.array([0.0, 8.0])
+        l2, _ = tree_map_decode(
+            parent, 0, unaries, C, mask, onset_penalty=op, max_components=2
+        )
+        l3, _ = tree_map_decode(
+            parent, 0, unaries, C, mask, onset_penalty=op, max_components=3
+        )
+        assert _component_counts(parent, 0, l2).get(1, 0) == 3
+        assert _component_counts(parent, 0, l3).get(1, 0) == 1
+
+    @pytest.mark.parametrize("max_components", [2, 3])
+    @pytest.mark.parametrize("seed", range(8))
+    def test_exact_vs_brute_force(self, seed, max_components):
+        rng = np.random.default_rng(seed)
+        n, K = 6, 3
+        parent = np.array([-1] + [rng.integers(0, v) for v in range(1, n)])
+        root = 0
+        unaries = rng.normal(size=(n, K))
+        C = rng.uniform(0, 3, size=(K, K))
+        np.fill_diagonal(C, 0.0)
+        root_mask = np.array([True] + list(rng.random(K - 1) > 0.5))
+        # random per-class penalties, ~half the classes uncapped
+        op = np.where(rng.random(K) > 0.5, rng.uniform(0, 4, size=K), 0.0)
+        labels, _ = tree_map_decode(
+            parent,
+            root,
+            unaries,
+            C,
+            root_mask,
+            onset_penalty=op,
+            max_components=max_components,
+        )
+        got = _objective(parent, root, unaries, C, labels, op, max_components)
+        best, _ = _brute_force(parent, root, unaries, C, root_mask, op, max_components)
+        np.testing.assert_allclose(got, best, rtol=1e-9)
+
+
+class TestCountComponents:
+    def test_counts_per_label(self):
+        # dend root+{3} = one dend run; axon {1,2} and axon {4} = two axon runs.
+        parent = np.array([-1, 0, 1, 0, 3])
+        labels = np.array([0, 1, 1, 0, 1])
+        assert count_components(parent, 0, labels) == {0: 1, 1: 2}
+
+
+class TestComponentPenalties:
+    def test_onset_penalty_array(self):
+        s = TransitionSchema(
+            classes=["dend", "axon", "apical"],
+            component_penalties={"axon": 8.0, "apical": 100.0},
+        )
+        np.testing.assert_array_equal(s.onset_penalty, [0.0, 8.0, 100.0])
+
+    def test_default_no_penalty(self):
+        s = TransitionSchema(classes=["dend", "axon"])
+        np.testing.assert_array_equal(s.onset_penalty, [0.0, 0.0])
+
+    def test_validation_unknown_class(self):
+        with pytest.raises(ValueError):
+            TransitionSchema(
+                classes=["dend", "axon"], component_penalties={"apical": 1.0}
+            )
+
+    def test_with_root_classes_preserves_penalties(self):
+        s = TransitionSchema(
+            classes=["dend", "axon"], component_penalties={"axon": 5.0}
+        )
+        s2 = s.with_root_classes(["axon"])
+        np.testing.assert_array_equal(s2.onset_penalty, [0.0, 5.0])
+        assert s2.root_classes == ["axon"]
+
+
+class TestDecodeTreeCardinality:
+    def test_penalty_flows_through_schema(self):
+        parent = np.array([-1, 0, 0, 1, 2])
+        skel = _FakeSkeleton(parent, 0)
+        unaries = np.array(
+            [[10.0, 0.0], [1.0, 0.0], [1.0, 0.0], [0.0, 6.0], [0.0, 5.0]]
+        )
+        cheap = TransitionSchema(
+            classes=["dendrite", "axon"],
+            root_classes=["dendrite"],
+            component_penalties={"axon": 1.0},
+        )
+        labels_cheap, _ = decode_tree(skel, unaries, cheap)
+        np.testing.assert_array_equal(labels_cheap, [0, 0, 0, 1, 1])
+        pricey = TransitionSchema(
+            classes=["dendrite", "axon"],
+            root_classes=["dendrite"],
+            component_penalties={"axon": 10.0},
+        )
+        labels_pricey, _ = decode_tree(skel, unaries, pricey)
+        np.testing.assert_array_equal(labels_pricey, [0, 0, 0, 1, 0])
 
 
 class TestDecodeTreeWrapper:

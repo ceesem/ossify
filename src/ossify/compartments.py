@@ -23,7 +23,7 @@ import pathlib
 import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Callable, List, Literal, Optional, Union
+from typing import Callable, List, Literal, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
@@ -48,6 +48,8 @@ __all__ = [
     "SkeletonVertexModel",
     "ProbaVertexModel",
     "StructuredLabeler",
+    "RootDecision",
+    "root_policy",
     "AxonLabel",
     "get_models",
     "load_model_config",
@@ -1198,3 +1200,302 @@ class StructuredLabeler:
         """
         labels, edge_cost = self._decode(cell)
         return self._as_labels(labels, return_labels_as), edge_cost
+
+
+# --- Rooting policy ---------------------------------------------------------
+#
+# The structured decode's directional priors are *root-relative*: "axon does not
+# revert to dendrite as you move away from the root" only means what we want if
+# the root sits at the soma/proximal end. Some cells in large datasets get an
+# incorrect root, which silently inverts the prior. This policy re-derives the
+# root from a-priori information (a nucleus) and, failing that, from the encoder's
+# own probabilities -- but only re-roots onto a *convincing span* of the anchor
+# class, never a single noisy argmax vertex. It is a pure decision (no mutation);
+# inspect the returned RootDecision as a dry run, then call .apply to commit.
+
+
+def _tree_mask_components(
+    parent_array: np.ndarray, root: int, mask: np.ndarray
+) -> np.ndarray:
+    """Label maximal connected runs of ``mask``-True nodes on the rooted tree.
+
+    Returns a ``(n,)`` array of component ids (the top-most node of each run);
+    ``mask``-False nodes get ``-1``. Mirrors the compartment-id pass in
+    :func:`~ossify.structured_prediction.tree_absorb_small_compartments`, but
+    over a boolean membership mask rather than a label array.
+    """
+    n = parent_array.shape[0]
+    children: List[List[int]] = [[] for _ in range(n)]
+    for v in range(n):
+        p = parent_array[v]
+        if v != root and p >= 0:
+            children[p].append(v)
+    order: List[int] = []
+    stack = [root]
+    while stack:
+        v = stack.pop()
+        order.append(v)
+        stack.extend(children[v])
+    comp = np.full(n, -1, dtype=int)
+    for v in order:
+        if not mask[v]:
+            continue
+        p = parent_array[v]
+        if v == root or p < 0 or not mask[p]:
+            comp[v] = v
+        else:
+            comp[v] = comp[p]
+    return comp
+
+
+def _oncomponent_window_sum(
+    parent_array: np.ndarray,
+    root: int,
+    member_mask: np.ndarray,
+    values: np.ndarray,
+    window_hops: int,
+) -> np.ndarray:
+    """Sum ``values`` over each vertex's ``<=window_hops`` neighborhood, confined
+    to its connected component of ``member_mask`` vertices.
+
+    The skeleton graph is cut at every edge that isn't between two members, so a
+    window can never reach across a label boundary into another compartment. A
+    non-member vertex is isolated and gets only its own value. Returned in
+    positional order.
+    """
+    n = parent_array.shape[0]
+    v = np.arange(n)
+    edge = (v != root) & (parent_array >= 0)
+    src, dst = v[edge], parent_array[edge]
+    keep = member_mask[src] & member_mask[dst]
+    src, dst = src[keep], dst[keep]
+    ones = np.ones(src.size)
+    B = sparse.csr_matrix(
+        (
+            np.concatenate([ones, ones]),
+            (np.concatenate([src, dst]), np.concatenate([dst, src])),
+        ),
+        shape=(n, n),
+    )
+    step = sparse.identity(n, format="csr") + B
+    reach = sparse.identity(n, format="csr")
+    for _ in range(int(window_hops)):
+        reach = reach @ step
+        reach.data = np.ones_like(reach.data)  # set-reachability, not path counts
+    return np.asarray(reach @ np.asarray(values, dtype=float)).ravel()
+
+
+@dataclass
+class RootDecision:
+    """The outcome of :func:`root_policy` -- a pure decision plus its audit.
+
+    Holds where to root (``root``, positional) and which classes the root may take
+    (``root_classes``, to feed :meth:`TransitionSchema.with_root_classes`), along
+    with the evidence behind the call so a dataset can be swept before committing.
+    Nothing is mutated until :meth:`apply` is called.
+    """
+
+    root: int
+    root_classes: List
+    rerooted: bool
+    reason: str
+    old_root: int
+    root_class: object
+    window_logodds: float
+    old_window_logodds: float
+    span_size: int
+    n_qualifying_spans: int
+
+    def apply(self, cell: Cell) -> Cell:
+        """Commit the decision: reroot the cell's skeleton if it changed.
+
+        Returns the (mutated) cell for chaining. Build the decode schema with
+        ``schema.with_root_classes(decision.root_classes)``; this method only
+        moves the skeleton root.
+        """
+        if self.rerooted:
+            cell.skeleton.reroot(int(self.root), as_positional=True)
+        return cell
+
+    def __str__(self) -> str:
+        head = "reroot" if self.rerooted else "keep"
+        move = f"{self.old_root} -> {self.root}" if self.rerooted else f"{self.root}"
+        return (
+            f"RootDecision({head} {move}; root_classes={self.root_classes}; "
+            f"window_logodds={self.window_logodds:.2f}; {self.reason})"
+        )
+
+
+def root_policy(
+    cell: Cell,
+    labeler: "StructuredLabeler",
+    *,
+    root_class="dendrite",
+    unaries: Optional[np.ndarray] = None,
+    has_nucleus: Optional[bool] = None,
+    nucleus_root: Optional[int] = None,
+    window_hops: int = 5,
+    min_window_logodds: float = 10.0,
+    fallback_root_classes: Sequence = ("axon",),
+    root_score: Optional[np.ndarray] = None,
+) -> RootDecision:
+    """Decide where to root a cell for the structured decode (no mutation).
+
+    The decode's directional priors are root-relative, so the root must sit in a
+    genuine ``root_class`` region. Evidence is measured in **log-odds, local to
+    the candidate root and confined to its component**: the per-vertex margin
+    ``u[root_class] - max(u[other])`` (nats, same units as the schema's transition
+    costs), summed over each candidate's ``window_hops``-hop neighborhood *within
+    its own connected span of root_class-dominant vertices* -- the window is cut
+    at the span boundary, so it never accumulates across into axon. A vertex
+    qualifies as a root only when that on-component windowed sum clears
+    ``min_window_logodds``; summing (not averaging) requires a genuine local span
+    of supporting evidence rather than a lone high-margin spike. The decision is
+    conservative and a-priori first:
+
+    1. **Nucleus present** (``has_nucleus`` true and ``nucleus_root`` given) ->
+       trust it: root at the soma node, ``root_classes=[root_class]``.
+    2. Else compute the on-component windowed margin and the connected components
+       (the *spans*) holding any vertex that clears ``min_window_logodds``. If the
+       **current root already qualifies**, keep it (no gratuitous re-rooting). If
+       not but some vertex qualifies, **re-root** to the qualifying vertex of
+       highest ``root_score`` (default: the windowed margin itself). If **nothing
+       qualifies**, treat the cell as a terminal fragment: keep the current root
+       and return ``fallback_root_classes``.
+
+    Parameters
+    ----------
+    cell : Cell
+        Must have a rooted skeleton; topology is read, never changed.
+    labeler : StructuredLabeler
+        Supplies the encoder (for unaries, when ``unaries`` is not given) and the
+        schema (for class order). ``root_class`` must be one of its classes.
+    root_class : hashable
+        The anchor class a real root should belong to (e.g. ``"dendrite"`` or, for
+        a K>2 schema, ``"soma"``).
+    unaries : np.ndarray, optional
+        Precomputed ``(n_vertices, K)`` log-potentials in ``schema.classes`` order.
+        When omitted, ``labeler.predict_unaries(cell)`` is used. Pass this to sweep
+        a dataset without re-running the encoder.
+    has_nucleus, nucleus_root : optional
+        A-priori soma evidence. ``nucleus_root`` is a positional vertex index.
+    window_hops : int
+        Topological radius of the on-component neighborhood the margin is summed
+        over -- the local window around each candidate root (same hop notion the
+        encoder's feature aggregation uses, not a metric distance). Larger windows
+        sum more vertices, so calibrate ``min_window_logodds`` alongside it.
+    min_window_logodds : float
+        Threshold (nats) on the on-component windowed *sum* of the margin for a
+        vertex to be a convincing root. Calibrate against the schema's transition
+        costs and ``window_hops`` via a dry-run sweep.
+    fallback_root_classes : sequence
+        ``root_classes`` to return when nothing qualifies (terminal fragment).
+    root_score : np.ndarray, optional
+        ``(n_vertices,)`` score maximized to pick the root among qualifying
+        vertices; defaults to the windowed margin. Pass e.g. ``windowed_margin *
+        radius`` to prefer the high-radius soma over thin proximal dendrite.
+
+    Returns
+    -------
+    RootDecision
+        The chosen root, ``root_classes``, and audit. Mutates nothing; call
+        :meth:`RootDecision.apply` to commit.
+    """
+    skel = cell.skeleton
+    classes = list(labeler.schema.classes)
+    if root_class not in classes:
+        raise ValueError(
+            f"root_class {root_class!r} is not in schema.classes {classes}."
+        )
+    col = classes.index(root_class)
+
+    if unaries is None:
+        unaries = labeler.predict_unaries(cell)
+    unaries = np.asarray(unaries, dtype=float)
+
+    # Per-vertex one-vs-best margin for root_class (nats). Members are the vertices
+    # where root_class wins; sum the margin over each member's hop-window confined
+    # to its own member component (cut at the boundary, so no axon bleed-in).
+    other = np.delete(unaries, col, axis=1).max(axis=1)
+    margin = unaries[:, col] - other
+    pa = np.asarray(skel.parent_node_array)
+    old_root = int(skel.root_positional)
+    member_mask = margin > 0
+    windowed = _oncomponent_window_sum(pa, old_root, member_mask, margin, window_hops)
+
+    old_lo = float(windowed[old_root])
+    score = windowed if root_score is None else np.asarray(root_score, dtype=float)
+
+    # 1. Nucleus a-priori: trust the soma node.
+    if has_nucleus and nucleus_root is not None:
+        nucleus_root = int(nucleus_root)
+        return RootDecision(
+            root=nucleus_root,
+            root_classes=[root_class],
+            rerooted=nucleus_root != old_root,
+            reason="nucleus present; rooted at soma",
+            old_root=old_root,
+            root_class=root_class,
+            window_logodds=float(windowed[nucleus_root]),
+            old_window_logodds=old_lo,
+            span_size=-1,
+            n_qualifying_spans=-1,
+        )
+
+    # 2. Qualifying spans: member components holding a vertex whose on-component
+    #    windowed margin clears the threshold.
+    qualify = windowed >= min_window_logodds
+    comp = _tree_mask_components(pa, old_root, member_mask)
+    n_qual = int(np.unique(comp[qualify & (comp >= 0)]).size)
+
+    # 2a. Nothing qualifies -> terminal fragment, keep current root.
+    if n_qual == 0:
+        return RootDecision(
+            root=old_root,
+            root_classes=list(fallback_root_classes),
+            rerooted=False,
+            reason=(
+                f"no {root_class} window >= {min_window_logodds:g} nats; "
+                "terminal fragment"
+            ),
+            old_root=old_root,
+            root_class=root_class,
+            window_logodds=old_lo,
+            old_window_logodds=old_lo,
+            span_size=0,
+            n_qualifying_spans=0,
+        )
+
+    # 2b. Current root already qualifies -> trust it.
+    if qualify[old_root]:
+        return RootDecision(
+            root=old_root,
+            root_classes=[root_class],
+            rerooted=False,
+            reason=f"current root already in a convincing {root_class} window",
+            old_root=old_root,
+            root_class=root_class,
+            window_logodds=old_lo,
+            old_window_logodds=old_lo,
+            span_size=int(np.sum(comp == comp[old_root])),
+            n_qualifying_spans=n_qual,
+        )
+
+    # 2c. Re-root to the highest-scoring qualifying vertex.
+    cand = np.flatnonzero(qualify)
+    new_root = int(cand[np.argmax(score[cand])])
+    return RootDecision(
+        root=new_root,
+        root_classes=[root_class],
+        rerooted=new_root != old_root,
+        reason=(
+            f"current root window={old_lo:.2f} nats below {min_window_logodds:g}; "
+            f"rerooted to {root_class} window of {float(windowed[new_root]):.2f} nats"
+        ),
+        old_root=old_root,
+        root_class=root_class,
+        window_logodds=float(windowed[new_root]),
+        old_window_logodds=old_lo,
+        span_size=int(np.sum(comp == comp[new_root])),
+        n_qualifying_spans=n_qual,
+    )
