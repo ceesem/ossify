@@ -187,9 +187,129 @@ class TestSkeletonLayer:
 
         # Path should include all 5 vertices in sequence
         assert len(path) == 5
-        # Note: path_between returns positional indices by default
-        assert path[0] == 0  # root position
-        assert path[-1] == 4  # tip position
+        # By default (as_positional=False), the path is returned in vertex indices,
+        # matching the index space of the (vertex-index) inputs.
+        assert path[0] == vertex_indices[0]  # root vertex index
+        assert path[-1] == vertex_indices[-1]  # tip vertex index
+
+        # With as_positional=True, inputs and outputs are positional indices.
+        path_positional = skeleton.path_between(source=0, target=4, as_positional=True)
+        assert len(path_positional) == 5
+        assert path_positional[0] == 0  # root position
+        assert path_positional[-1] == 4  # tip position
+
+        # as_vertices=True returns 3d coordinates regardless of as_positional.
+        path_vertices = skeleton.path_between(
+            source=vertex_indices[0], target=vertex_indices[-1], as_vertices=True
+        )
+        assert path_vertices.shape == (5, 3)
+        np.testing.assert_array_equal(path_vertices[0], vertices[0])
+        np.testing.assert_array_equal(path_vertices[-1], vertices[-1])
+
+    def test_skeleton_lowest_common_ancestor(
+        self, branched_skeleton_data, spatial_columns
+    ):
+        """LCA is returned in the same index space as the query."""
+        vertices, _, vertex_indices = branched_skeleton_data
+        vertex_df = pd.DataFrame(
+            vertices, columns=spatial_columns, index=vertex_indices
+        )
+        # Tree: 100 -> 101 -> {102 -> 104, 103}
+        edges_with_indices = np.array(
+            [
+                [vertex_indices[1], vertex_indices[0]],  # 101 -> 100
+                [vertex_indices[2], vertex_indices[1]],  # 102 -> 101
+                [vertex_indices[3], vertex_indices[1]],  # 103 -> 101
+                [vertex_indices[4], vertex_indices[2]],  # 104 -> 102
+            ]
+        )
+
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=vertex_df,
+            edges=edges_with_indices,
+            spatial_columns=spatial_columns,
+            root=vertex_indices[0],
+        )
+        skeleton = cell.skeleton
+
+        # Default (as_positional=False): inputs and output are vertex indices.
+        assert (
+            skeleton.lowest_common_ancestor(vertex_indices[4], vertex_indices[3])
+            == vertex_indices[1]  # 104 and 103 meet at 101
+        )
+        assert (
+            skeleton.lowest_common_ancestor(vertex_indices[4], vertex_indices[2])
+            == vertex_indices[2]  # 104 is downstream of 102
+        )
+
+        # as_positional=True: inputs and output are positional indices.
+        assert skeleton.lowest_common_ancestor(4, 3, as_positional=True) == 1
+        assert skeleton.lowest_common_ancestor(4, 2, as_positional=True) == 2
+
+    def test_masked_skeleton_positional_queries_stay_in_masked_space(
+        self, simple_skeleton_data, spatial_columns
+    ):
+        """Regression: with as_positional=True on a masked skeleton, results are
+        positional indices in the masked space, not raw vertex indices.
+
+        Before the fix, path_between/lowest_common_ancestor returned values in the
+        original vertex-index space, which raised IndexError when used to index the
+        smaller masked arrays.
+        """
+        vertices, _, vertex_indices = simple_skeleton_data
+        vertex_df = pd.DataFrame(
+            vertices, columns=spatial_columns, index=vertex_indices
+        )
+        edges_with_indices = np.array(
+            [
+                [vertex_indices[1], vertex_indices[0]],  # 101 -> 100
+                [vertex_indices[2], vertex_indices[1]],  # 102 -> 101
+                [vertex_indices[3], vertex_indices[2]],  # 103 -> 102
+                [vertex_indices[4], vertex_indices[3]],  # 104 -> 103
+            ]
+        )
+
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=vertex_df,
+            edges=edges_with_indices,
+            spatial_columns=spatial_columns,
+            root=vertex_indices[0],
+        )
+
+        masked = cell.skeleton.apply_mask(
+            np.array([True, True, True, True, False]),
+            as_positional=True,
+            self_only=True,
+        )
+        # vertex_index is non-identity (values 100..103), so the two index spaces
+        # genuinely differ and a space mix-up would be observable.
+        assert not np.array_equal(masked.vertex_index, np.arange(masked.n_vertices))
+
+        root_pos = masked.root_positional
+        tip_pos = masked.end_points_positional[0]
+
+        # Positional query -> positional result, valid to index masked arrays.
+        path_pos = masked.path_between(
+            source=root_pos, target=tip_pos, as_positional=True
+        )
+        assert path_pos.max() < masked.n_vertices
+        masked.vertices[path_pos]  # would raise IndexError before the fix
+
+        # Vertex-index query -> vertex-index result, consistent with positional one.
+        path_vi = masked.path_between(
+            source=masked.root, target=masked.vertex_index[tip_pos]
+        )
+        np.testing.assert_array_equal(masked.vertex_index[path_pos], path_vi)
+
+        # lowest_common_ancestor honors the same contract.
+        lca_pos = masked.lowest_common_ancestor(root_pos, tip_pos, as_positional=True)
+        assert lca_pos < masked.n_vertices
+        lca_vi = masked.lowest_common_ancestor(
+            masked.root, masked.vertex_index[tip_pos]
+        )
+        assert lca_vi == masked.vertex_index[lca_pos]
 
     def test_skeleton_segments_and_cover_paths(
         self, branched_skeleton_data, spatial_columns

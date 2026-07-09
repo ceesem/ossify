@@ -17,8 +17,6 @@ class DAGCache:
 
     Attributes
     ----------
-    topological_order : Optional[List[int]]
-        Cached topological ordering of vertices, computed once and reused.
     depths : Optional[Dict[int, int]]
         Cached depths of each vertex from root nodes.
     ancestors : Dict[int, Dict[int, int]]
@@ -33,7 +31,6 @@ class DAGCache:
 
     """
 
-    topological_order: Optional[List[int]] = None
     depths: Optional[Dict[int, int]] = None
     ancestors: Dict[int, Dict[int, int]] = None
     parent_node_array: Optional[np.ndarray] = None
@@ -52,7 +49,6 @@ class DAGCache:
 
     def reset(self):
         """Reset all cached properties."""
-        self.topological_order = None
         self.depths = None
         self.ancestors = {}
         self.parent_node_array = None
@@ -93,8 +89,8 @@ def build_adjacency_lists(
     Parameters
     ----------
     edges : Union[np.ndarray, List[List[int]]]
-        Array of shape (n_edges, 2) where each row is [parent_id, child_id],
-        or list of [parent_id, child_id] pairs.
+        Array of shape (n_edges, 2) where each row is [child_id, parent_id],
+        or list of [child_id, parent_id] pairs.
 
     Returns
     -------
@@ -121,8 +117,8 @@ def find_roots(edges: Union[np.ndarray, List[List[int]]]) -> np.ndarray:
     Parameters
     ----------
     edges : Union[np.ndarray, List[List[int]]]
-        Array of shape (n_edges, 2) where each row is [parent_id, child_id],
-        or list of [parent_id, child_id] pairs.
+        Array of shape (n_edges, 2) where each row is [child_id, parent_id],
+        or list of [child_id, parent_id] pairs.
 
     Returns
     -------
@@ -135,70 +131,8 @@ def find_roots(edges: Union[np.ndarray, List[List[int]]]) -> np.ndarray:
         return np.array([], dtype=int)
 
     all_nodes = set(edges.flatten().astype(int))
-    children = set(edges[:, 1].astype(int))
+    children = set(edges[:, 0].astype(int))
     return np.array(list(all_nodes - children), dtype=int)
-
-
-def topological_sort(
-    vertices: Union[np.ndarray, List[List[float]]],
-    edges: Union[np.ndarray, List[List[int]]],
-    cache: Optional[DAGCache] = None,
-) -> np.ndarray:
-    """
-    Compute topological ordering of the DAG using depth-first search.
-
-    Parameters
-    ----------
-    vertices : Union[np.ndarray, List[List[float]]]
-        Array of shape (n_vertices, 3) containing 3D positions of vertices,
-        or list of [x, y, z] coordinate lists.
-    edges : Union[np.ndarray, List[List[int]]]
-        Array of shape (n_edges, 2) where each row is [parent_id, child_id],
-        or list of [parent_id, child_id] pairs.
-    cache : Optional[DAGCache], default=None
-        Optional cache to store/retrieve the topological order for performance.
-
-    Returns
-    -------
-    np.ndarray
-        Array of vertex IDs in topological order. Parents appear before children.
-        Isolated vertices are included at the end.
-    """
-    vertices = np.asarray(vertices)
-    edges = np.asarray(edges)
-    if cache is not None and cache.topological_order is not None:
-        return cache.topological_order
-
-    forward_adj, _ = build_adjacency_lists(edges)
-    roots = find_roots(edges)
-
-    visited = set()
-    result = []
-
-    def dfs(node_id):
-        if node_id in visited:
-            return
-        visited.add(node_id)
-        if node_id in forward_adj:
-            for child in forward_adj[node_id]:
-                dfs(child)
-        result.append(node_id)
-
-    # Start from all roots
-    for root in roots:
-        dfs(root)
-
-    # Include any isolated vertices
-    all_vertices = set(range(len(vertices)))
-    for v in all_vertices - visited:
-        result.append(v)
-
-    result.reverse()
-    result = np.array(result, dtype=int)
-    if cache is not None:
-        cache.topological_order = result
-
-    return result
 
 
 def compute_depths(
@@ -215,8 +149,8 @@ def compute_depths(
         Array of shape (n_vertices, 3) containing 3D positions of vertices,
         or list of [x, y, z] coordinate lists.
     edges : Union[np.ndarray, List[List[int]]]
-        Array of shape (n_edges, 2) where each row is [parent_id, child_id],
-        or list of [parent_id, child_id] pairs.
+        Array of shape (n_edges, 2) where each row is [child_id, parent_id],
+        or list of [child_id, parent_id] pairs.
     cache : Optional[DAGCache], default=None
         Optional cache to store/retrieve the computed depths for performance.
 
@@ -273,8 +207,8 @@ def build_parent_map(edges: Union[np.ndarray, List[List[int]]]) -> Dict[int, int
     Parameters
     ----------
     edges : Union[np.ndarray, List[List[int]]]
-        Array of shape (n_edges, 2) where each row is [parent_id, child_id],
-        or list of [parent_id, child_id] pairs.
+        Array of shape (n_edges, 2) where each row is [child_id, parent_id],
+        or list of [child_id, parent_id] pairs.
 
     Returns
     -------
@@ -289,7 +223,7 @@ def build_parent_map(edges: Union[np.ndarray, List[List[int]]]) -> Dict[int, int
     """
     edges = np.asarray(edges)
     parent_map = {}
-    for parent, child in edges:
+    for child, parent in edges:
         parent_map[int(child)] = int(parent)
     return parent_map
 
@@ -308,8 +242,8 @@ def preprocess_lca(
         Array of shape (n_vertices, 3) containing 3D positions of vertices,
         or list of [x, y, z] coordinate lists.
     edges : Union[np.ndarray, List[List[int]]]
-        Array of shape (n_edges, 2) where each row is [parent_id, child_id],
-        or list of [parent_id, child_id] pairs.
+        Array of shape (n_edges, 2) where each row is [child_id, parent_id],
+        or list of [child_id, parent_id] pairs.
     cache : Optional[DAGCache], default=None
         Optional cache to store/retrieve the binary lifting table for performance.
 
@@ -377,8 +311,8 @@ def lca(
         Array of shape (n_vertices, 3) containing 3D positions of vertices,
         or list of [x, y, z] coordinate lists.
     edges : Union[np.ndarray, List[List[int]]]
-        Array of shape (n_edges, 2) where each row is [parent_id, child_id],
-        or list of [parent_id, child_id] pairs.
+        Array of shape (n_edges, 2) where each row is [child_id, parent_id],
+        or list of [child_id, parent_id] pairs.
     cache : Optional[DAGCache], default=None
         Optional cache containing preprocessed binary lifting table.
 
@@ -460,8 +394,8 @@ def shortest_path(
         Array of shape (n_vertices, 3) containing 3D positions of vertices,
         or list of [x, y, z] coordinate lists.
     edges : Union[np.ndarray, List[List[int]]]
-        Array of shape (n_edges, 2) where each row is [parent_id, child_id],
-        or list of [parent_id, child_id] pairs.
+        Array of shape (n_edges, 2) where each row is [child_id, parent_id],
+        or list of [child_id, parent_id] pairs.
     cache : Optional[DAGCache], default=None
         Optional cache for LCA preprocessing and path length storage.
 
@@ -517,8 +451,8 @@ def path_length(
         Array of shape (n_vertices, 3) containing 3D positions of vertices,
         or list of [x, y, z] coordinate lists.
     edges : Union[np.ndarray, List[List[int]]]
-        Array of shape (n_edges, 2) where each row is [parent_id, child_id],
-        or list of [parent_id, child_id] pairs.
+        Array of shape (n_edges, 2) where each row is [child_id, parent_id],
+        or list of [child_id, parent_id] pairs.
     cache : Optional[DAGCache], default=None
         Optional cache for storing computed path lengths to avoid recomputation.
 
@@ -558,67 +492,6 @@ def path_length(
     return length
 
 
-def minimum_spanning_tree_points(
-    point_ids: Union[np.ndarray, List[int]],
-    vertices: Union[np.ndarray, List[List[float]]],
-    edges: Union[np.ndarray, List[List[int]]],
-    cache: Optional[DAGCache] = None,
-) -> np.ndarray:
-    """
-    Find minimum spanning tree connecting a set of points in the DAG.
-
-    Parameters
-    ----------
-    point_ids : Union[np.ndarray, List[int]]
-        Array or list of vertex IDs that need to be connected.
-    vertices : Union[np.ndarray, List[List[float]]]
-        Array of shape (n_vertices, 3) containing 3D positions of vertices,
-        or list of [x, y, z] coordinate lists.
-    edges : Union[np.ndarray, List[List[int]]]
-        Array of shape (n_edges, 2) where each row is [parent_id, child_id],
-        or list of [parent_id, child_id] pairs.
-    cache : Optional[DAGCache], default=None
-        Optional cache for LCA preprocessing to speed up computations.
-
-    Returns
-    -------
-    np.ndarray
-        Array of edges (parent, child) forming the minimum spanning tree
-        that connects all specified points with minimal total edge count.
-
-    Notes
-    -----
-    Uses Steiner tree approach: finds all LCAs between point pairs,
-    then extracts the minimal subtree connecting all points and LCAs.
-    """
-    point_ids = np.asarray(point_ids)
-    vertices = np.asarray(vertices)
-    edges = np.asarray(edges)
-    if len(point_ids) == 0:
-        return np.array([], dtype=int).reshape(0, 2)
-
-    if len(point_ids) == 1:
-        return np.array([], dtype=int).reshape(0, 2)
-
-    # Find all pairwise LCAs
-    lcas = set(point_ids)
-    for i in range(len(point_ids)):
-        for j in range(i + 1, len(point_ids)):
-            lca_node = lca(point_ids[i], point_ids[j], vertices, edges, cache)
-            if lca_node is not None:
-                lcas.add(lca_node)
-
-    # Find the subtree induced by these nodes
-    parent_map = build_parent_map(edges)
-    result_edges = []
-
-    for node_id in lcas:
-        if node_id in parent_map and parent_map[node_id] in lcas:
-            result_edges.append((parent_map[node_id], node_id))
-
-    return np.array(result_edges, dtype=int)
-
-
 def get_subtree_nodes(subtree_root: int, edges: Union[np.ndarray, list]) -> np.ndarray:
     """
     Get all nodes in the subtree rooted at given node.
@@ -628,7 +501,7 @@ def get_subtree_nodes(subtree_root: int, edges: Union[np.ndarray, list]) -> np.n
     subtree_root : int
         Root node ID of subtree to traverse.
     edges : Union[np.ndarray, list]
-        Array of shape (n_edges, 2) where each row is [parent_id, child_id].
+        Array of shape (n_edges, 2) where each row is [child_id, parent_id].
 
     Returns
     -------
@@ -679,8 +552,8 @@ def find_leaf_nodes(
         Array of shape (n_vertices, 3) containing 3D positions of vertices,
         or list of [x, y, z] coordinate lists.
     edges : Union[np.ndarray, List[List[int]]]
-        Array of shape (n_edges, 2) where each row is [parent_id, child_id],
-        or list of [parent_id, child_id] pairs.
+        Array of shape (n_edges, 2) where each row is [child_id, parent_id],
+        or list of [child_id, parent_id] pairs.
 
     Returns
     -------

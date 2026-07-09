@@ -224,15 +224,19 @@ class EdgeMixin(ABC):
         target : int
             The target vertex.
         as_positional: bool
-            Whether the input vertices are positional (i.e., masks or indices).
-            Must be the same for sources and targets.
+            Whether the input vertices are positional indices (True) or vertex
+            indices (False). The returned path uses the same index space: positional
+            indices if True, vertex indices if False.
         as_vertices: bool
-            Whether to return the path as vertex IDs or 3d positions.
+            Whether to return the path as 3d positions. Takes precedence over
+            `as_positional`.
 
         Returns
         -------
         np.ndarray
-            The shortest path between each source and target vertex, indices if as_positional is False, or nx3 array if `as_vertices` is True.
+            The shortest path between the source and target vertex. Positional
+            indices if `as_positional` is True, vertex indices if False, or an nx3
+            array of 3d positions if `as_vertices` is True.
         """
         # Sources must be positional for the dijkstra
         st, _ = self._vertices_to_positional([source, target], as_positional)
@@ -243,13 +247,12 @@ class EdgeMixin(ABC):
             target=target,
             csgraph=self.csgraph_binary_undirected,
         )
-        if as_positional and not as_vertices:
-            return self.vertex_index[path_positional]
+        if as_vertices:
+            return self.vertices[path_positional]
+        elif as_positional:
+            return path_positional
         else:
-            if as_vertices:
-                return self.vertices[path_positional]
-            else:
-                return path_positional
+            return self.vertex_index[path_positional]
 
 
 class FaceMixin(ABC):
@@ -2439,23 +2442,28 @@ class SkeletonLayer(GraphLayer):
         v : int
             The second vertex.
         as_positional : bool, optional
-            Whether the vertices are positional indices. If False, they are treated as vertex features.
+            Whether the vertices are positional indices. If False, they are treated
+            as vertex features. The returned ancestor uses the same index space.
 
         Returns
         -------
         Optional[int]
             The lowest common ancestor of the two vertices, or None if not found.
+            Positional index if `as_positional` is True, otherwise a vertex index.
         """
         uv, as_positional = self._vertices_to_positional([u, v], as_positional)
         u = uv[0]
         v = uv[1]
-        return gf.lca(
+        lca_positional = gf.lca(
             u,
             v,
             self.vertices,
             self.edges_positional,
             self._dag_cache,
         )
+        if lca_positional is None or as_positional:
+            return lca_positional
+        return int(self.vertex_index[lca_positional])
 
     @property
     def cover_paths(self) -> List[np.ndarray]:
