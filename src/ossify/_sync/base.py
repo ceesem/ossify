@@ -113,7 +113,7 @@ class Layer:
     @property
     def vertices(self) -> np.ndarray:
         """Array of the spatial coordinates of the vertices"""
-        return self.vertices_df.values
+        return self.vertices_df.to_numpy(dtype=float)
 
     @property
     def vertices_df(self) -> pd.DataFrame:

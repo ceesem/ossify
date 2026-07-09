@@ -517,6 +517,11 @@ class PointMixin(ABC):
         return self.layer.nodes
 
     @property
+    def df(self) -> pd.DataFrame:
+        """Get the complete DataFrame of vertices and all associated data, including both spatial columns and features. Alias of .nodes"""
+        return self.layer.nodes
+
+    @property
     def spatial_columns(self) -> list:
         """Get the list of column names associated with the x, y, and z positions."""
         return self._spatial_columns
@@ -1913,7 +1918,7 @@ class SkeletonLayer(GraphLayer):
         """
         if self.root is None:
             return None
-        return self.vertex_df.loc[self.root, self.spatial_columns].values
+        return self.vertex_df.loc[self.root, self.spatial_columns].to_numpy(dtype=float)
 
     @property
     def parent_node_array(self) -> np.ndarray:

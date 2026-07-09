@@ -107,6 +107,19 @@ def process_vertices(
     )
     if vertex_index is not None:
         vertices = vertices.set_index(vertex_index)
+
+    # Ensure spatial coordinates are stored as float. A single non-numeric or
+    # object-dtype column would otherwise force the whole (N, 3) block to
+    # object dtype when accessed via `.values`, which breaks downstream
+    # consumers (e.g. scipy interpolators reject object arrays).
+    for col in spatial_columns:
+        try:
+            vertices[col] = vertices[col].astype(float)
+        except (ValueError, TypeError) as e:
+            raise ValueError(
+                f"Spatial column {col!r} could not be cast to float: {e}"
+            ) from e
+
     return vertices, spatial_columns, feature_columns
 
 

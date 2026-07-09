@@ -35,9 +35,9 @@ def project_points_to_nearest(
         Only returned if return_distances=True.
     """
     if isinstance(source_points, pd.DataFrame):
-        source_points = source_points.values
+        source_points = source_points.to_numpy(dtype=float)
     if isinstance(target_points, pd.DataFrame):
-        target_points = target_points.values
+        target_points = target_points.to_numpy(dtype=float)
 
     tree = KDTree(target_points)
     distances, indices = tree.query(source_points)

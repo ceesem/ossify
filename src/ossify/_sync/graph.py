@@ -42,7 +42,7 @@ class Graph(Layer):
     @property
     def edges(self) -> np.ndarray:
         """Edges as a numpy array of shape (n_edges, 2)."""
-        return self.edges_df.values
+        return self.edges_df.to_numpy()
 
     @property
     def edges_df(self) -> pd.DataFrame:

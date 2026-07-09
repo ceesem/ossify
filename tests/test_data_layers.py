@@ -1511,3 +1511,97 @@ class TestAnnotationWhereFilter:
             (df["spine_in"] + df["shaft_in"]).to_numpy(), df["syn_in"].to_numpy()
         )
         np.testing.assert_array_equal(df["spine_in"].to_numpy(), [1, 1, 1, 0, 0])
+
+
+class TestSpatialDtypeCoercion:
+    """Regression tests: spatial coordinates must always be float, never object.
+
+    A single object-dtype spatial column would otherwise force the whole (N, 3)
+    block to object dtype when accessed via ``.values``, which breaks callables
+    passed to ``transform`` (e.g. scipy interpolators reject object arrays).
+    """
+
+    def _object_dtype_vertex_df(self, spatial_columns):
+        """5-vertex skeleton whose x/y/z columns are stored as object dtype."""
+        vertices, _, vertex_indices = (
+            np.array(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [2.0, 0.0, 0.0],
+                    [3.0, 0.0, 0.0],
+                    [4.0, 0.0, 0.0],
+                ]
+            ),
+            None,
+            np.array([100, 101, 102, 103, 104]),
+        )
+        df = pd.DataFrame(vertices, columns=spatial_columns, index=vertex_indices)
+        # Force one spatial column to object dtype, holding python floats.
+        df[spatial_columns[1]] = df[spatial_columns[1]].astype(object)
+        assert df[spatial_columns[1]].dtype == object
+        # ``.values`` on the raw frame is object -- this is what we guard against.
+        assert df[spatial_columns].values.dtype == object
+        return df, vertex_indices
+
+    def _skeleton_cell(self, spatial_columns):
+        df, vertex_indices = self._object_dtype_vertex_df(spatial_columns)
+        edges = np.array(
+            [
+                [vertex_indices[1], vertex_indices[0]],
+                [vertex_indices[2], vertex_indices[1]],
+                [vertex_indices[3], vertex_indices[2]],
+                [vertex_indices[4], vertex_indices[3]],
+            ]
+        )
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=df,
+            edges=edges,
+            spatial_columns=spatial_columns,
+            root=vertex_indices[0],
+        )
+        return cell
+
+    def test_vertices_are_float64_from_object_columns(self, spatial_columns):
+        cell = self._skeleton_cell(spatial_columns)
+        assert cell.skeleton.vertices.dtype == np.float64
+
+    def test_root_location_is_float64(self, spatial_columns):
+        cell = self._skeleton_cell(spatial_columns)
+        root_location = cell.skeleton.root_location
+        assert root_location.dtype == np.float64
+        assert root_location.shape == (3,)
+
+    def test_transform_receives_float64_array(self, spatial_columns):
+        cell = self._skeleton_cell(spatial_columns)
+        seen = {}
+
+        def fn(coords):
+            seen["dtype"] = coords.dtype
+            return coords * 2.0
+
+        cell.skeleton.transform(fn, inplace=True)
+        assert seen["dtype"] == np.float64
+        assert cell.skeleton.vertices.dtype == np.float64
+
+    def test_point_layer_object_columns_are_float64(self, spatial_columns):
+        df, vertex_indices = self._object_dtype_vertex_df(spatial_columns)
+        cell = Cell()
+        cell.add_point_layer(
+            name="points",
+            vertices=df,
+            spatial_columns=spatial_columns,
+        )
+        assert cell.layers["points"].vertices.dtype == np.float64
+
+    def test_non_coercible_column_raises_clear_error(self, spatial_columns):
+        df, vertex_indices = self._object_dtype_vertex_df(spatial_columns)
+        df[spatial_columns[1]] = ["a", "b", "c", "d", "e"]
+        cell = Cell()
+        with pytest.raises(ValueError, match=spatial_columns[1]):
+            cell.add_point_layer(
+                name="points",
+                vertices=df,
+                spatial_columns=spatial_columns,
+            )
