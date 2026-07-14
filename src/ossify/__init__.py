@@ -5,7 +5,7 @@ from .base import *
 from .file_io import *
 from .translate import *
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 
 def __getattr__(name):
