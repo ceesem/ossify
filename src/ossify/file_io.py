@@ -125,6 +125,8 @@ def save_cell(
     cell: Cell,
     file: Union[str, os.PathLike, BinaryIO, None] = None,
     allow_overwrite: bool = False,
+    compression: str = "zstd",
+    compression_level: Optional[int] = None,
 ) -> None:
     """Save Cell to a file path or file object.
 
@@ -136,20 +138,54 @@ def save_cell(
         File path, path-like object, open binary file object, or None (uses "<cell.name>.osy" as a string).
     allow_overwrite : bool
         Whether to allow overwriting existing files.
+    compression : str, default "zstd"
+        Compression codec for the internal Feather tables. Feather supports
+        ``"zstd"``, ``"lz4"``, and ``"uncompressed"``. ``"zstd"`` gives the
+        best size and is recommended.
+    compression_level : int, optional
+        Compression level passed to the codec. ``None`` (default) uses the
+        codec's own default (zstd level 1), which matches the historical
+        behavior. Higher zstd levels (e.g. 19) produce meaningfully smaller
+        files at the cost of much slower writes; read speed is unaffected.
+        The level is not stored in the file, so files written at any level
+        load identically.
     """
     if file is None:
-        _save_to_path(cell, None, allow_overwrite)
+        _save_to_path(
+            cell,
+            None,
+            allow_overwrite,
+            compression=compression,
+            compression_level=compression_level,
+        )
     else:
         try:
             # Try to convert to string path - works for str, Path, AnyPath, etc.
             path_str = os.fspath(file)
-            _save_to_path(cell, path_str, allow_overwrite)
+            _save_to_path(
+                cell,
+                path_str,
+                allow_overwrite,
+                compression=compression,
+                compression_level=compression_level,
+            )
         except TypeError:
             # Not a path-like object, treat as file object
-            _save_to_file_object(cell, file)
+            _save_to_file_object(
+                cell,
+                file,
+                compression=compression,
+                compression_level=compression_level,
+            )
 
 
-def _save_to_path(cell: Cell, path: Optional[str], allow_overwrite: bool) -> None:
+def _save_to_path(
+    cell: Cell,
+    path: Optional[str],
+    allow_overwrite: bool,
+    compression: str = "zstd",
+    compression_level: Optional[int] = None,
+) -> None:
     """Save to a file path using cloudfiles."""
     if path:
         basepath = "/".join(path.split("/")[:-1])
@@ -157,25 +193,53 @@ def _save_to_path(cell: Cell, path: Optional[str], allow_overwrite: bool) -> Non
     else:
         basepath = "."
         name = f"{cell.name}.{OSSIFY_EXTENSION}"
-    CellFiles(basepath).save(cell, name, allow_overwrite=allow_overwrite)
+    CellFiles(basepath).save(
+        cell,
+        name,
+        allow_overwrite=allow_overwrite,
+        compression=compression,
+        compression_level=compression_level,
+    )
 
 
-def _save_to_file_object(cell: Cell, file_obj: BinaryIO) -> None:
+def _save_to_file_object(
+    cell: Cell,
+    file_obj: BinaryIO,
+    compression: str = "zstd",
+    compression_level: Optional[int] = None,
+) -> None:
     """Save to an open binary file object."""
-    tar_bytes = _export_neuron_to_bytes(cell)
+    tar_bytes = _export_neuron_to_bytes(
+        cell, compression=compression, compression_level=compression_level
+    )
     file_obj.write(tar_bytes)
 
 
-def _export_neuron_to_bytes(cell: Cell) -> bytes:
+def _export_neuron_to_bytes(
+    cell: Cell,
+    compression: str = "zstd",
+    compression_level: Optional[int] = None,
+) -> bytes:
     """Export Cell to bytes data."""
     b = io.BytesIO()
     with tarfile.open(fileobj=b, mode="w") as tf:
-        _export_neuron_to_tar(cell, tf)
+        _export_neuron_to_tar(
+            cell, tf, compression=compression, compression_level=compression_level
+        )
     return b.getvalue()
 
 
-def _export_neuron_to_tar(cell: Cell, tf: tarfile.TarFile) -> None:
+def _export_neuron_to_tar(
+    cell: Cell,
+    tf: tarfile.TarFile,
+    compression: str = "zstd",
+    compression_level: Optional[int] = None,
+) -> None:
     """Export Cell to tar file."""
+    feather_kwargs = {
+        "compression": compression,
+        "compression_level": compression_level,
+    }
     # export metadata
     add_file_to_tar(
         name=METADATA_FILENAME,
@@ -187,20 +251,20 @@ def _export_neuron_to_tar(cell: Cell, tf: tarfile.TarFile) -> None:
     for l in cell.layers:
         match l.layer_type:
             case "skeleton":
-                export_skeleton_layer(l, tf)
+                export_skeleton_layer(l, tf, **feather_kwargs)
             case "graph":
-                export_graph_layer(l, tf)
+                export_graph_layer(l, tf, **feather_kwargs)
             case "mesh":
-                export_mesh_layer(l, tf)
+                export_mesh_layer(l, tf, **feather_kwargs)
             case "points":
-                export_point_cloud_layer(l, tf, as_annotation=False)
+                export_point_cloud_layer(l, tf, as_annotation=False, **feather_kwargs)
 
     # Export all annotations
     for anno in cell.annotations:
-        export_point_cloud_layer(anno, tf, as_annotation=True)
+        export_point_cloud_layer(anno, tf, as_annotation=True, **feather_kwargs)
 
     # Export linkage
-    export_linkage(cell, tf)
+    export_linkage(cell, tf, **feather_kwargs)
 
 
 def _import_neuron_from_bytes(file: bytes) -> Cell:
@@ -341,6 +405,8 @@ class CellFiles:
         cell: Cell,
         filename: Optional[str] = None,
         allow_overwrite: bool = False,
+        compression: str = "zstd",
+        compression_level: Optional[int] = None,
     ):
         if not self._saveable:
             raise ValueError(
@@ -354,7 +420,9 @@ class CellFiles:
                 raise FileExistsError(
                     f"{filename} already exists in path {self.cf.cloudpath}."
                 )
-        tar_bytes = _export_neuron_to_bytes(cell)
+        tar_bytes = _export_neuron_to_bytes(
+            cell, compression=compression, compression_level=compression_level
+        )
         self.cf.put(filename, tar_bytes)
 
     def load(self, filename: str) -> Cell:
@@ -408,7 +476,9 @@ def load_sparse_matrix(tinfo, tf) -> "scipy.sparse.csgraph.csr_matrix":
     return load_npz(buf)
 
 
-def export_linkage(cell, tf) -> None:
+def export_linkage(
+    cell, tf, compression: str = "zstd", compression_level: Optional[int] = None
+) -> None:
     datapath = f"linkage"
     unique_linkage = np.unique(
         [sorted(b) for b in list(cell._morphsync.links.keys())], axis=0
@@ -416,7 +486,11 @@ def export_linkage(cell, tf) -> None:
     for linkage_pair in unique_linkage:
         add_file_to_tar(
             name=f"{datapath}/{linkage_pair[0]}/{linkage_pair[1]}/linkage.feather",
-            data=bytesio_feather(cell._morphsync.links[tuple(linkage_pair)]),
+            data=bytesio_feather(
+                cell._morphsync.links[tuple(linkage_pair)],
+                compression=compression,
+                compression_level=compression_level,
+            ),
             tf=tf,
         )
 
@@ -424,6 +498,8 @@ def export_linkage(cell, tf) -> None:
 def export_skeleton_layer(
     layer,
     tf,
+    compression: str = "zstd",
+    compression_level: Optional[int] = None,
 ) -> None:
     datapath = f"layers/{layer.name}"
     add_file_to_tar(
@@ -439,7 +515,9 @@ def export_skeleton_layer(
     )
     add_file_to_tar(
         name=f"{datapath}/nodes.feather",
-        data=bytesio_feather(layer.nodes),
+        data=bytesio_feather(
+            layer.nodes, compression=compression, compression_level=compression_level
+        ),
         tf=tf,
     )
     add_file_to_tar(
@@ -457,6 +535,8 @@ def export_skeleton_layer(
 def export_graph_layer(
     layer,
     tf,
+    compression: str = "zstd",
+    compression_level: Optional[int] = None,
 ) -> None:
     datapath = f"layers/{layer.name}"
     add_file_to_tar(
@@ -468,7 +548,9 @@ def export_graph_layer(
     )
     add_file_to_tar(
         name=f"{datapath}/nodes.feather",
-        data=bytesio_feather(layer.nodes),
+        data=bytesio_feather(
+            layer.nodes, compression=compression, compression_level=compression_level
+        ),
         tf=tf,
     )
     add_file_to_tar(
@@ -482,6 +564,8 @@ def export_point_cloud_layer(
     layer,
     tf,
     as_annotation: bool = True,
+    compression: str = "zstd",
+    compression_level: Optional[int] = None,
 ) -> None:
     if as_annotation:
         datapath = f"annotations/{layer.name}"
@@ -496,12 +580,19 @@ def export_point_cloud_layer(
     )
     add_file_to_tar(
         name=f"{datapath}/nodes.feather",
-        data=bytesio_feather(layer.nodes),
+        data=bytesio_feather(
+            layer.nodes, compression=compression, compression_level=compression_level
+        ),
         tf=tf,
     )
 
 
-def export_mesh_layer(layer, tf) -> None:
+def export_mesh_layer(
+    layer,
+    tf,
+    compression: str = "zstd",
+    compression_level: Optional[int] = None,
+) -> None:
     datapath = f"layers/{layer.name}"
     add_file_to_tar(
         name=f"{datapath}/meta.json",
@@ -512,7 +603,9 @@ def export_mesh_layer(layer, tf) -> None:
     )
     add_file_to_tar(
         name=f"{datapath}/nodes.feather",
-        data=bytesio_feather(layer.nodes),
+        data=bytesio_feather(
+            layer.nodes, compression=compression, compression_level=compression_level
+        ),
         tf=tf,
     )
     add_file_to_tar(
@@ -583,7 +676,9 @@ def optimize_dtypes(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def bytesio_feather(df, compression="zstd") -> bytes:
+def bytesio_feather(
+    df, compression="zstd", compression_level: Optional[int] = None
+) -> bytes:
     """Serialize DataFrame to feather format with dtype optimization.
 
     Applies dtype optimization before serialization to reduce memory usage
@@ -595,6 +690,10 @@ def bytesio_feather(df, compression="zstd") -> bytes:
         DataFrame to serialize
     compression : str
         Compression codec (default: "zstd")
+    compression_level : int, optional
+        Compression level for the codec. ``None`` (default) uses the codec's
+        own default (zstd level 1). The level is not recorded in the file, so
+        output is readable regardless of the level it was written at.
 
     Returns
     -------
@@ -603,7 +702,7 @@ def bytesio_feather(df, compression="zstd") -> bytes:
     """
     buf = io.BytesIO()
     df = optimize_dtypes(df)
-    df.to_feather(buf, compression=compression)
+    df.to_feather(buf, compression=compression, compression_level=compression_level)
     return buf.getvalue()
 
 

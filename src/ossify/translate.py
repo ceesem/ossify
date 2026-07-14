@@ -36,7 +36,7 @@ def _process_synapse_table(
     columns: dict,
     timestamp: "datetime.datetime",
     reference_tables: Optional[list[str]] = None,
-    reference_suffixes: Optional[dict] = None,
+    reference_suffixes: dict = dict(),
     drop_other_side: bool = True,
     omit_autapses: bool = True,
 ) -> pd.DataFrame:
@@ -146,6 +146,8 @@ def load_cell_from_client(
     sk = client.skeleton.get_skeleton(
         root_id, skeleton_version=skeleton_version, output_format="dict"
     )
+    if reference_suffixes is None:
+        reference_suffixes = {}
     if timestamp is None:
         ts = client.chunkedgraph.get_root_timestamps(root_id, latest=True)[0]
     else:
