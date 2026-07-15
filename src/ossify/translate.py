@@ -611,6 +611,9 @@ def load_cell_batch_from_client(
     each cell is then assembled network-free — no skeleton is fetched twice, and the batch is
     validated with a single round trip. All roots share one ``timestamp``.
 
+    All parameters not listed below match :func:`load_cell_from_client` and are applied
+    identically to every cell in the batch.
+
     Parameters
     ----------
     root_ids: list[int]
@@ -626,7 +629,9 @@ def load_cell_batch_from_client(
         Passed to ``get_bulk_skeletons``. Default False assumes skeletons were already produced
         by a ``generate_bulk_skeletons_async`` pre-pass; a worker then just downloads them (fast,
         and degrades gracefully on a cache miss). Set True to block on server-side generation.
-    (all other parameters match :func:`load_cell_from_client`.)
+    row_limit: int
+        Passed to :func:`fetch_frames_batch`; guards against a silently-truncated pooled synapse
+        query at/above the server row limit (default 500,000). Set to 0 to disable.
 
     Returns
     -------

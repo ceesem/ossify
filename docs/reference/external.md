@@ -6,7 +6,7 @@ Ossify integrates with external data sources and analysis platforms to streamlin
 
 | Integration Category | Functions | Purpose |
 |---------------------|-----------|---------|
-| **[CAVE Integration](#cave-integration)** | `load_cell_from_client` | Connectome analysis via CAVE infrastructure |
+| **[CAVE Integration](#cave-integration)** | `load_cell_from_client`, `load_cell_batch_from_client`, `fetch_frames_batch` | Connectome analysis via CAVE infrastructure |
 
 ---
 
@@ -116,6 +116,67 @@ fig, ax = ossify.plot_cell_2d(
 )
 ```
 
+### load_cell_batch_from_client
+
+::: ossify.load_cell_batch_from_client
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+**Load many cells at once, pooling the synapse and L2 queries across the whole batch and
+downloading skeletons in a single bulk request.** Each returned `Cell` is identical to what
+`load_cell_from_client` produces for that root id, but a batch of `N` cells costs a handful of
+round trips instead of ~`9 × N`.
+
+```python
+root_ids = [864691135639806264, 864691135639806265, 864691135639806266]
+
+cells = ossify.load_cell_batch_from_client(
+    root_ids,
+    client,
+    synapses=True,
+    reference_tables=["synapse_target_predictions_ssa_v2"],
+    reference_suffixes={"synapse_target_predictions_ssa_v2": "ssa"},
+    timestamp=timestamp,     # one shared timestamp for the batch
+    skip_invalid=True,       # drop invalid/unskeletonized roots instead of raising
+)
+
+for root_id, cell in cells.items():
+    print(root_id, cell.skeleton.n_vertices)
+```
+
+!!! tip "Recommended batch size ~10"
+
+    Around 10 cells per batch is a good default: past that the pooled queries are payload-bound
+    (per-cell time stops improving), and ~10 stays under the server's 500,000-row query limit even
+    for heavily-connected cells while matching the synchronous bulk-skeleton download cap. For
+    large jobs, generate skeletons up front with `client.skeleton.generate_bulk_skeletons_async`
+    (up to 10,000 ids/call), then load small batches against the warm cache. See the
+    [Data Import and Export guide](../data_import_export.md#batch-loading-many-cells) for the full
+    workflow.
+
+### fetch_frames_batch
+
+::: ossify.fetch_frames_batch
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+Lower-level helper used by `load_cell_batch_from_client`. It returns the pooled per-root synapse
+and L2 frames (`{root_id: {"pre_syn_df", "post_syn_df", "l2_df"}}`) without assembling `Cell`
+objects, which are byte-identical to the single-cell path. Most users should call
+`load_cell_batch_from_client`; reach for this only when you want the raw frames — for example to
+feed them into `load_cell_from_client` via its `pre_syn_df` / `post_syn_df` / `l2_df` injection
+parameters in a custom pipeline.
+
 ### **Cross-Platform Analysis Pipeline**
 
 ```python
@@ -194,7 +255,7 @@ analysis_results = cave_to_analysis_pipeline(root_ids, client, "both")
 !!! tip "Best Practices for CAVE Integration"
     
     - **Use Timestamps**: Always specify timestamps for reproducible analyses
-    - **Batch Processing**: Process multiple cells with consistent parameters  
+    - **Batch Processing**: Use `load_cell_batch_from_client` (batches of ~10) to load many cells with pooled queries instead of looping `load_cell_from_client`  
     - **Error Handling**: Implement robust error handling for network operations
     - **Data Validation**: Validate imported data before analysis
     - **Version Control**: Track skeleton service and dataset versions used

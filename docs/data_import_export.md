@@ -178,6 +178,76 @@ if cell.skeleton:
         print(f"Compartments: {np.unique(compartment)}")
 ```
 
+### Batch Loading Many Cells
+
+When loading more than a handful of cells, `load_cell_batch_from_client` is much faster than
+calling `load_cell_from_client` in a loop. It produces **identical** cells but pools the two
+dominant per-cell fetches — the synapse queries and the L2 property lookup — across the whole
+batch, and downloads skeletons in a single bulk request. For a batch of `N` cells the number of
+network round trips drops from roughly `9 × N` to a small constant.
+
+```python
+# Load a batch of cells in a few pooled queries instead of one round trip per cell.
+root_ids = [864691135639806264, 864691135639806265, 864691135639806266]
+
+cells = ossify.load_cell_batch_from_client(
+    root_ids,
+    client,
+    synapses=True,
+    reference_tables=["synapse_target_predictions_ssa_v2"],
+    reference_suffixes={"synapse_target_predictions_ssa_v2": "ssa"},
+    timestamp=timestamp,   # one shared timestamp for the whole batch (see note below)
+)
+
+# Returns {root_id: Cell}; each Cell is identical to the single-cell load.
+for root_id, cell in cells.items():
+    print(root_id, cell.skeleton.n_vertices, len(cell.annotations.pre_syn.vertices))
+```
+
+The signature mirrors `load_cell_from_client` and adds a few batch-only options:
+
+- `skip_invalid=True` — drop root ids that are not valid at the timestamp (or whose skeleton is
+  unavailable) instead of raising.
+- `generate_missing_skeletons=True` — block on server-side skeleton generation for any cell not
+  already cached. The default (`False`) assumes skeletons already exist and simply downloads them.
+- `row_limit` — guards against a silently-truncated synapse query (see the batch-size note).
+
+!!! tip "Two batching scales: generate first, then load"
+
+    Skeletons are the expensive, server-generated artifact. For a large job, **generate them up
+    front** with a single async pre-pass, then let your workers load in small batches against a
+    warm cache:
+
+    ```python
+    # 1. Pre-pass (once for the whole population): trigger server-side generation.
+    #    Up to 10,000 root ids per call.
+    client.skeleton.generate_bulk_skeletons_async(all_root_ids)
+
+    # ... poll client.skeleton.skeletons_exist(root_ids=chunk) until ready ...
+
+    # 2. Per worker: load small batches (skeletons are already warm).
+    for chunk in chunked(all_root_ids, 10):
+        cells = ossify.load_cell_batch_from_client(chunk, client, synapses=True,
+                                                   timestamp=timestamp)
+        # ... your post-processing / saving ...
+    ```
+
+!!! note "Choosing a batch size (~10)"
+
+    A batch size of about **10** is a good default. Beyond that the pooled queries become
+    payload-bound, so larger batches stop improving per-cell time, and a batch of ~10 keeps the
+    combined synapse query safely under the server's row limit (500,000 rows) even for
+    heavily-connected cells. Ten also matches the synchronous bulk-skeleton download limit, so one
+    batch maps to exactly one bulk-skeleton call plus one pooled synapse and L2 query. If a batch
+    ever does exceed the row limit, the `row_limit` guard raises rather than returning a silently
+    truncated result — reduce the batch size if you hit it.
+
+!!! warning "Use a shared timestamp"
+
+    All cells in a batch are queried at one shared `timestamp`. Pass an explicit `timestamp` (or
+    pin `client.version`) so the pooled queries are consistent and the batch is reproducible; if
+    omitted, the current materialization timestamp is used.
+
 ## Legacy MeshWork Import
 
 Import from legacy MeshWork `.h5` files (requires `h5py`):
@@ -631,30 +701,33 @@ process_cell_directory("legacy_files/", "ossify_files/", "*.h5")
 
 ### Batch CAVEclient Downloads
 
+Use `load_cell_batch_from_client` and process the batch in chunks (see
+[Batch Loading Many Cells](#batch-loading-many-cells) for the details and the recommended chunk
+size of ~10):
+
 ```python
-def download_multiple_cells(root_ids, client, output_dir):
-    """Download multiple cells from CAVEclient."""
+def download_multiple_cells(root_ids, client, output_dir, timestamp=None, chunk_size=10):
+    """Download and save many cells, batching the CAVE queries."""
     output_path = Path(output_dir)
     output_path.mkdir(exist_ok=True)
-    
-    for root_id in root_ids:
-        print(f"Downloading {root_id}...")
-        
-        try:
-            cell = ossify.load_cell_from_client(
-                root_id=root_id,
-                client=client,
-                synapses=True
-            )
-            
-            # Save with root_id as filename
+
+    for start in range(0, len(root_ids), chunk_size):
+        chunk = root_ids[start:start + chunk_size]
+        print(f"Downloading {len(chunk)} cells ({start + 1}-{start + len(chunk)})...")
+
+        # One batched load for the whole chunk (skip roots that are invalid/unskeletonized).
+        cells = ossify.load_cell_batch_from_client(
+            chunk,
+            client,
+            synapses=True,
+            timestamp=timestamp,
+            skip_invalid=True,
+        )
+
+        for root_id, cell in cells.items():
             output_file = output_path / f"cell_{root_id}.osy"
             ossify.save_cell(cell, str(output_file))
-            
             print(f"  Saved: {output_file.name}")
-            
-        except Exception as e:
-            print(f"  Error downloading {root_id}: {e}")
 
 # Download list of cells
 root_ids = [864691135639806264, 864691135639806265, 864691135639806266]
@@ -722,7 +795,8 @@ print(f"Compressed cell file: {original_size / 1024 / 1024:.1f} MB")
 - `CellFiles(path)` - Advanced file management
 
 ### CAVEclient Integration
-- `ossify.load_cell_from_client(root_id, client, synapses=False, restore_graph=False, ...)` - Load from CAVE
+- `ossify.load_cell_from_client(root_id, client, synapses=False, restore_graph=False, ...)` - Load one cell from CAVE
+- `ossify.load_cell_batch_from_client(root_ids, client, synapses=False, ...)` - Load many cells with pooled queries (returns `{root_id: Cell}`)
 
 ### Legacy MeshWork
 - `ossify.import_legacy_meshwork(filename, l2_skeleton=True, as_pcg_skel=False)` - Import MeshWork files
