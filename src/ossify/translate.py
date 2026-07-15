@@ -10,12 +10,23 @@ from ossify.data_layers import SkeletonLayer
 from .base import Cell, Link
 from .utils import get_l2id_column, get_supervoxel_column, suppress_output
 
-__all__ = ["load_cell_from_client", "SWCCompartment"]
+__all__ = [
+    "load_cell_from_client",
+    "load_cell_batch_from_client",
+    "fetch_frames_batch",
+    "SWCCompartment",
+]
 
 if TYPE_CHECKING:
     import datetime
 
     from caveclient import CAVEclientFull as CAVEclient
+
+
+# Synchronous bulk-skeleton download cap in the CAVE skeleton service
+# (caveclient.skeletonservice.MAX_BULK_SYNCHRONOUS_SKELETONS); larger lists are silently
+# truncated by the endpoint, so callers must chunk at this size.
+_BULK_SKELETON_CHUNK = 10
 
 
 class SWCCompartment(IntEnum):
@@ -26,6 +37,79 @@ class SWCCompartment(IntEnum):
     AXON = 2
     DENDRITE = 3
     APICAL_DENDRITE = 4
+
+
+def _other_side(side: Literal["pre", "post"]) -> Literal["pre", "post"]:
+    return "post" if side == "pre" else "pre"
+
+
+def _query_reference_table(
+    client: "CAVEclient",
+    ref_table: str,
+    target_ids: list,
+    timestamp: "datetime.datetime",
+) -> pd.DataFrame:
+    "Live-query a reference table for the given synapse target ids."
+    with suppress_output():
+        ref_df = client.materialize.live_live_query(
+            ref_table,
+            filter_in_dict={ref_table: {"target_id": list(target_ids)}},
+            timestamp=timestamp,
+            metadata=False,
+            desired_resolution=[1, 1, 1],
+        ).drop(columns=["created", "valid"], errors="ignore")
+    return ref_df
+
+
+def _merge_reference_frame(
+    syn_df: pd.DataFrame,
+    ref_table: str,
+    ref_df: pd.DataFrame,
+    reference_suffixes: dict,
+) -> pd.DataFrame:
+    "Merge a reference-table frame into a synapse frame (rename/suffix rules)."
+    suffix = reference_suffixes.get(ref_table, ref_table)
+    return syn_df.merge(
+        ref_df.rename(columns={"target_id": "id", "id": f"id_{suffix}"}),
+        how="left",
+        on="id",
+        suffixes=("", f"_{suffix}"),
+    )
+
+
+def _finalize_synapse_frame(
+    syn_df: pd.DataFrame,
+    side: Literal["pre", "post"],
+    columns: dict,
+    l2_ids,
+    *,
+    reference_tables: Optional[list[str]] = None,
+    reference_frames: Optional[dict] = None,
+    reference_suffixes: Optional[dict] = None,
+    drop_other_side: bool = True,
+) -> pd.DataFrame:
+    """Shape a (autapse-filtered) synapse frame identically for the single and batch paths.
+
+    Assigns the L2-id column from ``l2_ids`` (positionally aligned to the rows of
+    ``syn_df``), optionally drops the partner root-id column, and merges any
+    already-fetched reference frames. Pure DataFrame operations only — no network I/O.
+    """
+    side_column = columns[side]
+    other_column = columns[_other_side(side)]
+    l2_column = get_l2id_column(side_column)
+
+    syn_df = syn_df.copy()
+    syn_df[l2_column] = np.asarray(l2_ids)
+    if drop_other_side:
+        syn_df.drop(columns=other_column, inplace=True)
+
+    if reference_tables:
+        reference_suffixes = reference_suffixes or {}
+        for ref_table in reference_tables:
+            syn_df = _merge_reference_frame(
+                syn_df, ref_table, reference_frames[ref_table], reference_suffixes
+            )
+    return syn_df
 
 
 def _process_synapse_table(
@@ -41,12 +125,8 @@ def _process_synapse_table(
     omit_autapses: bool = True,
 ) -> pd.DataFrame:
     "Perform a synapse query and get the l2 ids for the given root_id."
-    if side == "pre":
-        other_side = "post"
-    else:
-        other_side = "pre"
     side_column = columns[side]
-    other_column = columns[other_side]
+    other_column = columns[_other_side(side)]
 
     with suppress_output():
         syn_df = client.materialize.tables[table_name](
@@ -64,33 +144,26 @@ def _process_synapse_table(
     l2_ids = client.chunkedgraph.get_roots(
         syn_df[svid_column], stop_layer=2, timestamp=timestamp
     )
-    l2_column = get_l2id_column(side_column)
-    syn_df[l2_column] = l2_ids
-    if drop_other_side:
-        syn_df.drop(columns=other_column, inplace=True)
 
+    reference_frames = None
     if reference_tables is not None:
-        for ref_table in reference_tables:
-            with suppress_output():
-                ref_df = client.materialize.live_live_query(
-                    ref_table,
-                    filter_in_dict={ref_table: {"target_id": syn_df["id"].tolist()}},
-                    timestamp=timestamp,
-                    metadata=False,
-                    desired_resolution=[1, 1, 1],
-                ).drop(columns=["created", "valid"], errors="ignore")
-            syn_df = syn_df.merge(
-                ref_df.rename(
-                    columns={
-                        "target_id": "id",
-                        "id": f"id_{reference_suffixes.get(ref_table, ref_table)}",
-                    }
-                ),
-                how="left",
-                on="id",
-                suffixes=("", f"_{reference_suffixes.get(ref_table, ref_table)}"),
+        reference_frames = {
+            ref_table: _query_reference_table(
+                client, ref_table, syn_df["id"].tolist(), timestamp
             )
-    return syn_df
+            for ref_table in reference_tables
+        }
+
+    return _finalize_synapse_frame(
+        syn_df,
+        side,
+        columns,
+        l2_ids,
+        reference_tables=reference_tables,
+        reference_frames=reference_frames,
+        reference_suffixes=reference_suffixes,
+        drop_other_side=drop_other_side,
+    )
 
 
 def load_cell_from_client(
@@ -107,6 +180,11 @@ def load_cell_from_client(
     timestamp: Optional["datetime.datetime"] = None,
     omit_self_synapses: bool = True,
     skeleton_version: int = 4,
+    pre_syn_df: Optional[pd.DataFrame] = None,
+    post_syn_df: Optional[pd.DataFrame] = None,
+    l2_df: Optional[pd.DataFrame] = None,
+    skeleton: Optional[dict] = None,
+    assume_valid: bool = False,
 ) -> Cell:
     """Import an "L2" skeleton and spatial graph using the CAVE skeleton service.
 
@@ -137,18 +215,47 @@ def load_cell_from_client(
         Whether to omit self-synapses from the imported cell. Default is True, since most are false detections.
     skeleton_version: int
         The skeleton service data version to use for the query. Default is 4.
+    pre_syn_df: Optional[pd.DataFrame]
+        Pre-fetched pre-synapse frame. When provided (and ``synapses=True``), the internal
+        pre-synapse query is skipped and this frame is used as-is. Must be in the exact shape
+        the internal fetch produces: autapses omitted, ``drop_other_side``/
+        ``include_partner_root_id`` applied, the ``pre_pt_l2_id`` column present, and any
+        reference columns already merged. Used by :func:`fetch_frames_batch`.
+    post_syn_df: Optional[pd.DataFrame]
+        Pre-fetched post-synapse frame; same contract as ``pre_syn_df`` (``post_pt_l2_id``).
+    l2_df: Optional[pd.DataFrame]
+        Pre-fetched L2 property frame. When provided, the internal ``get_l2data_table`` call is
+        skipped. Must already be ``reset_index()``'d (``l2_id`` as a column), row-ordered to
+        match ``sk["lvl2_ids"]``, and contain the attribute set implied by ``restore_properties``.
+    skeleton: Optional[dict]
+        Pre-fetched skeleton dict (as returned by ``client.skeleton.get_skeleton(...,
+        output_format="dict")``). When provided, the internal ``get_skeleton`` call is skipped.
+        Used by :func:`load_cell_batch_from_client` to avoid re-fetching a skeleton already
+        pulled to obtain ``lvl2_ids``.
+    assume_valid: bool
+        When True, skip the timestamp/validity round trip and use ``timestamp`` directly (which
+        must be provided). Set by :func:`load_cell_batch_from_client` after validating the whole
+        batch once. With ``skeleton``, ``l2_df`` and the synapse frames all injected, this makes
+        assembly fully network-free.
 
     Returns
     -------
     Cell
         The imported cell object.
     """
-    sk = client.skeleton.get_skeleton(
-        root_id, skeleton_version=skeleton_version, output_format="dict"
-    )
+    if skeleton is None:
+        sk = client.skeleton.get_skeleton(
+            root_id, skeleton_version=skeleton_version, output_format="dict"
+        )
+    else:
+        sk = skeleton
     if reference_suffixes is None:
         reference_suffixes = {}
-    if timestamp is None:
+    if assume_valid:
+        if timestamp is None:
+            raise ValueError("assume_valid=True requires an explicit timestamp.")
+        ts = timestamp
+    elif timestamp is None:
         ts = client.chunkedgraph.get_root_timestamps(root_id, latest=True)[0]
     else:
         is_valid = client.chunkedgraph.is_latest_roots(root_id, timestamp=timestamp)[0]
@@ -162,30 +269,32 @@ def load_cell_from_client(
             "post": "post_pt_root_id",
         }
         synapse_table = client.materialize.synapse_table
-        pre_syn_df = _process_synapse_table(
-            root_id,
-            synapse_table,
-            client,
-            "pre",
-            synapse_columns,
-            ts,
-            drop_other_side=not include_partner_root_id,
-            omit_autapses=omit_self_synapses,
-            reference_tables=reference_tables,
-            reference_suffixes=reference_suffixes,
-        )
-        post_syn_df = _process_synapse_table(
-            root_id,
-            synapse_table,
-            client,
-            "post",
-            synapse_columns,
-            ts,
-            drop_other_side=not include_partner_root_id,
-            omit_autapses=omit_self_synapses,
-            reference_tables=reference_tables,
-            reference_suffixes=reference_suffixes,
-        )
+        if pre_syn_df is None:
+            pre_syn_df = _process_synapse_table(
+                root_id,
+                synapse_table,
+                client,
+                "pre",
+                synapse_columns,
+                ts,
+                drop_other_side=not include_partner_root_id,
+                omit_autapses=omit_self_synapses,
+                reference_tables=reference_tables,
+                reference_suffixes=reference_suffixes,
+            )
+        if post_syn_df is None:
+            post_syn_df = _process_synapse_table(
+                root_id,
+                synapse_table,
+                client,
+                "post",
+                synapse_columns,
+                ts,
+                drop_other_side=not include_partner_root_id,
+                omit_autapses=omit_self_synapses,
+                reference_tables=reference_tables,
+                reference_suffixes=reference_suffixes,
+            )
 
     l2ids = sk["lvl2_ids"]
     l2_spatial_columns = [
@@ -193,11 +302,12 @@ def load_cell_from_client(
         "rep_coord_nm_y",
         "rep_coord_nm_z",
     ]
-    if restore_properties:
-        l2_df = client.l2cache.get_l2data_table(l2ids)
-    else:
-        l2_df = client.l2cache.get_l2data_table(l2ids, attributes=["rep_coord_nm"])
-    l2_df.reset_index(inplace=True)
+    if l2_df is None:
+        if restore_properties:
+            l2_df = client.l2cache.get_l2data_table(l2ids)
+        else:
+            l2_df = client.l2cache.get_l2data_table(l2ids, attributes=["rep_coord_nm"])
+        l2_df = l2_df.reset_index()
 
     if restore_graph:
         l2_graph = client.chunkedgraph.level2_chunk_graph(root_id)
@@ -251,6 +361,348 @@ def load_cell_from_client(
         )
 
     return nrn
+
+
+def _fetch_synapse_frames_batch(
+    root_ids: list[int],
+    client: "CAVEclient",
+    side: Literal["pre", "post"],
+    columns: dict,
+    timestamp: "datetime.datetime",
+    *,
+    reference_tables: Optional[list[str]] = None,
+    reference_suffixes: Optional[dict] = None,
+    drop_other_side: bool = True,
+    omit_autapses: bool = True,
+    row_limit: int = 500_000,
+) -> dict[int, pd.DataFrame]:
+    """Pooled synapse fetch for one side across many root ids.
+
+    Issues a single ``live_live_query`` filtered on the root-id list, one pooled
+    ``get_roots`` over all supervoxels, and one query per reference table over the union of
+    synapse ids, then finalizes each per-root frame with the exact same logic as the
+    single-cell path (:func:`_finalize_synapse_frame`).
+
+    The pooled query runs inside ``suppress_output()``, which silences caveclient's
+    server-side row-limit warning; ``row_limit`` re-adds an explicit guard so a truncated
+    (silently incomplete) result raises instead of corrupting the per-root split. Set to 0 to
+    disable.
+    """
+    side_column = columns[side]
+    other_column = columns[_other_side(side)]
+    svid_column = get_supervoxel_column(side_column)
+    synapse_table = client.materialize.synapse_table
+
+    # 1. Pooled synapse query (one round trip for all roots on this side).
+    with suppress_output():
+        pooled = client.materialize.live_live_query(
+            synapse_table,
+            filter_in_dict={synapse_table: {side_column: [int(r) for r in root_ids]}},
+            timestamp=timestamp,
+            split_positions=True,
+            metadata=False,
+            desired_resolution=[1, 1, 1],
+        )
+    if row_limit and len(pooled) >= row_limit:
+        raise RuntimeError(
+            f"Pooled {side}-synapse query for {len(root_ids)} roots returned {len(pooled)} rows, "
+            f"at/above the server row limit ({row_limit}); results are likely truncated. "
+            f"Reduce the batch size."
+        )
+    if omit_autapses:
+        pooled = pooled[pooled[side_column] != pooled[other_column]]
+
+    # Group per root; roots with no synapses get an empty frame with the same columns.
+    groups = {int(r): g for r, g in pooled.groupby(side_column)}
+    empty = pooled.iloc[0:0]
+    per_root = {int(r): groups.get(int(r), empty).copy() for r in root_ids}
+
+    # 2. Pooled supervoxel -> L2 resolution, scattered back in input order.
+    svid_arrays = [per_root[int(r)][svid_column].to_numpy() for r in root_ids]
+    lengths = [len(a) for a in svid_arrays]
+    if sum(lengths) > 0:
+        all_l2 = client.chunkedgraph.get_roots(
+            np.concatenate(svid_arrays), stop_layer=2, timestamp=timestamp
+        )
+    else:
+        all_l2 = np.array([], dtype=np.int64)
+    l2_by_root: dict[int, np.ndarray] = {}
+    offset = 0
+    for r, n in zip(root_ids, lengths):
+        l2_by_root[int(r)] = all_l2[offset : offset + n]
+        offset += n
+
+    # 3. Pooled reference-table queries over the union of synapse ids.
+    reference_frames = None
+    if reference_tables is not None:
+        all_ids: list = []
+        for r in root_ids:
+            all_ids.extend(per_root[int(r)]["id"].tolist())
+        reference_frames = {
+            ref_table: _query_reference_table(client, ref_table, all_ids, timestamp)
+            for ref_table in reference_tables
+        }
+
+    return {
+        int(r): _finalize_synapse_frame(
+            per_root[int(r)],
+            side,
+            columns,
+            l2_by_root[int(r)],
+            reference_tables=reference_tables,
+            reference_frames=reference_frames,
+            reference_suffixes=reference_suffixes,
+            drop_other_side=drop_other_side,
+        )
+        for r in root_ids
+    }
+
+
+def fetch_frames_batch(
+    root_ids: list[int],
+    client: "CAVEclient",
+    *,
+    synapses: bool = True,
+    reference_tables: Optional[list[str]] = None,
+    reference_suffixes: Optional[dict] = None,
+    include_partner_root_id: bool = False,
+    omit_self_synapses: bool = True,
+    restore_properties: bool = True,
+    timestamp: Optional["datetime.datetime"] = None,
+    lvl2_ids_by_root: Optional[dict] = None,
+    row_limit: int = 500_000,
+) -> dict[int, dict]:
+    """Batch-fetch the poolable per-cell frames for many root ids in a few queries.
+
+    Collapses the two dominant per-cell fetches of :func:`load_cell_from_client` — synapse
+    queries and L2 property lookups — into a handful of pooled requests, then slices the
+    results back per root id. The returned frames are byte-identical to what the single-cell
+    path produces and can be handed straight to ``load_cell_from_client`` via its
+    ``pre_syn_df`` / ``post_syn_df`` / ``l2_df`` injection params.
+
+    All roots share a single ``timestamp`` (pass an explicit value or pin ``client.version``);
+    the pooled ``filter_in`` queries require one consistent materialization for the batch.
+
+    Parameters
+    ----------
+    root_ids: list[int]
+        Root ids to fetch. Order is preserved in the scatter-back.
+    client: CAVEclient
+        The CAVE client to use.
+    synapses: bool
+        Whether to fetch synapse frames. Default True. When False, only ``l2_df`` is populated
+        (requires ``lvl2_ids_by_root``).
+    reference_tables, reference_suffixes, include_partner_root_id, omit_self_synapses:
+        Same meaning as in :func:`load_cell_from_client`; applied identically per root.
+    restore_properties: bool
+        When True, fetch all L2 attributes; otherwise only ``rep_coord_nm``.
+    timestamp: Optional[datetime.datetime]
+        The single shared timestamp for the batch.
+    lvl2_ids_by_root: Optional[dict]
+        Mapping ``{root_id: sk["lvl2_ids"]}`` from the caller's skeleton dicts. Required to
+        fetch L2 data; the pooled ``get_l2data_table`` runs over the union and each root's
+        frame is sliced back in ``lvl2_ids`` order (dropping cache-missing ids), matching the
+        single-cell path exactly. If omitted, ``l2_df`` is left ``None`` for every root.
+
+    Returns
+    -------
+    dict[int, dict]
+        ``{root_id: {"pre_syn_df": ..., "post_syn_df": ..., "l2_df": ...}}``. Entries that were
+        not fetched (e.g. synapses off) are ``None``.
+    """
+    root_ids = [int(r) for r in root_ids]
+    if reference_suffixes is None:
+        reference_suffixes = {}
+    results: dict[int, dict] = {
+        r: {"pre_syn_df": None, "post_syn_df": None, "l2_df": None} for r in root_ids
+    }
+
+    if synapses:
+        synapse_columns = {"pre": "pre_pt_root_id", "post": "post_pt_root_id"}
+        drop_other_side = not include_partner_root_id
+        for side in ("pre", "post"):
+            frames = _fetch_synapse_frames_batch(
+                root_ids,
+                client,
+                side,
+                synapse_columns,
+                timestamp,
+                reference_tables=reference_tables,
+                reference_suffixes=reference_suffixes,
+                drop_other_side=drop_other_side,
+                omit_autapses=omit_self_synapses,
+                row_limit=row_limit,
+            )
+            for r in root_ids:
+                results[r][f"{side}_syn_df"] = frames[r]
+
+    # 4. Pooled L2 data over the union of all L2 ids, sliced per root in lvl2_ids order.
+    if lvl2_ids_by_root is not None:
+        union: list = []
+        seen: set = set()
+        for r in root_ids:
+            for i in lvl2_ids_by_root[r]:
+                if i not in seen:
+                    seen.add(i)
+                    union.append(i)
+        if restore_properties:
+            pooled_l2 = client.l2cache.get_l2data_table(union)
+        else:
+            pooled_l2 = client.l2cache.get_l2data_table(
+                union, attributes=["rep_coord_nm"]
+            )
+        available = set(pooled_l2.index)
+        for r in root_ids:
+            ids = [i for i in lvl2_ids_by_root[r] if i in available]
+            results[r]["l2_df"] = pooled_l2.loc[ids].reset_index()
+
+    return results
+
+
+def _get_bulk_skeletons(
+    client: "CAVEclient",
+    root_ids: list[int],
+    skeleton_version: int,
+    generate_missing: bool = False,
+) -> dict[int, dict]:
+    """Download skeletons in bulk, chunked at the synchronous bulk cap.
+
+    Returns ``{int root_id: skeleton_dict}``. Roots whose skeleton is not yet available
+    (async/not-generated) are omitted — with ``generate_missing=False`` (the worker default,
+    assuming a prior ``generate_bulk_skeletons_async`` pre-pass) these simply don't appear.
+    """
+    out: dict[int, dict] = {}
+    for i in range(0, len(root_ids), _BULK_SKELETON_CHUNK):
+        chunk = root_ids[i : i + _BULK_SKELETON_CHUNK]
+        with suppress_output():
+            res = client.skeleton.get_bulk_skeletons(
+                chunk,
+                skeleton_version=skeleton_version,
+                output_format="dict",
+                generate_missing_skeletons=generate_missing,
+            )
+        for k, v in res.items():
+            out[int(k)] = v
+    return out
+
+
+def load_cell_batch_from_client(
+    root_ids: list[int],
+    client: "CAVEclient",
+    *,
+    synapses: bool = False,
+    reference_tables: Optional[list[str]] = None,
+    reference_suffixes: Optional[dict] = None,
+    restore_graph: bool = False,
+    restore_properties: bool = True,
+    synapse_spatial_point: str = "ctr_pt_position",
+    include_partner_root_id: bool = False,
+    timestamp: Optional["datetime.datetime"] = None,
+    omit_self_synapses: bool = True,
+    skeleton_version: int = 4,
+    skip_invalid: bool = False,
+    generate_missing_skeletons: bool = False,
+    row_limit: int = 500_000,
+) -> dict[int, Cell]:
+    """Load many cells with the poolable fetches batched into a few queries.
+
+    Equivalent to calling :func:`load_cell_from_client` on each root id, but the synapse and
+    L2-property fetches are pooled across the whole batch (see :func:`fetch_frames_batch`) and
+    each cell is then assembled network-free — no skeleton is fetched twice, and the batch is
+    validated with a single round trip. All roots share one ``timestamp``.
+
+    Parameters
+    ----------
+    root_ids: list[int]
+        Root ids to load.
+    timestamp: Optional[datetime.datetime]
+        Single shared timestamp for the batch. If None, the current materialization timestamp
+        (``client.materialize.get_timestamp()``) is used — pin ``client.version`` for a
+        reproducible batch.
+    skip_invalid: bool
+        If True, roots that are not valid at ``timestamp`` — or whose skeleton is not available
+        — are dropped from the result instead of raising.
+    generate_missing_skeletons: bool
+        Passed to ``get_bulk_skeletons``. Default False assumes skeletons were already produced
+        by a ``generate_bulk_skeletons_async`` pre-pass; a worker then just downloads them (fast,
+        and degrades gracefully on a cache miss). Set True to block on server-side generation.
+    (all other parameters match :func:`load_cell_from_client`.)
+
+    Returns
+    -------
+    dict[int, Cell]
+        Mapping of root id to the assembled :class:`~ossify.base.Cell`. Invalid roots are absent
+        when ``skip_invalid=True``.
+    """
+    root_ids = [int(r) for r in root_ids]
+    if reference_suffixes is None:
+        reference_suffixes = {}
+
+    # 1. One shared timestamp + one validity round trip for the whole batch.
+    ts = timestamp if timestamp is not None else client.materialize.get_timestamp()
+    valid_mask = client.chunkedgraph.is_latest_roots(root_ids, timestamp=ts)
+    valid_ids = [r for r, ok in zip(root_ids, valid_mask) if ok]
+    invalid_ids = [r for r, ok in zip(root_ids, valid_mask) if not ok]
+    if invalid_ids and not skip_invalid:
+        raise ValueError(
+            f"{len(invalid_ids)} root id(s) not valid at {ts}: {invalid_ids[:5]}"
+            + (" ..." if len(invalid_ids) > 5 else "")
+        )
+
+    # 2. Skeletons: one bulk download (chunked at the sync cap) to obtain lvl2_ids, then
+    #    injected into assembly. Assumes a prior generate_bulk_skeletons_async pre-pass.
+    sk_by_root = _get_bulk_skeletons(
+        client, valid_ids, skeleton_version, generate_missing=generate_missing_skeletons
+    )
+    no_skeleton = [r for r in valid_ids if r not in sk_by_root]
+    if no_skeleton and not skip_invalid:
+        raise ValueError(
+            f"{len(no_skeleton)} root id(s) have no available skeleton "
+            f"(run generate_bulk_skeletons_async first, or pass generate_missing_skeletons=True "
+            f"or skip_invalid=True): {no_skeleton[:5]}"
+            + (" ..." if len(no_skeleton) > 5 else "")
+        )
+    valid_ids = [r for r in valid_ids if r in sk_by_root]
+    lvl2_ids_by_root = {r: sk_by_root[r]["lvl2_ids"] for r in valid_ids}
+
+    # 3. Pooled synapse + L2 fetch.
+    frames = fetch_frames_batch(
+        valid_ids,
+        client,
+        synapses=synapses,
+        reference_tables=reference_tables,
+        reference_suffixes=reference_suffixes,
+        include_partner_root_id=include_partner_root_id,
+        omit_self_synapses=omit_self_synapses,
+        restore_properties=restore_properties,
+        timestamp=ts,
+        lvl2_ids_by_root=lvl2_ids_by_root,
+        row_limit=row_limit,
+    )
+
+    # 4. Network-free per-cell assembly (skeleton injected, validity assumed).
+    cells: dict[int, Cell] = {}
+    for r in valid_ids:
+        cells[r] = load_cell_from_client(
+            r,
+            client,
+            synapses=synapses,
+            reference_tables=reference_tables,
+            reference_suffixes=reference_suffixes,
+            restore_graph=restore_graph,
+            restore_properties=restore_properties,
+            synapse_spatial_point=synapse_spatial_point,
+            include_partner_root_id=include_partner_root_id,
+            timestamp=ts,
+            omit_self_synapses=omit_self_synapses,
+            skeleton_version=skeleton_version,
+            pre_syn_df=frames[r]["pre_syn_df"],
+            post_syn_df=frames[r]["post_syn_df"],
+            l2_df=frames[r]["l2_df"],
+            skeleton=sk_by_root[r],
+            assume_valid=True,
+        )
+    return cells
 
 
 # def resample(
