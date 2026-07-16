@@ -24,6 +24,7 @@ from scipy import sparse, spatial
 
 from . import graph_functions as gf
 from . import utils
+from ._sync.base import canonicalize_ids
 from .sync_classes import *
 
 if TYPE_CHECKING:
@@ -1025,6 +1026,12 @@ class PointMixin(ABC):
             if len(mask) == self.n_vertices and np.issubdtype(mask.dtype, np.bool_):
                 mask = mask.astype(bool)
             else:
+                # `mask` is a set of vertex identifiers. Canonicalize it to int64
+                # so the membership test shares the (also int64) vertex_index key
+                # space -- np.isin over mixed int64/uint64 arrays otherwise picks
+                # float64 as the common type and collides IDs above 2**53.
+                if mask.dtype.kind in ("i", "u"):
+                    mask = canonicalize_ids(mask, name=self.layer_name)
                 mask = np.isin(self.vertex_index, mask)
         return self._morphsync.apply_mask(
             layer_name=self.layer_name,

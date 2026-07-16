@@ -6,6 +6,255 @@ import pandas as pd
 
 DEFAULT_SPATIAL_COLUMNS = ["x", "y", "z"]
 
+# Ossify's canonical identifier space. Identifiers are nominally drawn from the
+# uint64 segmentation ID space, but every ID we actually support fits within the
+# nonnegative range of a signed 64-bit integer. We therefore own a single
+# internal representation -- ``int64`` -- so that a value never depends on
+# whether an upstream source happened to hand us signed or unsigned integers.
+_INT64_MAX = int(np.iinfo(np.int64).max)  # 9223372036854775807
+_UINT64_INT64_MAX = np.uint64(_INT64_MAX)
+
+
+def _range_error(name: str, kind: str) -> ValueError:
+    if kind == "negative":
+        return ValueError(
+            f"{name}: identifiers must be nonnegative, but negative values were found."
+        )
+    return ValueError(
+        f"{name}: identifiers must be <= {_INT64_MAX} (int64 max), "
+        f"but larger values were found."
+    )
+
+
+def _validate_and_cast_integer_ndarray(
+    arr: np.ndarray, null_mask: Optional[np.ndarray], name: str
+) -> np.ndarray:
+    """Validate a signed/unsigned integer ndarray and cast to ``int64``.
+
+    Validation uses integer-safe comparisons only -- no value ever passes
+    through a floating-point representation, which would silently lose
+    precision for IDs above ``2**53``.
+    """
+    kind = arr.dtype.kind
+    if kind == "i":
+        # Signed integers already fit within int64 (int8..int64); only the
+        # lower bound can be violated. Null positions carry a sentinel and are
+        # excluded from the check.
+        negative = arr < 0
+        if null_mask is not None:
+            negative = negative & ~null_mask
+        if negative.any():
+            raise _range_error(name, "negative")
+        return arr.astype(np.int64, copy=False)
+    if kind == "u":
+        # Unsigned integers cannot be negative; only uint64 can exceed int64
+        # max. Compare against a uint64 scalar so numpy stays in integer land
+        # (mixing a uint64 array with a Python int upcasts to float64).
+        too_large = arr > _UINT64_INT64_MAX
+        if null_mask is not None:
+            too_large = too_large & ~null_mask
+        if too_large.any():
+            raise _range_error(name, "too_large")
+        # Every remaining value is <= int64 max, so this cast is lossless.
+        return arr.astype(np.int64)
+    raise TypeError(
+        f"{name}: expected integer identifiers, got array of dtype {arr.dtype}."
+    )
+
+
+def _canonicalize_object_array(
+    arr: np.ndarray, allow_null: bool, name: str
+) -> tuple[np.ndarray, np.ndarray]:
+    """Canonicalize an object-dtype array element by element.
+
+    Object arrays are the only place mixed Python ints, ``None``/``pd.NA`` and
+    stray floats can coexist, so each element is inspected individually.
+    """
+    n = len(arr)
+    out = np.zeros(n, dtype=np.int64)
+    null_mask = np.zeros(n, dtype=bool)
+    for i, v in enumerate(arr):
+        if v is None or v is pd.NA:
+            null_mask[i] = True
+            continue
+        if isinstance(v, (bool, np.bool_)):
+            raise TypeError(
+                f"{name}: boolean values are not valid identifiers (got {v!r})."
+            )
+        if isinstance(v, (float, np.floating)):
+            # A float may already have lost precision before Ossify saw it, so
+            # even an integral-looking float is rejected. A NaN is treated as a
+            # null when nulls are permitted.
+            if v != v:  # NaN
+                null_mask[i] = True
+                continue
+            raise TypeError(
+                f"{name}: float identifiers are not accepted (got {v!r}); "
+                f"a float may already have lost precision above 2**53."
+            )
+        if isinstance(v, (int, np.integer)):
+            iv = int(v)
+            if iv < 0:
+                raise _range_error(name, "negative")
+            if iv > _INT64_MAX:
+                raise _range_error(name, "too_large")
+            out[i] = iv
+            continue
+        raise TypeError(
+            f"{name}: non-integer identifier {v!r} of type {type(v).__name__}."
+        )
+    if null_mask.any() and not allow_null:
+        raise ValueError(f"{name}: null identifier values are not allowed here.")
+    return out, null_mask
+
+
+def _extract_int64(
+    values, allow_null: bool, name: str
+) -> tuple[np.ndarray, np.ndarray]:
+    """Core: return ``(int64_ndarray, null_mask)`` for any array-like input."""
+    dtype = getattr(values, "dtype", None)
+    if dtype is not None and pd.api.types.is_extension_array_dtype(dtype):
+        # pandas nullable integer container (Int64/UInt64/Int32/...).
+        ea = values.array if isinstance(values, (pd.Series, pd.Index)) else values
+        if not pd.api.types.is_integer_dtype(ea.dtype):
+            raise TypeError(
+                f"{name}: expected integer identifiers, got extension dtype {ea.dtype}."
+            )
+        null_mask = np.asarray(ea.isna())
+        if null_mask.any() and not allow_null:
+            raise ValueError(f"{name}: null identifier values are not allowed here.")
+        # Materialize the underlying signed/unsigned native array (nulls filled
+        # with a sentinel 0) then validate exactly like a plain ndarray.
+        native = ea.to_numpy(dtype=ea.dtype.numpy_dtype, na_value=0)
+        int64 = _validate_and_cast_integer_ndarray(native, null_mask, name)
+        return int64, null_mask
+
+    arr = values if isinstance(values, np.ndarray) else np.asarray(values)
+    if arr.size == 0:
+        # np.asarray([]) is float64; an empty ID container is still valid.
+        return arr.astype(np.int64), np.zeros(0, dtype=bool)
+    kind = arr.dtype.kind
+    if kind in ("i", "u"):
+        int64 = _validate_and_cast_integer_ndarray(arr, None, name)
+        return int64, np.zeros(len(int64), dtype=bool)
+    if kind == "f":
+        raise TypeError(
+            f"{name}: float identifiers are not accepted; a float may already "
+            f"have lost precision above 2**53."
+        )
+    if kind == "b":
+        raise TypeError(f"{name}: boolean values are not valid identifiers.")
+    if kind == "O":
+        return _canonicalize_object_array(arr, allow_null, name)
+    raise TypeError(f"{name}: unsupported identifier dtype {arr.dtype}.")
+
+
+def _wrap_null(int64: np.ndarray, null_mask: np.ndarray, allow_null: bool):
+    """Return an ``int64`` ndarray, or a nullable ``Int64`` array if NA present."""
+    if allow_null and null_mask.any():
+        return pd.arrays.IntegerArray(int64, null_mask.copy())
+    return int64
+
+
+def canonicalize_ids(
+    values,
+    *,
+    allow_null: bool = False,
+    name: str = "id",
+):
+    """Convert integer identifiers to Ossify's canonical ``int64`` representation.
+
+    Ossify treats identifiers as living in the nonnegative ``int64`` range even
+    though the nominal ID space is ``uint64``. Upstream sources may hand us the
+    same ID as a Python ``int``, a NumPy signed/unsigned integer, or inside a
+    pandas container, and joining two differently-typed key spaces can make
+    pandas coerce values through ``float64`` -- silently collapsing distinct IDs
+    above ``2**53``. Canonicalizing every ID to ``int64`` before it participates
+    in a lookup removes that failure mode.
+
+    Parameters
+    ----------
+    values :
+        The identifier(s). Accepted forms: a Python ``int``; a NumPy signed or
+        unsigned integer scalar; a NumPy integer array; a list/tuple of the
+        above; a pandas ``Series`` or ``Index``; or a pandas nullable integer
+        (``Int64``/``UInt64``/...) container.
+    allow_null :
+        Whether nulls (``None``/``pd.NA``/``NaN``) are permitted. Only pass
+        ``True`` where the calling mapping operation legitimately supports
+        missing values; otherwise a null raises.
+    name :
+        Label used in error messages (typically the column or layer name).
+
+    Returns
+    -------
+    :
+        The canonical form, matching the input's container shape:
+
+        - scalar in -> ``np.int64`` scalar;
+        - ``Series`` in -> ``Series`` (index and name preserved);
+        - ``Index`` in -> ``Index`` (name preserved);
+        - array-like in -> ``np.ndarray`` of ``int64``.
+
+        Where nulls are present (and permitted) the result uses pandas nullable
+        ``Int64`` so missing values survive without a float cast; otherwise a
+        plain ``int64`` container is returned.
+
+    Raises
+    ------
+    TypeError
+        If a value is a float (including integral-looking floats), a boolean, or
+        any non-integer object.
+    ValueError
+        If a value is negative, exceeds ``int64`` max, or is null where nulls are
+        not allowed.
+    """
+    # Scalars. Order matters: bool is a subclass of int, and np.bool_ must be
+    # rejected before the integer check.
+    if isinstance(values, (bool, np.bool_)):
+        raise TypeError(f"{name}: boolean values are not valid identifiers.")
+    if isinstance(values, (int, np.integer)):
+        iv = int(values)
+        if iv < 0:
+            raise _range_error(name, "negative")
+        if iv > _INT64_MAX:
+            raise _range_error(name, "too_large")
+        return np.int64(iv)
+    if isinstance(values, (float, np.floating)):
+        raise TypeError(
+            f"{name}: float identifiers are not accepted; a float may already "
+            f"have lost precision above 2**53."
+        )
+
+    if isinstance(values, pd.Index):
+        int64, null_mask = _extract_int64(values, allow_null, name)
+        return pd.Index(_wrap_null(int64, null_mask, allow_null), name=values.name)
+    if isinstance(values, pd.Series):
+        int64, null_mask = _extract_int64(values, allow_null, name)
+        return pd.Series(
+            _wrap_null(int64, null_mask, allow_null),
+            index=values.index,
+            name=values.name,
+        )
+
+    int64, null_mask = _extract_int64(values, allow_null, name)
+    return _wrap_null(int64, null_mask, allow_null)
+
+
+def _canonicalize_index(index: pd.Index) -> pd.Index:
+    """Return ``index`` in canonical int64 form if it holds integer identifiers.
+
+    Non-integer indexes (e.g. a string or float index) are returned untouched
+    so canonicalization never changes behavior for data that is not an ID.
+    """
+    dtype = index.dtype
+    if dtype.kind in ("i", "u") or (
+        pd.api.types.is_extension_array_dtype(dtype)
+        and pd.api.types.is_integer_dtype(dtype)
+    ):
+        return canonicalize_ids(index, name="node index")
+    return index
+
 
 def mask_and_remap(
     arr: np.ndarray,
@@ -91,6 +340,11 @@ class Layer:
         if copy:
             nodes = nodes.copy()
         self.nodes: pd.DataFrame = nodes
+        # Node indexes hold identifiers, so pin them to Ossify's canonical int64
+        # representation. This keeps every downstream lookup (masking joins,
+        # link joins) in a single signed key space -- mixing int64 and uint64
+        # keys is what lets pandas collapse distinct IDs above 2**53 via float.
+        self.nodes.index = _canonicalize_index(self.nodes.index)
 
         if spatial_columns is None:
             spatial_columns = []

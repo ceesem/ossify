@@ -5,7 +5,7 @@ from typing import Any, Optional, Union
 import numpy as np
 import pandas as pd
 
-from .base import Layer
+from .base import Layer, canonicalize_ids
 from .graph import Graph
 from .mapping import project_points_to_nearest
 from .mesh import Mesh
@@ -349,6 +349,12 @@ class MorphSync:
             mapping_df.name = target
             mapping_df = mapping_df.to_frame().reset_index()
 
+        # Canonicalize both endpoint columns to int64 so a link never stores
+        # one side as uint64 and the other as int64. A mixed-dtype link is what
+        # lets a later join coerce keys through float and mismatch IDs > 2**53.
+        mapping_df[source] = canonicalize_ids(mapping_df[source], name=source)
+        mapping_df[target] = canonicalize_ids(mapping_df[target], name=target)
+
         self.links[(source, target)] = mapping_df
         self.links[(target, source)] = mapping_df
 
@@ -443,9 +449,11 @@ class MorphSync:
         """
         if source_index is None:
             source_index = self.layers[source].nodes_index
-        else:
-            if not isinstance(source_index, pd.Index):
-                source_index = pd.Index(source_index)
+        # Canonicalize the source key space to int64 up front so the first
+        # join key matches the (also int64) link index exactly.
+        source_index = canonicalize_ids(source_index, name=source)
+        if not isinstance(source_index, pd.Index):
+            source_index = pd.Index(source_index)
 
         joined_mapping = pd.DataFrame(index=source_index)
         joined_mapping[source] = source_index
@@ -453,10 +461,34 @@ class MorphSync:
         path = self.get_link_path(source, target)
         for i in range(len(path) - 1):
             current_source, current_target = path[i], path[i + 1]
-            mapping_series = (
-                self.links[(current_source, current_target)]
-                .set_index(current_source)[current_target]
-                .astype("Int64")
+            link_df = self.links[(current_source, current_target)]
+
+            # Both key spaces participating in the join must be canonicalized
+            # to int64 *before pandas sees them*. A stored link may still carry
+            # legacy mixed int64/uint64 dtypes (e.g. from an older .osy file);
+            # joining a uint64 index against an int64/Int64 key column makes
+            # pandas coerce to float64 and silently collapse IDs above 2**53.
+            key_index = canonicalize_ids(
+                pd.Index(link_df[current_source]), name=current_source
+            )
+            # A stored link endpoint is always a real, non-null identifier, so
+            # the target values are canonicalized strictly (a null here is
+            # malformed and raises). They are then held as nullable Int64 so
+            # that the <NA>s the left join *introduces* for unmatched rows do
+            # not force a float cast -- a float target ID would lose precision
+            # before it becomes the next hop's join key.
+            values = canonicalize_ids(link_df[current_target], name=current_target)
+            mapping_series = pd.Series(
+                pd.array(values, dtype="Int64"),
+                index=key_index,
+                name=current_target,
+            )
+
+            # The join key column of joined_mapping may itself carry <NA> from a
+            # previous hop; canonicalize it (nulls allowed) so it stays in the
+            # int64 key space alongside key_index.
+            joined_mapping[current_source] = canonicalize_ids(
+                joined_mapping[current_source], allow_null=True, name=current_source
             )
 
             try:
@@ -693,9 +725,39 @@ class MorphSync:
                 new_morphology._add_layer(
                     other_layer_name, other_layer.mask_by_node_index(other_indices)
                 )
-        new_morphology.links = self.links
+
+        # Rebuild links restricted to the retained nodes of each layer rather
+        # than copying the original (unpruned) tables. Carrying whole link
+        # tables over would leave endpoints that reference nodes no longer in
+        # their layer; pruning here makes "retained links reference retained
+        # objects" true by construction, not by a later runtime check.
+        new_morphology.links = self._prune_links(new_morphology)
 
         return new_morphology
+
+    def _prune_links(self, new_morphology: "MorphSync") -> dict:
+        """Restrict every link table to endpoints present in the masked layers.
+
+        Both endpoint columns and both layer indexes are canonicalized to int64
+        before the membership test so the ``isin`` lookup cannot mismatch a
+        uint64 key against an int64 index (the same float-collision hazard the
+        mapping joins avoid).
+        """
+        pruned: dict = {}
+        for (src, tgt), link_df in self.links.items():
+            if src not in new_morphology.layers or tgt not in new_morphology.layers:
+                continue
+            src_keys = pd.Index(canonicalize_ids(link_df[src], name=src))
+            tgt_keys = pd.Index(canonicalize_ids(link_df[tgt], name=tgt))
+            src_retained = canonicalize_ids(
+                new_morphology.layers[src].nodes_index, name=src
+            )
+            tgt_retained = canonicalize_ids(
+                new_morphology.layers[tgt].nodes_index, name=tgt
+            )
+            keep = src_keys.isin(src_retained) & tgt_keys.isin(tgt_retained)
+            pruned[(src, tgt)] = link_df[np.asarray(keep)]
+        return pruned
 
     def get_link_as_layer(self, source: str, target: str) -> Graph:
         """Create a Graph layer representing the mapping between two layers.

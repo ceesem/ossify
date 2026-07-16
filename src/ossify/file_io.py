@@ -16,6 +16,7 @@ from scipy.sparse import load_npz, save_npz
 
 from ossify import utils
 
+from ._sync.base import canonicalize_ids
 from .base import Cell
 from .data_layers import GraphLayer, Link, MeshLayer, PointCloudLayer, SkeletonLayer
 
@@ -919,6 +920,14 @@ def build_linkage(
 ) -> Cell:
     prefix = f"linkage/{linkage_pair[0]}/{linkage_pair[1]}"
     link_df = load_dataframe(f"{prefix}/linkage.feather", tf)
+    # Legacy .osy files may store link columns with mixed int64/uint64 dtypes
+    # (dtype optimization only downcast signed ints, leaving uint64 untouched).
+    # Canonicalize both columns to int64 before the label-based ``.loc`` reindex
+    # below so that lookup cannot collide two IDs above 2**53 through a float
+    # coercion of mismatched signed/unsigned keys.
+    for col in linkage_pair:
+        if col in link_df.columns:
+            link_df[col] = canonicalize_ids(link_df[col], name=col)
     # Determine source based on the length of the vertices in the mapping and in the skeleton layer
     if len(link_df) == len(cell._all_objects[linkage_pair[0]].nodes):
         source_layer = linkage_pair[0]
