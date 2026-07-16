@@ -913,6 +913,68 @@ def build_point_cloud(
         return cell
 
 
+def _exact_integer_id_coverage(link_ids: pd.Index, source_ids: pd.Index) -> bool:
+    """Test whether two integer-ID domains are exactly the same set.
+
+    Both arguments must already be canonicalized ``int64`` pandas ``Index``
+    objects. The comparison is order-independent and stays entirely in the
+    integer domain -- it never coerces identifiers through ``float64`` -- so it
+    is safe for IDs above ``2**53``.
+
+    Parameters
+    ----------
+    link_ids :
+        The linkage column for a candidate source layer.
+    source_ids :
+        That layer's vertex index.
+
+    Returns
+    -------
+    :
+        ``True`` iff the two contain exactly the same set of IDs.
+    """
+    if len(link_ids) != len(source_ids):
+        return False
+    # ``symmetric_difference`` is empty iff neither side has an ID the other
+    # lacks. Using pandas ``Index`` set ops keeps the comparison in int64 and
+    # avoids materializing Python ``set`` objects over large ID arrays.
+    return len(link_ids.symmetric_difference(source_ids)) == 0
+
+
+def _linkage_source_error(linkage_pair, link_df, cell, sample_size: int = 10) -> str:
+    """Build a concise diagnostic message for an unresolvable linkage source.
+
+    Reports, for each endpoint, the layer vertex count, the linkage row count,
+    the number of unique linkage IDs, and the missing/extra ID counts, plus a
+    small bounded sample of the offending IDs. This replaces the enormous
+    pandas ``KeyError`` that a bad ``.loc`` reindex would otherwise raise.
+    """
+    lines = [
+        f"Could not infer a valid source layer for linkage "
+        f"({linkage_pair[0]!r}, {linkage_pair[1]!r}) with {len(link_df)} rows.",
+        "A source endpoint must map exactly one linkage row to each of its "
+        "vertices (unique, complete coverage). Neither endpoint qualifies:",
+    ]
+    for source in linkage_pair:
+        source_ids = canonicalize_ids(
+            pd.Index(cell._all_objects[source].vertex_index), name=source
+        )
+        link_ids = canonicalize_ids(pd.Index(link_df[source]), name=source)
+        unique_link_ids = link_ids.unique()
+        missing = source_ids.difference(link_ids)
+        extra = link_ids.difference(source_ids)
+        lines.append(
+            f"  - {source!r}: vertices={len(source_ids)}, "
+            f"link_rows={len(link_ids)}, unique_link_ids={len(unique_link_ids)}, "
+            f"missing_source_ids={len(missing)}, extra_link_ids={len(extra)}"
+        )
+        if len(missing):
+            lines.append(f"      missing sample: {missing[:sample_size].tolist()}")
+        if len(extra):
+            lines.append(f"      extra sample: {extra[:sample_size].tolist()}")
+    return "\n".join(lines)
+
+
 def build_linkage(
     linkage_pair,
     tf,
@@ -922,23 +984,50 @@ def build_linkage(
     link_df = load_dataframe(f"{prefix}/linkage.feather", tf)
     # Legacy .osy files may store link columns with mixed int64/uint64 dtypes
     # (dtype optimization only downcast signed ints, leaving uint64 untouched).
-    # Canonicalize both columns to int64 before the label-based ``.loc`` reindex
-    # below so that lookup cannot collide two IDs above 2**53 through a float
-    # coercion of mismatched signed/unsigned keys.
+    # Canonicalize both columns to int64 before any label-based reindex below so
+    # that lookup cannot collide two IDs above 2**53 through a float coercion of
+    # mismatched signed/unsigned keys.
     for col in linkage_pair:
         if col in link_df.columns:
             link_df[col] = canonicalize_ids(link_df[col], name=col)
-    # Determine source based on the length of the vertices in the mapping and in the skeleton layer
-    if len(link_df) == len(cell._all_objects[linkage_pair[0]].nodes):
-        source_layer = linkage_pair[0]
-        target_layer = linkage_pair[1]
-    elif len(link_df) == len(cell._all_objects[linkage_pair[1]].nodes):
-        source_layer = linkage_pair[1]
-        target_layer = linkage_pair[0]
-    else:
-        raise ValueError("Linkage DataFrame does not match any layer.")
+
+    # The archive sorts the pair names, so serialized column order does not
+    # preserve the original source direction. Infer the source by exact
+    # source-domain validation rather than row count alone: a layer qualifies
+    # as source only when its linkage column has no missing IDs, is unique, has
+    # one row per vertex, and covers exactly that layer's vertex index. Row
+    # count alone is ambiguous whenever the two layers have equal cardinality
+    # (e.g. a many-to-one graph <-> annotation link where the counts coincide).
+    candidates = []
+    for source, target in (
+        (linkage_pair[0], linkage_pair[1]),
+        (linkage_pair[1], linkage_pair[0]),
+    ):
+        source_ids = canonicalize_ids(
+            pd.Index(cell._all_objects[source].vertex_index), name=source
+        )
+        link_ids = canonicalize_ids(pd.Index(link_df[source]), name=source)
+        if (
+            len(link_ids) == len(source_ids)
+            and link_ids.is_unique
+            and _exact_integer_id_coverage(link_ids, source_ids)
+        ):
+            candidates.append((source, target))
+
+    if not candidates:
+        raise ValueError(_linkage_source_error(linkage_pair, link_df, cell))
+
+    # Zero candidates raises above. One candidate is the unambiguous source.
+    # Two candidates means a true bijection: both columns are unique and cover
+    # their layers exactly, so the mapping is one-to-one. MorphSync stores every
+    # link in both directions (see ``add_link``), so either choice yields the
+    # same bidirectional link; pick the first deterministically.
+    source_layer, target_layer = candidates[0]
 
     layer = cell._all_objects[source_layer]
+    # Validation above guarantees the source column is unique and covers exactly
+    # the source vertex index, so this reindex is a total, collision-free
+    # reordering -- it can no longer raise a large KeyError.
     cell._all_objects[source_layer]._process_linkage(
         Link(
             link_df.set_index(source_layer).loc[layer.vertex_index][target_layer],
