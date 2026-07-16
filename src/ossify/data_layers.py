@@ -200,9 +200,11 @@ class EdgeMixin(ABC):
             )
         if limit is None:
             limit = np.inf
+        # source_target_distances returns a (len(sources), len(targets)) matrix
+        # and indexes by these arrays, so scalar inputs must be promoted to 1-d.
         return gf.source_target_distances(
-            sources=sources,
-            targets=targets,
+            sources=np.atleast_1d(sources),
+            targets=np.atleast_1d(targets),
             csgraph=self.csgraph_undirected,
             limit=limit,
         )
@@ -304,6 +306,16 @@ class FaceMixin(ABC):
                 directed=False,
             )
         return self._csgraph
+
+    def _reset_derived_properties(self) -> None:
+        """Reset cached properties derived from vertex positions.
+
+        The distance-weighted ``csgraph`` and the ``trimesh`` object both embed
+        vertex coordinates, so they must be dropped when the geometry changes
+        (e.g. after a spatial transform).
+        """
+        self._csgraph = None
+        self._trimesh = None
 
     def _map_faces_to_index(
         self, faces: np.ndarray, vertex_indices: np.ndarray
@@ -472,7 +484,12 @@ class PointMixin(ABC):
                 vertex_index_map = self.vertex_index_map
             else:
                 vertex_index_map = {v: i for i, v in enumerate(vertex_index)}
-            vertices = fastremap.remap(vertices, vertex_index_map)
+            # fastremap.remap rejects 0-d arrays, so a scalar vertex would crash
+            # here. Remap on a 1-d view and restore the caller's shape, keeping
+            # scalar-in -> scalar-out (as the positional path already does).
+            vertices = fastremap.remap(
+                np.atleast_1d(vertices), vertex_index_map
+            ).reshape(vertices.shape)
         vertices = np.array(vertices)
         return vertices, as_positional
 
@@ -1090,9 +1107,10 @@ class PointMixin(ABC):
             new_morphsync.layers.pop(l)
         new_morphsync.links = {}
 
-        return self.__class__._from_existing(
-            new_morphsync=new_morphsync, old_obj=self._cell
-        )
+        # Copy this layer alone, detached from any Cell: build it from this
+        # layer's own metadata (``_from_existing`` reads ``.nodes``/``.edges``/
+        # etc.), not from ``self._cell`` (a Cell has no such layer attributes).
+        return self.__class__._from_existing(new_morphsync=new_morphsync, old_obj=self)
 
     def transform(
         self, transform: Union[np.ndarray, Callable], inplace: bool = False
@@ -1111,7 +1129,21 @@ class PointMixin(ABC):
             target.layer.nodes[target.spatial_columns] = transform(
                 target.layer.vertices
             )
+        # Moving vertices changes Euclidean distances, so any geometry-derived
+        # caches (distance-weighted csgraph, trimesh, base graphs) are now stale.
+        target._invalidate_spatial_caches()
         return target
+
+    def _invalidate_spatial_caches(self) -> None:
+        """Invalidate caches derived from vertex positions.
+
+        Called after a spatial transform. Distance-weighted graphs and mesh
+        objects depend on coordinates and must be rebuilt. Layers without such
+        caches (e.g. plain point clouds) do nothing.
+        """
+        reset = getattr(self, "_reset_derived_properties", None)
+        if reset is not None:
+            reset()
 
     @contextlib.contextmanager
     def mask_context(self, mask: np.ndarray) -> Generator[Self, None, None]:
@@ -1136,7 +1168,7 @@ class PointMixin(ABC):
         try:
             yield new_self
         finally:
-            pass
+            new_self._close()
 
     def _register_cell(self, mws: "Cell") -> None:
         """Register a Cell object with this layer.
@@ -1147,6 +1179,18 @@ class PointMixin(ABC):
             Cell object to register with this layer.
         """
         self._cell = mws
+
+    def _close(self) -> None:
+        """Release this layer's data and detach it from any Cell.
+
+        Used by ``mask_context`` (when it yields a bare layer rather than a
+        Cell) so the temporary masked copy is torn down when the block exits.
+        The layer must not be used after it is closed. See ``Cell._close``.
+        """
+        if self._morphsync is None:
+            return
+        self._cell = None
+        self._morphsync = None
 
     def get_unmapped_vertices(
         self,
@@ -2117,6 +2161,17 @@ class SkeletonLayer(GraphLayer):
         super()._reset_derived_properties()
         self._dag_cache = gf.DAGCache()
 
+    def _invalidate_spatial_caches(self) -> None:
+        # Drops the lazy csgraph/dag caches, then refresh the eagerly-stored
+        # distance-weighted base graph from the transformed coordinates. The
+        # base graph is a snapshot of the original geometry, so this is only
+        # possible when unmasked -- a masked skeleton's base graph spans
+        # vertices that are absent here and cannot be rebuilt. (The binary base
+        # graph is topology-only and unaffected by a spatial transform.)
+        super()._invalidate_spatial_caches()
+        if np.array_equal(self.vertex_index, self.base_vertex_index):
+            self._base_properties["base_csgraph"] = self.csgraph
+
     def _infer_root(self, root: Optional[int]) -> int:
         """Infer the root node from the graph structure or validate provided root.
 
@@ -2227,18 +2282,26 @@ class SkeletonLayer(GraphLayer):
         Self
         """
         self._reset_derived_properties()
-        if not as_positional:
-            new_root = np.flatnonzero(self.vertex_index == new_root)[0]
+        # ``_root``/``base_root`` and ``_apply_root_to_edges`` all work in vertex
+        # index space, so normalize a positional argument up front rather than
+        # converting to positional (which the rest of the class does not expect).
+        if as_positional:
+            new_root = int(self.vertex_index[new_root])
         self._root = new_root
-        self._dag_cache.root = self._root
-        self._apply_root_to_edges(new_root)
+        self._dag_cache.root = self.root_positional
+        self._dag_cache.parent_node_array = self._apply_root_to_edges(new_root)
+        # Rebuild the full base-property snapshot from the rerooted skeleton.
+        # This must include every key ``_set_base_properties`` normally writes --
+        # notably ``base_csgraph_binary`` (used by ``hops_to_root``) -- because a
+        # provided dict replaces ``_base_properties`` wholesale.
         self._set_base_properties(
             base_properties={
-                "base_root": new_root,
+                "base_root": self.root,
+                "base_root_location": self.root_location,
                 "base_vertex_index": self.vertex_index,
                 "base_parent_array": self.parent_node_array,
                 "base_csgraph": self.csgraph,
-                "base_root_location": self.root_location,
+                "base_csgraph_binary": self.csgraph_binary,
             }
         )
         return self

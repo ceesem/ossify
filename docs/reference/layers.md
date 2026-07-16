@@ -331,5 +331,5 @@ tortuous_segments = analysis.tortuosity > 1.5
     
     - **Spatial Queries**: Use `kdtree` property for fast nearest neighbor searches
     - **Graph Operations**: Leverage `csgraph` for efficient pathfinding and connectivity analysis  
-    - **Memory Management**: Use `mask_context()` for temporary operations without copying data
+    - **Memory Management**: Use `mask_context()` for temporary operations — the masked copy is scoped to the `with` block and released on exit, so it isn't kept alive longer than needed
     - **Batch Operations**: Process multiple vertices/faces together rather than iterating

@@ -209,6 +209,6 @@ rotated_cell = cell.transform(rotate_90_degrees)
 
 !!! tip "Performance Tips"
     
-    - Use `mask_context()` for temporary operations to avoid copying data
+    - Use `mask_context()` for temporary operations: it creates a masked copy scoped to the `with` block and releases it automatically on exit, so short-lived masked cells don't accumulate in memory
     - Leverage the `LinkageSystem` for efficient cross-layer operations
     - Cache expensive computations using layer properties like `csgraph`

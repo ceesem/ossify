@@ -848,6 +848,25 @@ class Cell:
             )
         return pd.concat(remap_features, axis=1)
 
+    def _close(self) -> None:
+        """Release this Cell's data and break the layer<->cell reference cycle.
+
+        Layers hold a back-reference to their Cell (and vice versa), so a Cell
+        is only reclaimed by the cyclic garbage collector, not by refcounting.
+        ``mask_context`` calls this on exit so the temporary masked copy is torn
+        down immediately -- freeing its (potentially large) data as soon as the
+        block ends rather than lingering until the next gc pass. The Cell must
+        not be used after it is closed.
+        """
+        if self._morphsync is None:
+            return
+        for obj in list(self._all_objects.values()):
+            obj._cell = None
+            obj._morphsync = None
+        self._managed_layers.clear()
+        self._annotations._layers.clear()
+        self._morphsync = None
+
     @contextlib.contextmanager
     def mask_context(
         self,
@@ -855,6 +874,10 @@ class Cell:
         mask: np.ndarray,
     ) -> Generator[Self, None, None]:
         """Create a masked version of the MeshWork object in a context state.
+
+        The masked Cell is a temporary scoped to the ``with`` block: it is torn
+        down when the block exits (including on error), so do not retain it or
+        any of its layers past the context.
 
         Parameters
         ----------
@@ -872,7 +895,7 @@ class Cell:
         try:
             yield nrn_out
         finally:
-            pass
+            nrn_out._close()
 
     def _cleanup_links(self, layer_name: str) -> None:
         """Remove all links involving the specified layer from MorphSync."""

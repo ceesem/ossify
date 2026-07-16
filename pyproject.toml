@@ -136,8 +136,22 @@ cmd = "uv run bump-my-version bump"
 help = "Bump the version number in the project. Use with 'patch', 'minor', or 'major' to specify the version change."
 
 [tool.poe.tasks.test]
-cmd = "uv run pytest --cov=ossify tests"
-help = "Run pytest with code coverage."
+cmd = "uv run pytest --cov=ossify --cov-branch --cov-report=term-missing tests"
+help = "Run pytest with branch coverage and a missing-lines report."
+
+[tool.pytest.ini_options]
+# src-layout: put the package on the path so tests import ossify from src/
+# during collection without relying on the editable install being present.
+pythonpath = ["src"]
+
+[tool.coverage.run]
+branch = true
+source = ["ossify"]
+
+[tool.coverage.report]
+# Surface partially-covered branches, not just uncovered lines.
+show_missing = true
+skip_covered = false
 
 [tool.poe.tasks.doc-preview]
 cmd = "uv run mkdocs serve"

@@ -307,7 +307,7 @@ def test_cell_copy_and_properties():
 
     # Test basic properties
     assert cell.name == "original_cell"
-    assert hasattr(cell, "_morphsync")
+    assert cell._morphsync is not None
 
     # Add a simple layer for copy testing
     vertices = pd.DataFrame(
@@ -324,6 +324,17 @@ def test_cell_copy_and_properties():
     # Test that layers were added correctly
     assert "skeleton" in cell.layers.names
     assert cell.skeleton.n_vertices == 3
+
+    # copy() must produce an independent deep copy: same content, distinct
+    # objects, and mutating the copy must not touch the original.
+    copied = cell.copy()
+    assert copied is not cell
+    assert copied.name == cell.name
+    assert copied.skeleton.n_vertices == 3
+    assert copied._morphsync is not cell._morphsync
+    copied.transform(lambda a: a + 100.0, inplace=True)
+    np.testing.assert_allclose(cell.skeleton.vertices[:, 0], [0, 1, 2])
+    np.testing.assert_allclose(copied.skeleton.vertices[:, 0], [100, 101, 102])
 
 
 # ============================================================================
@@ -768,6 +779,7 @@ def test_cell_all_objects_property():
     assert "skeleton" in all_objects
     assert "synapses" in all_objects
 
-    # Verify objects are actual layer instances
-    assert hasattr(all_objects["skeleton"], "n_vertices")
-    assert hasattr(all_objects["synapses"], "n_vertices")
+    # Verify objects are the actual layer instances with the expected data.
+    assert all_objects["skeleton"] is cell.skeleton
+    assert all_objects["skeleton"].n_vertices == 3
+    assert all_objects["synapses"].n_vertices == 4

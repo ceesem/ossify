@@ -185,6 +185,15 @@ with cell.mask_context(layer="skeleton", mask=quality_mask) as temp_cell:
 cell.describe()
 ```
 
+!!! warning "The masked object is scoped to the `with` block"
+
+    `mask_context` builds a masked *copy* and tears it down when the block
+    exits (including on error), so the copy is released promptly instead of
+    lingering. Because of this, do not keep the masked cell/layer — or any of
+    its layers — and use it after the block; extract the values you need
+    inside the block instead. If you need a masked object that outlives the
+    block, use `apply_mask()`, which returns a copy you own.
+
 ### Advanced Masking with Visualization
 
 Here's a sophisticated example that combines masking with algorithmic analysis and visualization:

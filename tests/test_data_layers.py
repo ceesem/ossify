@@ -415,18 +415,17 @@ class TestSkeletonLayer:
         skeleton = cell.skeleton
         original_root = skeleton.root
 
-        # Reroot to a different vertex (use vertex_indices[2] = 102)
-        new_root = vertex_indices[2]  # This should be 102
+        # Reroot to a different vertex (vertex_indices[2] == 102).
+        new_root = vertex_indices[2]
+        returned = skeleton.reroot(new_root)
 
-        # Debug info
-        print(f"Original root: {original_root}")
-        print(f"New root: {new_root}")
-        print(f"Available vertices: {skeleton.vertex_index}")
-        print(f"vertex_indices: {vertex_indices}")
-
-        # For now, test that rerooting capability exists
-        assert hasattr(skeleton, "reroot")
-        assert skeleton.root == original_root  # Verify current root
+        # reroot mutates in place and returns self.
+        assert returned is skeleton
+        assert skeleton.root == new_root
+        assert skeleton.root != original_root
+        # root/base_root remain vertex indices (not positional).
+        assert skeleton.root in skeleton.vertex_index
+        assert skeleton.base_root == new_root
 
 
 class TestGraphLayer:
@@ -882,10 +881,11 @@ class TestMappingFunctionality:
 
         # Find unmapped vertices to graph (should be none)
         unmapped_graph = cell.skeleton.get_unmapped_vertices(target_layers="graph")
-        assert len(unmapped_graph) == 0  # All mapped to graph
-
-        # Test that the function works with valid target layers
-        assert hasattr(cell.skeleton, "get_unmapped_vertices")
+        # Every skeleton vertex maps to the graph, so the result is an empty
+        # integer index array (not just a truthy "the method exists").
+        assert isinstance(unmapped_graph, np.ndarray)
+        assert unmapped_graph.dtype.kind in "iu"
+        assert unmapped_graph.size == 0
 
     def test_mask_out_unmapped_functionality(
         self, simple_skeleton_data, simple_graph_data, spatial_columns
@@ -1605,3 +1605,328 @@ class TestSpatialDtypeCoercion:
                 vertices=df,
                 spatial_columns=spatial_columns,
             )
+
+
+class TestTransformInvalidatesCaches:
+    """Transforming vertices changes distances, so distance-weighted graph
+    caches (the lazy ``csgraph`` and the snapshotted ``base_csgraph``) must be
+    rebuilt rather than served stale."""
+
+    def _line_skeleton(self, spatial_columns):
+        # 5 vertices on a line, unit spacing -> total cable length 4.
+        verts = np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0], [4, 0, 0]])
+        idx = np.array([100, 101, 102, 103, 104])
+        df = pd.DataFrame(verts, columns=spatial_columns, index=idx)
+        edges = np.array([[101, 100], [102, 101], [103, 102], [104, 103]])
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=df, edges=edges, spatial_columns=spatial_columns, root=100
+        )
+        return cell
+
+    def test_inplace_transform_rebuilds_csgraph(self, spatial_columns):
+        cell = self._line_skeleton(spatial_columns)
+        # Prime the lazy csgraph cache before transforming.
+        assert cell.skeleton.csgraph.sum() == pytest.approx(4.0)
+        cell.transform(lambda a: a * 10.0, inplace=True)
+        assert cell.skeleton.csgraph.sum() == pytest.approx(40.0)
+
+    def test_inplace_transform_rebuilds_base_csgraph(self, spatial_columns):
+        cell = self._line_skeleton(spatial_columns)
+        assert cell.skeleton.base_csgraph.sum() == pytest.approx(4.0)
+        cell.transform(lambda a: a * 10.0, inplace=True)
+        assert cell.skeleton.base_csgraph.sum() == pytest.approx(40.0)
+        # distance_to_root reads base_csgraph, so it must reflect new distances.
+        assert cell.skeleton.distance_to_root().max() == pytest.approx(40.0)
+
+    def test_copy_transform_rebuilds_base_csgraph(self, spatial_columns):
+        cell = self._line_skeleton(spatial_columns)
+        _ = cell.skeleton.base_csgraph  # prime cache on the original
+        moved = cell.transform(lambda a: a * 10.0)
+        assert moved.skeleton.base_csgraph.sum() == pytest.approx(40.0)
+        # The original must be untouched by the out-of-place transform.
+        assert cell.skeleton.base_csgraph.sum() == pytest.approx(4.0)
+
+    def test_transform_rebuilds_mesh_caches(self, spatial_columns):
+        verts = np.array([[0.0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]])
+        faces = np.array([[0, 1, 2], [1, 3, 2]])
+        cell = Cell()
+        cell.add_mesh(vertices=verts, faces=faces, spatial_columns=spatial_columns)
+        mesh = cell.mesh
+        area_before = mesh.surface_area()
+        csgraph_sum_before = mesh.csgraph.sum()  # primes the lazy caches
+        cell.transform(lambda a: a * 2.0, inplace=True)
+        # Scaling by 2 in-plane quadruples area (trimesh cache must refresh) and
+        # doubles every edge length (csgraph cache must refresh).
+        assert cell.mesh.surface_area() == pytest.approx(area_before * 4.0)
+        assert cell.mesh.csgraph.sum() == pytest.approx(csgraph_sum_before * 2.0)
+
+
+class TestTransformArrayArgument:
+    """``transform`` also accepts an explicit (N, 3) array of new coordinates,
+    not just a callable. That branch (and its shape validation) was previously
+    unexercised."""
+
+    def _skeleton(self, spatial_columns):
+        verts = np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0], [4, 0, 0]])
+        idx = np.array([100, 101, 102, 103, 104])
+        df = pd.DataFrame(verts, columns=spatial_columns, index=idx)
+        edges = np.array([[101, 100], [102, 101], [103, 102], [104, 103]])
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=df, edges=edges, spatial_columns=spatial_columns, root=100
+        )
+        return cell.skeleton
+
+    def test_array_replaces_coordinates(self, spatial_columns):
+        sk = self._skeleton(spatial_columns)
+        _ = sk.csgraph  # prime the cache
+        new_coords = np.column_stack(
+            [np.arange(0.0, 10.0, 2.0), np.zeros(5), np.zeros(5)]
+        )  # spacing doubled to 2.0
+        sk.transform(new_coords, inplace=True)
+        np.testing.assert_allclose(sk.vertices, new_coords)
+        # Cache reflects the new geometry: total cable length 5 edges? 4 * 2 = 8.
+        assert sk.csgraph.sum() == pytest.approx(8.0)
+
+    def test_wrong_shape_raises(self, spatial_columns):
+        sk = self._skeleton(spatial_columns)
+        with pytest.raises(ValueError, match="same shape"):
+            sk.transform(np.zeros((3, 3)), inplace=True)
+
+
+class TestLayerCopy:
+    """A layer attached to a Cell must be copyable on its own, detached from
+    the Cell (this is also what out-of-place ``layer.transform`` relies on)."""
+
+    def _line_skeleton(self, spatial_columns):
+        verts = np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0], [4, 0, 0]])
+        idx = np.array([100, 101, 102, 103, 104])
+        df = pd.DataFrame(verts, columns=spatial_columns, index=idx)
+        edges = np.array([[101, 100], [102, 101], [103, 102], [104, 103]])
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=df, edges=edges, spatial_columns=spatial_columns, root=100
+        )
+        return cell
+
+    def test_skeleton_copy_detaches_from_cell(self, spatial_columns):
+        cell = self._line_skeleton(spatial_columns)
+        copied = cell.skeleton.copy()
+        assert copied._cell is None
+        assert copied.n_vertices == cell.skeleton.n_vertices
+        np.testing.assert_array_equal(copied.vertices, cell.skeleton.vertices)
+        assert copied.root == cell.skeleton.root
+
+    def test_skeleton_copy_is_independent(self, spatial_columns):
+        cell = self._line_skeleton(spatial_columns)
+        copied = cell.skeleton.copy()
+        copied.transform(lambda a: a * 10.0, inplace=True)
+        # Mutating the copy must not touch the original attached layer.
+        assert cell.skeleton.csgraph.sum() == pytest.approx(4.0)
+        assert copied.csgraph.sum() == pytest.approx(40.0)
+
+    def test_skeleton_out_of_place_transform(self, spatial_columns):
+        cell = self._line_skeleton(spatial_columns)
+        moved = cell.skeleton.transform(lambda a: a * 10.0)
+        assert moved._cell is None
+        assert moved.csgraph.sum() == pytest.approx(40.0)
+        assert moved.base_csgraph.sum() == pytest.approx(40.0)
+        assert cell.skeleton.csgraph.sum() == pytest.approx(4.0)
+
+    def test_mesh_copy_detaches_from_cell(self, spatial_columns):
+        verts = np.array([[0.0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]])
+        faces = np.array([[0, 1, 2], [1, 3, 2]])
+        cell = Cell()
+        cell.add_mesh(vertices=verts, faces=faces, spatial_columns=spatial_columns)
+        copied = cell.mesh.copy()
+        assert copied._cell is None
+        assert copied.surface_area() == pytest.approx(cell.mesh.surface_area())
+
+    def test_point_cloud_copy_detaches_from_cell(self, spatial_columns):
+        verts = np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0]])
+        cell = Cell()
+        cell.add_point_layer(
+            name="points", vertices=verts, spatial_columns=spatial_columns
+        )
+        copied = cell.layers["points"].copy()
+        assert copied._cell is None
+        assert copied.n_vertices == 3
+
+
+class TestReroot:
+    """reroot must move the root, reorient edges, and leave the derived/base
+    caches self-consistent (root stays a vertex index; the base graphs, both
+    weighted and binary, are rebuilt)."""
+
+    def _line_skeleton(self, spatial_columns):
+        # vertices 100..104 on a line, unit spacing, rooted at 100.
+        verts = np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0], [4, 0, 0]])
+        idx = np.array([100, 101, 102, 103, 104])
+        df = pd.DataFrame(verts, columns=spatial_columns, index=idx)
+        edges = np.array([[101, 100], [102, 101], [103, 102], [104, 103]])
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=df, edges=edges, spatial_columns=spatial_columns, root=100
+        )
+        return cell
+
+    def test_reroot_by_vertex_index(self, spatial_columns):
+        cell = self._line_skeleton(spatial_columns)
+        sk = cell.skeleton
+        assert sk.distance_to_root(np.array([104]))[0] == pytest.approx(4.0)
+        sk.reroot(104)
+        # Root is stored as a vertex index, not a positional index.
+        assert sk.root == 104
+        assert sk.root in sk.vertex_index
+        # Distances are now measured from the new root.
+        dtr = sk.distance_to_root(np.array([104, 100]))
+        assert dtr[0] == pytest.approx(0.0)
+        assert dtr[1] == pytest.approx(4.0)
+
+    def test_reroot_as_positional(self, spatial_columns):
+        cell = self._line_skeleton(spatial_columns)
+        sk = cell.skeleton
+        sk.reroot(4, as_positional=True)  # positional 4 -> vertex index 104
+        assert sk.root == 104
+        assert sk.distance_to_root(np.array([100]))[0] == pytest.approx(4.0)
+
+    def test_reroot_preserves_base_binary_graph(self, spatial_columns):
+        # hops_to_root reads base_csgraph_binary, which reroot must not drop.
+        cell = self._line_skeleton(spatial_columns)
+        sk = cell.skeleton
+        sk.reroot(104)
+        assert "base_csgraph_binary" in sk._base_properties
+        htr = sk.hops_to_root(np.array([100, 104]))
+        assert htr[0] == pytest.approx(4.0)
+        assert htr[1] == pytest.approx(0.0)
+
+    def test_reroot_reorients_edges(self, spatial_columns):
+        # After rerooting at 104, the parent of 100 is 101 (edges point rootward).
+        cell = self._line_skeleton(spatial_columns)
+        sk = cell.skeleton
+        sk.reroot(104)
+        parents = sk.parent_node_array  # positional, -1 for the root
+        pos = {v: i for i, v in enumerate(sk.vertex_index)}
+        assert sk.vertex_index[parents[pos[100]]] == 101
+        assert parents[pos[104]] == -1
+
+    def test_reroot_returns_self(self, spatial_columns):
+        cell = self._line_skeleton(spatial_columns)
+        sk = cell.skeleton
+        assert sk.reroot(102) is sk
+
+
+class TestScalarVertexArguments:
+    """A single vertex may be passed as a scalar (not just a 1-element array).
+    ``_vertices_to_positional`` must handle the 0-d case (``fastremap.remap``
+    rejects it) and return a scalar, matching the positional-scalar path."""
+
+    def _line_skeleton(self, spatial_columns):
+        verts = np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0], [4, 0, 0]])
+        idx = np.array([100, 101, 102, 103, 104])
+        df = pd.DataFrame(verts, columns=spatial_columns, index=idx)
+        edges = np.array([[101, 100], [102, 101], [103, 102], [104, 103]])
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=df, edges=edges, spatial_columns=spatial_columns, root=100
+        )
+        return cell
+
+    def test_distance_to_root_scalar_index(self, spatial_columns):
+        sk = self._line_skeleton(spatial_columns).skeleton
+        scalar = sk.distance_to_root(104)
+        assert np.ndim(scalar) == 0
+        assert scalar == pytest.approx(4.0)
+        # Consistent with the 1-element-array form.
+        assert scalar == pytest.approx(sk.distance_to_root(np.array([104]))[0])
+
+    def test_distance_to_root_scalar_positional(self, spatial_columns):
+        sk = self._line_skeleton(spatial_columns).skeleton
+        # Positional scalar already worked; confirm it still matches.
+        assert sk.distance_to_root(4, as_positional=True) == pytest.approx(4.0)
+
+    def test_hops_to_root_scalar_index(self, spatial_columns):
+        sk = self._line_skeleton(spatial_columns).skeleton
+        assert sk.hops_to_root(104) == pytest.approx(4.0)
+
+    def test_distance_between_scalar(self, spatial_columns):
+        sk = self._line_skeleton(spatial_columns).skeleton
+        d = sk.distance_between(100, 104)
+        assert np.asarray(d).item() == pytest.approx(4.0)
+
+
+class TestMaskContextTeardown:
+    """``mask_context`` yields a scoped temporary that must be torn down when
+    the block exits, so the masked copy is reclaimed promptly rather than
+    lingering behind the layer<->cell reference cycle."""
+
+    def _cell(self, spatial_columns):
+        verts = np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0], [4, 0, 0]])
+        idx = np.array([100, 101, 102, 103, 104])
+        df = pd.DataFrame(verts, columns=spatial_columns, index=idx)
+        edges = np.array([[101, 100], [102, 101], [103, 102], [104, 103]])
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=df, edges=edges, spatial_columns=spatial_columns, root=100
+        )
+        return cell
+
+    def test_masked_cell_usable_inside_context(self, spatial_columns):
+        cell = self._cell(spatial_columns)
+        mask = np.array([True, True, True, False, False])
+        with cell.mask_context("skeleton", mask) as masked:
+            assert masked.skeleton.n_vertices == 3
+
+    def test_original_untouched(self, spatial_columns):
+        cell = self._cell(spatial_columns)
+        mask = np.array([True, True, True, False, False])
+        with cell.mask_context("skeleton", mask):
+            pass
+        assert cell.skeleton.n_vertices == 5
+
+    def test_masked_cell_closed_after_context(self, spatial_columns):
+        cell = self._cell(spatial_columns)
+        mask = np.array([True, True, True, False, False])
+        with cell.mask_context("skeleton", mask) as masked:
+            saved = masked
+            saved_layer = masked.skeleton  # capture before the layers are cleared
+        # The temporary is torn down: data released, cycle broken.
+        assert saved._morphsync is None
+        assert saved.skeleton is None  # layers dropped from the manager
+        assert saved_layer._cell is None  # back-reference severed
+
+    def test_reclaimed_without_cyclic_gc(self, spatial_columns):
+        # With the reference cycle broken, the masked copy is freed by
+        # refcounting alone -- no wait for the cyclic collector.
+        import gc
+        import weakref
+
+        cell = self._cell(spatial_columns)
+        mask = np.array([True, True, True, False, False])
+        gc.disable()
+        try:
+            with cell.mask_context("skeleton", mask) as masked:
+                ref = weakref.ref(masked)
+            del masked
+            assert ref() is None
+        finally:
+            gc.enable()
+
+    def test_closed_even_on_exception(self, spatial_columns):
+        cell = self._cell(spatial_columns)
+        mask = np.array([True, True, True, False, False])
+        saved = None
+        with pytest.raises(RuntimeError):
+            with cell.mask_context("skeleton", mask) as masked:
+                saved = masked
+                raise RuntimeError("boom")
+        assert saved._morphsync is None
+
+    def test_layer_level_mask_context_closes(self, spatial_columns):
+        cell = self._cell(spatial_columns)
+        mask = np.array([True, True, True, False, False])
+        with cell.skeleton.mask_context(mask) as masked:
+            assert masked.skeleton.n_vertices == 3
+            saved = masked
+        assert saved._morphsync is None
