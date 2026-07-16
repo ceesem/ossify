@@ -208,8 +208,10 @@ The signature mirrors `load_cell_from_client` and adds a few batch-only options:
 
 - `skip_invalid=True` — drop root ids that are not valid at the timestamp (or whose skeleton is
   unavailable) instead of raising.
-- `generate_missing_skeletons=True` — block on server-side skeleton generation for any cell not
-  already cached. The default (`False`) assumes skeletons already exist and simply downloads them.
+- `skeleton_download_method` — `"gcs"` (default) downloads cached skeletons directly from the
+  storage bucket, bypassing the skeleton service and avoiding its request rate limits;
+  `"server"` routes the download through the service instead. Only already-cached skeletons are
+  returned — generate them first (see the tip below).
 - `row_limit` — guards against a silently-truncated synapse query (see the batch-size note).
 
 !!! tip "Two batching scales: generate first, then load"
@@ -237,8 +239,8 @@ The signature mirrors `load_cell_from_client` and adds a few batch-only options:
     A batch size of about **10** is a good default. Beyond that the pooled queries become
     payload-bound, so larger batches stop improving per-cell time, and a batch of ~10 keeps the
     combined synapse query safely under the server's row limit (500,000 rows) even for
-    heavily-connected cells. Ten also matches the synchronous bulk-skeleton download limit, so one
-    batch maps to exactly one bulk-skeleton call plus one pooled synapse and L2 query. If a batch
+    heavily-connected cells. (Skeletons are no longer the constraint — the cached bulk download
+    fetches up to 500 per call — so the synapse query is what sets the batch size.) If a batch
     ever does exceed the row limit, the `row_limit` guard raises rather than returning a silently
     truncated result — reduce the batch size if you hit it.
 

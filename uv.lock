@@ -468,11 +468,12 @@ wheels = [
 
 [[package]]
 name = "caveclient"
-version = "7.11.0"
+version = "8.2.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
     { name = "cachetools" },
+    { name = "h5py" },
     { name = "ipython" },
     { name = "jsonschema" },
     { name = "networkx" },
@@ -483,9 +484,9 @@ dependencies = [
     { name = "requests" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6f/1d/ceac950bd9cdc9dcf604ffb2937f7286628137cb86ce88046077cffa294f/caveclient-7.11.0.tar.gz", hash = "sha256:6e4b24b8fc10ebabf508d617850c963345a01ce8bb67a03469dbd9b932458c14", size = 3229307, upload-time = "2025-07-16T19:05:55.174Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/97/74/5c14baa17472fbb688fea5ac775f2433a66bbf270491458d9155eb98601d/caveclient-8.2.1.tar.gz", hash = "sha256:d78e8704fef998dec247c0d9fadb8211c4cdc0fef54da35f6613ee0857de9925", size = 3315236, upload-time = "2026-07-10T21:20:56.406Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e3/a6/98ccc205d2ee1167952038a060b9134bdc95c3373adf9f3d9a3e492f805b/caveclient-7.11.0-py3-none-any.whl", hash = "sha256:0c6ea99c6de8bb3b8ff3f0f7c22a695e93cde78975f10a6953c78302b97822e6", size = 90626, upload-time = "2025-07-16T19:05:53.577Z" },
+    { url = "https://files.pythonhosted.org/packages/58/9f/7f82dd31b4773a870459ef9a3e13c3930aeffb033b44a3c0d6b4d059df8b/caveclient-8.2.1-py3-none-any.whl", hash = "sha256:1a111d67be329cf89ba8f2166e549e865b5450139fd7d1c13d27eb208a87c2c5", size = 95824, upload-time = "2026-07-10T21:20:54.507Z" },
 ]
 
 [[package]]
@@ -2820,7 +2821,7 @@ viz = [
 
 [package.metadata]
 requires-dist = [
-    { name = "caveclient", specifier = ">=7.6.0" },
+    { name = "caveclient", specifier = ">=8.2.1" },
     { name = "cloud-files", specifier = ">=5.8.0" },
     { name = "fastremap", specifier = ">=1.15.1" },
     { name = "h5py", marker = "extra == 'legacy'", specifier = ">=3.14.0" },

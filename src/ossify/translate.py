@@ -23,10 +23,10 @@ if TYPE_CHECKING:
     from caveclient import CAVEclientFull as CAVEclient
 
 
-# Synchronous bulk-skeleton download cap in the CAVE skeleton service
-# (caveclient.skeletonservice.MAX_BULK_SYNCHRONOUS_SKELETONS); larger lists are silently
-# truncated by the endpoint, so callers must chunk at this size.
-_BULK_SKELETON_CHUNK = 10
+# Per-call cap for cached bulk-skeleton downloads via ``client.skeleton.fetch_skeletons``
+# (caveclient.skeletonservice.MAX_BULK_CACHED_SKELETONS); longer lists are silently truncated
+# by the endpoint, so callers must chunk at this size.
+_BULK_SKELETON_CHUNK = 500
 
 
 class SWCCompartment(IntEnum):
@@ -563,23 +563,32 @@ def _get_bulk_skeletons(
     client: "CAVEclient",
     root_ids: list[int],
     skeleton_version: int,
-    generate_missing: bool = False,
+    method: Literal["gcs", "server"] = "gcs",
 ) -> dict[int, dict]:
-    """Download skeletons in bulk, chunked at the synchronous bulk cap.
+    """Download cached skeletons in bulk, chunked at the cached-bulk cap.
 
-    Returns ``{int root_id: skeleton_dict}``. Roots whose skeleton is not yet available
-    (async/not-generated) are omitted — with ``generate_missing=False`` (the worker default,
-    assuming a prior ``generate_bulk_skeletons_async`` pre-pass) these simply don't appear.
+    Uses ``client.skeleton.fetch_skeletons``, which retrieves only already-cached skeletons and
+    skips the per-root chunkedgraph validation of the older ``get_bulk_skeletons`` path. With
+    ``method="gcs"`` (the default) skeleton H5 files are downloaded directly from the storage
+    bucket via a short-lived downscoped token, bypassing the service for data transfer — this
+    avoids the request rate limits that throttle bulk loads through the server. ``method="server"``
+    routes the download through the skeleton service instead.
+
+    Skeletons are never generated inline (``generate_missing_skeletons=False`` always). Returns
+    ``{int root_id: skeleton_dict}``; roots whose skeleton is not yet cached (async/not-generated)
+    are omitted — assuming a prior ``generate_bulk_skeletons_async`` pre-pass, these simply don't
+    appear.
     """
     out: dict[int, dict] = {}
     for i in range(0, len(root_ids), _BULK_SKELETON_CHUNK):
         chunk = root_ids[i : i + _BULK_SKELETON_CHUNK]
         with suppress_output():
-            res = client.skeleton.get_bulk_skeletons(
+            res = client.skeleton.fetch_skeletons(
                 chunk,
                 skeleton_version=skeleton_version,
                 output_format="dict",
-                generate_missing_skeletons=generate_missing,
+                method=method,
+                generate_missing_skeletons=False,
             )
         for k, v in res.items():
             out[int(k)] = v
@@ -601,7 +610,7 @@ def load_cell_batch_from_client(
     omit_self_synapses: bool = True,
     skeleton_version: int = 4,
     skip_invalid: bool = False,
-    generate_missing_skeletons: bool = False,
+    skeleton_download_method: Literal["gcs", "server"] = "gcs",
     row_limit: int = 500_000,
 ) -> dict[int, Cell]:
     """Load many cells with the poolable fetches batched into a few queries.
@@ -625,10 +634,11 @@ def load_cell_batch_from_client(
     skip_invalid: bool
         If True, roots that are not valid at ``timestamp`` — or whose skeleton is not available
         — are dropped from the result instead of raising.
-    generate_missing_skeletons: bool
-        Passed to ``get_bulk_skeletons``. Default False assumes skeletons were already produced
-        by a ``generate_bulk_skeletons_async`` pre-pass; a worker then just downloads them (fast,
-        and degrades gracefully on a cache miss). Set True to block on server-side generation.
+    skeleton_download_method: "gcs" or "server"
+        How ``fetch_skeletons`` retrieves cached skeletons. ``"gcs"`` (default) downloads H5 files
+        directly from the storage bucket via a downscoped token, bypassing the service for data
+        transfer and avoiding its request rate limits — preferred for bulk loads. ``"server"``
+        routes the download through the skeleton service instead.
     row_limit: int
         Passed to :func:`fetch_frames_batch`; guards against a silently-truncated pooled synapse
         query at/above the server row limit (default 500,000). Set to 0 to disable.
@@ -654,18 +664,20 @@ def load_cell_batch_from_client(
             + (" ..." if len(invalid_ids) > 5 else "")
         )
 
-    # 2. Skeletons: one bulk download (chunked at the sync cap) to obtain lvl2_ids, then
-    #    injected into assembly. Assumes a prior generate_bulk_skeletons_async pre-pass.
+    # 2. Skeletons: one cached bulk download (chunked at the cached-bulk cap) to obtain lvl2_ids,
+    #    then injected into assembly. Assumes a prior generate_bulk_skeletons_async pre-pass.
     sk_by_root = _get_bulk_skeletons(
-        client, valid_ids, skeleton_version, generate_missing=generate_missing_skeletons
+        client,
+        valid_ids,
+        skeleton_version,
+        method=skeleton_download_method,
     )
     no_skeleton = [r for r in valid_ids if r not in sk_by_root]
     if no_skeleton and not skip_invalid:
         raise ValueError(
-            f"{len(no_skeleton)} root id(s) have no available skeleton "
-            f"(run generate_bulk_skeletons_async first, or pass generate_missing_skeletons=True "
-            f"or skip_invalid=True): {no_skeleton[:5]}"
-            + (" ..." if len(no_skeleton) > 5 else "")
+            f"{len(no_skeleton)} root id(s) have no cached skeleton "
+            f"(run generate_bulk_skeletons_async first, or pass skip_invalid=True): "
+            f"{no_skeleton[:5]}" + (" ..." if len(no_skeleton) > 5 else "")
         )
     valid_ids = [r for r in valid_ids if r in sk_by_root]
     lvl2_ids_by_root = {r: sk_by_root[r]["lvl2_ids"] for r in valid_ids}

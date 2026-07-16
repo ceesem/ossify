@@ -11,7 +11,7 @@ description = "Mesh and skeleton analysis"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "caveclient>=7.6.0",
+    "caveclient>=8.2.1",
     "numpy>=2.0.2",
     "scipy>=1.15",
     "trimesh>=4.6.2",
