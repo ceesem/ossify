@@ -81,6 +81,52 @@ class TestTransitionSchema:
         with pytest.raises(ValueError):
             TransitionSchema(classes=["a", "b"], transitions={("a", "z"): 1.0})
 
+    def test_to_dict_from_dict_roundtrip(self):
+        s = TransitionSchema(
+            classes=["dendrite", "axon"],
+            transitions={("axon", "dendrite"): 50.0, ("dendrite", "axon"): 2.0},
+            root_classes=["dendrite"],
+            default_cost=1.5,
+        )
+        d = s.to_dict()
+        # JSON-safe: no tuple keys anywhere.
+        assert d["transitions"] == [
+            ["axon", "dendrite", 50.0],
+            ["dendrite", "axon", 2.0],
+        ]
+
+        s2 = TransitionSchema.from_dict(d)
+        assert s2.classes == s.classes
+        assert s2.root_classes == s.root_classes
+        assert s2.default_cost == s.default_cost
+        np.testing.assert_array_equal(s2.cost_matrix, s.cost_matrix)
+        np.testing.assert_array_equal(s2.root_allowed_mask, s.root_allowed_mask)
+
+    def test_to_dict_json_roundtrip(self):
+        import json
+
+        s = TransitionSchema(
+            classes=["dendrite", "axon"],
+            transitions={("axon", "dendrite"): 50.0},
+            root_classes=["dendrite"],
+        )
+        s2 = TransitionSchema.from_dict(json.loads(json.dumps(s.to_dict())))
+        np.testing.assert_array_equal(s2.cost_matrix, s.cost_matrix)
+
+    def test_to_dict_carries_schema_and_ossify_version(self):
+        import ossify
+
+        d = TransitionSchema(classes=["a", "b"]).to_dict()
+        assert d["type"] == "TransitionSchema"
+        assert d["version"] == TransitionSchema._SCHEMA_VERSION
+        assert d["ossify_version"] == ossify.__version__
+
+    def test_from_dict_rejects_newer_schema_version(self):
+        d = TransitionSchema(classes=["a", "b"]).to_dict()
+        d["version"] = TransitionSchema._SCHEMA_VERSION + 1
+        with pytest.raises(ValueError, match="schema version"):
+            TransitionSchema.from_dict(d)
+
 
 class TestTreeMapDecode:
     def _chain(self, n=5):

@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import Callable, List, Literal, Optional, Union
 
 import numpy as np
+import orjson
 import pandas as pd
 from scipy import sparse
 
@@ -38,6 +39,7 @@ from .algorithms import (
 from .base import Cell
 from .structured_prediction import (
     TransitionSchema,
+    _ossify_version,
     absorb_small_compartments,
     decode_tree,
 )
@@ -954,6 +956,10 @@ class ProbaVertexModel(SkeletonVertexModel):
         See :func:`make_skel_prop_df`. Defaults to :data:`DEFAULT_FEATURE_SPEC`.
     """
 
+    #: Bumped when :meth:`to_dict`'s shape changes incompatibly. Independent of
+    #: the ossify package version.
+    _SCHEMA_VERSION = 1
+
     def __init__(
         self,
         estimator,
@@ -974,12 +980,23 @@ class ProbaVertexModel(SkeletonVertexModel):
         self._feature_columns = list(feature_columns)
         self._smooth_alpha = smooth_alpha
         self._unary_clip = float(unary_clip)
+        #: The ``config`` argument the instance was built from via
+        #: :meth:`from_config` (a bundled model name, a user config dict, or a
+        #: config file path); ``None`` when built directly from an estimator.
+        #: Lets :meth:`to_dict` round-trip without re-serializing the estimator.
+        self._config_ref: Optional[Union[dict, str]] = None
         super().__init__(
             downstream_hops=downstream_hops,
             upstream_hops=upstream_hops,
             bidirectional_hops=bidirectional_hops,
             feature_spec=feature_spec,
         )
+
+    @staticmethod
+    def _resolve_config(config: Optional[Union[dict, str]]) -> dict:
+        if not isinstance(config, dict):
+            config = load_model_config(config, dir=None)
+        return config
 
     @classmethod
     def from_config(
@@ -997,22 +1014,125 @@ class ProbaVertexModel(SkeletonVertexModel):
         the config's ``spread_alpha``; ``unary_clip`` to the config's ``unary_clip``
         key, falling back to :data:`DEFAULT_UNARY_CLIP`.
         """
-        if not isinstance(config, dict):
-            config = load_model_config(config, dir=None)
+        config_ref = config if config is not None else DEFAULT_MODEL
+        resolved = cls._resolve_config(config)
         if smooth_alpha is None:
-            smooth_alpha = config.get("spread_alpha")
+            smooth_alpha = resolved.get("spread_alpha")
         if unary_clip is None:
-            unary_clip = config.get("unary_clip", DEFAULT_UNARY_CLIP)
-        return cls(
-            _load_xgboost_classifier(config["model_file"]),
-            config["feature_columns"],
-            downstream_hops=config.get("downstream_hops", 0),
-            upstream_hops=config.get("upstream_hops", 0),
-            bidirectional_hops=config.get("bidirectional_hops", 0),
+            unary_clip = resolved.get("unary_clip", DEFAULT_UNARY_CLIP)
+        obj = cls(
+            _load_xgboost_classifier(resolved["model_file"]),
+            resolved["feature_columns"],
+            downstream_hops=resolved.get("downstream_hops", 0),
+            upstream_hops=resolved.get("upstream_hops", 0),
+            bidirectional_hops=resolved.get("bidirectional_hops", 0),
             smooth_alpha=smooth_alpha,
             unary_clip=unary_clip,
             feature_spec=feature_spec,
         )
+        obj._config_ref = config_ref
+        return obj
+
+    def to_dict(self, *, model_file: Optional[Union[str, pathlib.Path]] = None) -> dict:
+        """Plain-data representation, round-trippable via :meth:`from_dict`.
+
+        When built via :meth:`from_config`, the ``config`` it was given (a
+        bundled model name, config file path, or dict) is stored directly, so
+        reloading re-resolves the same estimator without touching it.
+
+        Otherwise (built directly from an ``estimator``), the estimator has no
+        known source file: pass ``model_file`` to save it there (requires an
+        estimator with a ``save_model(path)`` method, e.g. XGBoost) and a fresh
+        config dict pointing at it is built automatically. Without
+        ``model_file``, this raises -- there is nothing to persist besides the
+        estimator itself, and this is deliberately not a pickle.
+
+        Raises
+        ------
+        ValueError
+            If ``feature_spec`` is non-default (it may contain callables that
+            cannot be serialized) or the estimator's source can't be
+            determined.
+        """
+        if self._feature_spec is not None:
+            raise ValueError(
+                "This ProbaVertexModel has a custom feature_spec, which may "
+                "contain callables and cannot be serialized. Reattach it "
+                "explicitly when reloading: "
+                "ProbaVertexModel.from_dict(d, feature_spec=...)."
+            )
+        config_ref = self._config_ref
+        if config_ref is None:
+            if model_file is None:
+                raise ValueError(
+                    "This ProbaVertexModel was not built via from_config(...), "
+                    "so its estimator has no known source file. Pass "
+                    "model_file=<path> to save the fitted estimator there "
+                    "(requires an estimator with a save_model(path) method, "
+                    "e.g. XGBoost), or save/load the estimator yourself and "
+                    "build a config dict for from_dict()."
+                )
+            if not hasattr(self._estimator, "save_model"):
+                raise TypeError(
+                    f"estimator of type {type(self._estimator).__name__} has no "
+                    "save_model(path) method; save it yourself and pass a "
+                    "config dict to from_dict() instead."
+                )
+            self._estimator.save_model(model_file)
+            config_ref = {
+                "model_file": str(model_file),
+                "feature_columns": self._feature_columns,
+                "downstream_hops": self._downstream_hops,
+                "upstream_hops": self._upstream_hops,
+                "bidirectional_hops": self._bidirectional_hops,
+            }
+        elif isinstance(config_ref, dict):
+            config_ref = {
+                k: (str(v) if isinstance(v, pathlib.Path) else v)
+                for k, v in config_ref.items()
+            }
+        return {
+            "type": "ProbaVertexModel",
+            "version": self._SCHEMA_VERSION,
+            "ossify_version": _ossify_version(),
+            "config": config_ref,
+            "smooth_alpha": self._smooth_alpha,
+            "unary_clip": self._unary_clip,
+        }
+
+    @classmethod
+    def from_dict(
+        cls,
+        d: dict,
+        *,
+        feature_spec: Optional[List[FeatureDef]] = None,
+    ) -> "ProbaVertexModel":
+        """Reconstruct a :class:`ProbaVertexModel` from :meth:`to_dict` output.
+
+        Unlike :meth:`from_config`, ``smooth_alpha``/``unary_clip`` are taken
+        as-is from ``d`` (not re-defaulted from the config file), so a
+        deliberate ``smooth_alpha: null`` (no smoothing) round-trips correctly.
+        """
+        version = d.get("version", 1)
+        if version > cls._SCHEMA_VERSION:
+            raise ValueError(
+                f"ProbaVertexModel dict has schema version {version}, newer "
+                f"than the {cls._SCHEMA_VERSION} this ossify release supports; "
+                "upgrade ossify to load it."
+            )
+        resolved = cls._resolve_config(d["config"])
+        obj = cls(
+            _load_xgboost_classifier(resolved["model_file"]),
+            resolved["feature_columns"],
+            downstream_hops=resolved.get("downstream_hops", 0),
+            upstream_hops=resolved.get("upstream_hops", 0),
+            bidirectional_hops=resolved.get("bidirectional_hops", 0),
+            smooth_alpha=d.get("smooth_alpha"),
+            unary_clip=d.get("unary_clip", DEFAULT_UNARY_CLIP),
+            feature_spec=feature_spec,
+        )
+        obj._config_ref = d["config"]
+        return obj
 
     @property
     def estimator(self):
@@ -1059,6 +1179,11 @@ class ProbaVertexModel(SkeletonVertexModel):
 
 # --- Structured compartment labeler -----------------------------------------
 
+#: Registry of encoder types :class:`StructuredLabeler` can (de)serialize.
+#: Extend when a new :class:`SkeletonVertexModel` subclass grows a
+#: to_dict/from_dict pair.
+_ENCODER_TYPES = {"ProbaVertexModel": ProbaVertexModel}
+
 
 class StructuredLabeler:
     """Compose an encoder + transition priors into a tree-decoded labeler.
@@ -1094,6 +1219,10 @@ class StructuredLabeler:
         Absorb decoded compartments whose cable length (``half_edge_length``) is
         this or less.
     """
+
+    #: Bumped when :meth:`to_dict`'s shape changes incompatibly. Independent of
+    #: the ossify package version.
+    _SCHEMA_VERSION = 1
 
     def __init__(
         self,
@@ -1198,3 +1327,96 @@ class StructuredLabeler:
         """
         labels, edge_cost = self._decode(cell)
         return self._as_labels(labels, return_labels_as), edge_cost
+
+    # --- Serialization -------------------------------------------------------
+
+    def to_dict(self, *, model_file: Optional[Union[str, pathlib.Path]] = None) -> dict:
+        """Plain-data representation, round-trippable via :meth:`from_dict`.
+
+        Composes :meth:`TransitionSchema.to_dict` and the encoder's own
+        ``to_dict`` -- so a labeler built from a bundled model config (the
+        common case) serializes down to a small JSON-safe dict with no model
+        weights inlined. ``model_file`` is forwarded to the encoder's
+        ``to_dict`` for the case where its estimator has no known source file
+        (see :meth:`ProbaVertexModel.to_dict`). Includes a ``version`` (this
+        dict shape, bumped on breaking changes) and ``ossify_version`` (the
+        release that wrote it, for provenance/debugging).
+        """
+        encoder_type = type(self._encoder).__name__
+        if encoder_type not in _ENCODER_TYPES:
+            raise TypeError(
+                f"Serialization is not supported for encoder type "
+                f"{encoder_type!r}; supported types: {sorted(_ENCODER_TYPES)}."
+            )
+        return {
+            "type": "StructuredLabeler",
+            "version": self._SCHEMA_VERSION,
+            "ossify_version": _ossify_version(),
+            "schema": self._schema.to_dict(),
+            "encoder": self._encoder.to_dict(model_file=model_file),
+            "absorb_min_size": self._absorb_min_size,
+            "absorb_min_weight": self._absorb_min_weight,
+        }
+
+    @classmethod
+    def from_dict(
+        cls,
+        d: dict,
+        *,
+        feature_spec: Optional[List[FeatureDef]] = None,
+    ) -> "StructuredLabeler":
+        """Reconstruct a :class:`StructuredLabeler` from :meth:`to_dict` output.
+
+        ``feature_spec`` is forwarded to the encoder's ``from_dict`` and only
+        needed when the original encoder was built with a non-default
+        ``feature_spec`` (see :meth:`ProbaVertexModel.to_dict`).
+        """
+        version = d.get("version", 1)
+        if version > cls._SCHEMA_VERSION:
+            raise ValueError(
+                f"StructuredLabeler dict has schema version {version}, newer "
+                f"than the {cls._SCHEMA_VERSION} this ossify release supports; "
+                "upgrade ossify to load it."
+            )
+        encoder_dict = d["encoder"]
+        encoder_type = encoder_dict.get("type")
+        encoder_cls = _ENCODER_TYPES.get(encoder_type)
+        if encoder_cls is None:
+            raise ValueError(
+                f"Unknown or unsupported encoder type: {encoder_type!r}; "
+                f"supported types: {sorted(_ENCODER_TYPES)}."
+            )
+        encoder = encoder_cls.from_dict(encoder_dict, feature_spec=feature_spec)
+        schema = TransitionSchema.from_dict(d["schema"])
+        return cls(
+            encoder,
+            schema,
+            absorb_min_size=d.get("absorb_min_size"),
+            absorb_min_weight=d.get("absorb_min_weight"),
+        )
+
+    def save_config(
+        self,
+        filename: Union[str, pathlib.Path],
+        *,
+        model_file: Optional[Union[str, pathlib.Path]] = None,
+    ) -> None:
+        """Write :meth:`to_dict` to ``filename`` as JSON."""
+        with open(filename, "wb") as f:
+            f.write(
+                orjson.dumps(
+                    self.to_dict(model_file=model_file), option=orjson.OPT_INDENT_2
+                )
+            )
+
+    @classmethod
+    def load_config(
+        cls,
+        filename: Union[str, pathlib.Path],
+        *,
+        feature_spec: Optional[List[FeatureDef]] = None,
+    ) -> "StructuredLabeler":
+        """Load a :class:`StructuredLabeler` from a JSON file written by :meth:`save_config`."""
+        with open(filename, "rb") as f:
+            d = orjson.loads(f.read())
+        return cls.from_dict(d, feature_spec=feature_spec)

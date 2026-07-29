@@ -220,6 +220,62 @@ class TestDecodeTail:
             m._as_labels(idx, "nonsense")
 
 
+class TestSerialization:
+    def test_encoder_without_config_ref_raises(self):
+        # Built directly from an estimator (not via from_config) -> no known
+        # source file to point a reloaded config at.
+        labeler = StructuredLabeler(
+            _encoder(_FakeProba([0, 1])), _schema(revert=10.0), absorb_min_size=5
+        )
+        with pytest.raises(ValueError, match="not built via from_config"):
+            labeler.to_dict()
+
+    def test_estimator_without_save_model_raises(self):
+        labeler = StructuredLabeler(_encoder(_FakeProba([0, 1])), _schema())
+        with pytest.raises(TypeError, match="save_model"):
+            labeler.to_dict(model_file="whatever.json")
+
+    def test_custom_feature_spec_blocks_serialization(self):
+        from ossify.compartments import MappedFeature
+
+        enc = _encoder(_FakeProba([0, 1]), feature_spec=[MappedFeature("a", "b")])
+        labeler = StructuredLabeler(enc, _schema())
+        with pytest.raises(ValueError, match="feature_spec"):
+            labeler.to_dict()
+
+    def test_unsupported_encoder_type_raises(self):
+        class _OtherEncoder:
+            classes_ = [0, 1]
+
+            def predict_unaries(self, cell):
+                raise NotImplementedError
+
+        labeler = StructuredLabeler(_OtherEncoder(), _schema())
+        with pytest.raises(TypeError, match="not supported"):
+            labeler.to_dict()
+
+    def test_from_dict_rejects_unknown_encoder_type(self):
+        d = {
+            "schema": _schema().to_dict(),
+            "encoder": {"type": "SomethingElse"},
+            "absorb_min_size": None,
+            "absorb_min_weight": None,
+        }
+        with pytest.raises(ValueError, match="Unknown or unsupported encoder type"):
+            StructuredLabeler.from_dict(d)
+
+    def test_from_dict_rejects_newer_schema_version(self):
+        d = {
+            "version": StructuredLabeler._SCHEMA_VERSION + 1,
+            "schema": _schema().to_dict(),
+            "encoder": {"type": "SomethingElse"},
+            "absorb_min_size": None,
+            "absorb_min_weight": None,
+        }
+        with pytest.raises(ValueError, match="schema version"):
+            StructuredLabeler.from_dict(d)
+
+
 # --- End-to-end on the real sample, incl. the "any sklearn model" path -------
 
 pytestmark_data = pytest.mark.skipif(
@@ -247,6 +303,37 @@ def test_from_config_end_to_end():
     lab_idx, edge_cost = m.predict_with_violations(cell, return_labels_as="index")
     assert lab_idx.shape == (n,) and edge_cost.shape == (n,)
     assert lab_idx.dtype.kind in "iu"
+
+
+@pytestmark_data
+def test_save_config_load_config_roundtrip(tmp_path):
+    pytest.importorskip("xgboost")
+    pytest.importorskip("h5py")
+    import ossify
+
+    cell, _ = ossify.import_legacy_meshwork(str(MESHWORK), as_pcg_skel=True)
+    schema = _schema(revert=10.0)
+    labeler = StructuredLabeler(
+        ProbaVertexModel.from_config(MODEL), schema, absorb_min_size=3
+    )
+
+    import ossify as ossify_pkg
+
+    d = labeler.to_dict()
+    assert d["type"] == "StructuredLabeler"
+    assert d["version"] == StructuredLabeler._SCHEMA_VERSION
+    assert d["ossify_version"] == ossify_pkg.__version__
+    assert d["encoder"]["type"] == "ProbaVertexModel"
+    assert d["encoder"]["version"] == ProbaVertexModel._SCHEMA_VERSION
+    assert d["encoder"]["config"] == MODEL
+    assert d["absorb_min_size"] == 3
+    assert d["absorb_min_weight"] is None
+
+    path = tmp_path / "labeler.json"
+    labeler.save_config(path)
+    reloaded = StructuredLabeler.load_config(path)
+
+    np.testing.assert_array_equal(reloaded.predict(cell), labeler.predict(cell))
 
 
 @pytestmark_data

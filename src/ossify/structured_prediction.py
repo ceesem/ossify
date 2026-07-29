@@ -26,6 +26,13 @@ __all__ = [
 ]
 
 
+def _ossify_version() -> str:
+    """The installed ossify release, for provenance in serialized dicts."""
+    from . import __version__
+
+    return __version__
+
+
 class TransitionSchema:
     """Declarative label set with soft parent->child transition costs.
 
@@ -50,6 +57,10 @@ class TransitionSchema:
         parent's label. Acts as a total-variation regularizer on the number of
         label changes over the tree.
     """
+
+    #: Bumped when :meth:`to_dict`'s shape changes incompatibly. Independent of
+    #: the ossify package version.
+    _SCHEMA_VERSION = 1
 
     def __init__(
         self,
@@ -104,6 +115,42 @@ class TransitionSchema:
         for c in self.root_classes:
             mask[self._index[c]] = True
         return mask
+
+    def to_dict(self) -> dict:
+        """Plain-data representation, round-trippable via :meth:`from_dict`.
+
+        ``transitions`` is written as a list of ``[parent, child, cost]``
+        triples rather than a ``{(parent, child): cost}`` dict, since JSON/YAML
+        cannot use tuples as object keys. Includes a ``version`` (this dict
+        shape, bumped on breaking changes) and ``ossify_version`` (the release
+        that wrote it, for provenance/debugging) alongside the parameters.
+        """
+        return {
+            "type": "TransitionSchema",
+            "version": self._SCHEMA_VERSION,
+            "ossify_version": _ossify_version(),
+            "classes": list(self.classes),
+            "transitions": [[a, b, cost] for (a, b), cost in self.transitions.items()],
+            "root_classes": list(self.root_classes),
+            "default_cost": self.default_cost,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TransitionSchema":
+        """Reconstruct a :class:`TransitionSchema` from :meth:`to_dict` output."""
+        version = d.get("version", 1)
+        if version > cls._SCHEMA_VERSION:
+            raise ValueError(
+                f"TransitionSchema dict has schema version {version}, newer than "
+                f"the {cls._SCHEMA_VERSION} this ossify release supports; "
+                "upgrade ossify to load it."
+            )
+        return cls(
+            classes=d["classes"],
+            transitions={(a, b): cost for a, b, cost in d.get("transitions", [])},
+            root_classes=d.get("root_classes"),
+            default_cost=d.get("default_cost", 0.0),
+        )
 
 
 def tree_map_decode(
