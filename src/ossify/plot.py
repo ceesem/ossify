@@ -968,7 +968,7 @@ def plot_points(
     # which dominates small synapse markers).
     if "linewidths" not in scatter_kws:
         scatter_kws["linewidths"] = 0
-    if isinstance(palette, str):
+    if isinstance(palette, str) and colors is not None and not isinstance(colors, str):
         scatter_kws["cmap"] = palette
         if color_norm is not None:
             scatter_kws["vmin"], scatter_kws["vmax"] = color_norm

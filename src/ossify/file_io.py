@@ -1,6 +1,7 @@
 import io
 import os
 import tarfile
+import warnings
 from enum import IntEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, Optional, Union
@@ -464,7 +465,16 @@ def load_dataframe(tinfo, tf) -> pd.DataFrame:
         Loaded DataFrame
     """
     df_buf = pa.BufferReader(tf.extractfile(tinfo).read())
-    return pd.read_feather(df_buf)
+    with warnings.catch_warnings():
+        # pandas' read_feather wraps pyarrow.feather.read_feather, which pyarrow
+        # >=24 deprecated in favor of pyarrow.ipc.open_file; this is purely an
+        # upstream implementation detail pandas hasn't addressed yet.
+        warnings.filterwarnings(
+            "ignore",
+            message=r"pyarrow\.feather\.read_feather is deprecated",
+            category=FutureWarning,
+        )
+        return pd.read_feather(df_buf)
 
 
 def load_array(tinfo, tf) -> np.ndarray:

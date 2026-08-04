@@ -1,3 +1,5 @@
+import warnings
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -368,6 +370,49 @@ class TestPointPlotting:
             assert len(ax.collections) > 0
             plt.close(fig)
 
+    def test_plot_points_literal_color_no_warning(self):
+        """A literal color string must not trigger matplotlib's cmap-ignored warning."""
+        fig, ax = plt.subplots(1, 1, figsize=(6, 6))
+        coords = np.array([[0.0, 0.0, 0.0]])
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            plot.plot_points(coords, colors="k", sizes=[10], ax=ax)
+
+        assert len(caught) == 0
+        plt.close(fig)
+
+    def test_plot_points_no_color_no_warning(self):
+        """No colors at all must not trigger matplotlib's cmap-ignored warning."""
+        fig, ax = plt.subplots(1, 1, figsize=(6, 6))
+        coords = np.array([[0.0, 0.0, 0.0]])
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            plot.plot_points(coords, sizes=[10], ax=ax)
+
+        assert len(caught) == 0
+        plt.close(fig)
+
+    def test_plot_points_array_colors_still_colormap(self):
+        """Numeric colors array should still apply the palette and color_norm."""
+        fig, ax = plt.subplots(1, 1, figsize=(6, 6))
+        coords = np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]])
+
+        plot.plot_points(
+            coords,
+            colors=np.array([0.1, 0.9]),
+            palette="viridis",
+            color_norm=(0.0, 1.0),
+            sizes=[10, 10],
+            ax=ax,
+        )
+
+        coll = ax.collections[-1]
+        assert coll.cmap.name == "viridis"
+        assert coll.get_clim() == (0.0, 1.0)
+        plt.close(fig)
+
 
 class TestHighLevelPlotting:
     """Tests for high-level plotting functions."""
@@ -655,6 +700,24 @@ class TestRealDataPlotting:
         except Exception as e:
             # Let mesh plotting errors surface
             pytest.fail(f"Mesh plotting failed: {e}")
+
+    def test_root_marker_literal_color_no_warning(self, nrn):
+        """root_marker with a literal root_color must not warn about an unusable cmap."""
+        if nrn is None or nrn.skeleton is None:
+            pytest.skip("Real neuronal data with a skeleton not available")
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            ax = plot.plot_morphology_2d(
+                nrn.skeleton,
+                projection="xy",
+                root_marker=True,
+                root_color="k",
+            )
+
+        assert len(caught) == 0
+        assert ax is not None
+        plt.close(ax.figure)
 
 
 class TestErrorHandling:
