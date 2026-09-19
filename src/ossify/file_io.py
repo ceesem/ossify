@@ -1077,13 +1077,15 @@ def import_legacy_meshwork(
 
 def _process_pcg_skel_import(cell: Cell) -> Cell:
     if "compartment" in cell.annotations:
+        # ``map_annotations_to_feature`` already returns a frame whose column is
+        # named "compartment", so passing ``name`` here is redundant -- and
+        # ``add_feature`` warns that it ignores ``name`` for a DataFrame.
         cell.skeleton.add_feature(
             cell.skeleton.map_annotations_to_feature(
                 "compartment",
                 distance_threshold=0,
                 agg={"compartment": ("compartment", "mean")},
-            ),
-            "compartment",
+            )
         )
     if "segment_properties" in cell.annotations:
         features = cell.skeleton.map_annotations_to_feature(

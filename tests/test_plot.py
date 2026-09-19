@@ -554,12 +554,71 @@ class TestHighLevelPlotting:
             root=vertex_indices[0],
         )
 
-        axes_dict = plot.plot_cell_multiview(cell)
+        # This fixture is a straight line along x, so the y and z extents are
+        # exactly zero and the panels get padded.
+        with pytest.warns(UserWarning, match="degenerate y, z extent"):
+            axes_dict = plot.plot_cell_multiview(cell)
         assert axes_dict is not None
         assert len(axes_dict) == 3  # Should have 3 projection views
+        # Every panel must have a non-zero drawing area: before the degenerate
+        # axes were padded, all three collapsed to 0x0 and nothing was drawn.
+        for ax in axes_dict.values():
+            box = ax.get_position()
+            assert box.width > 0 and box.height > 0
         # Close figure from one of the axes
         first_ax = list(axes_dict.values())[0]
         plt.close(first_ax.figure)
+
+    def test_plot_cell_multiview_flat_cell_renders_content(
+        self, simple_skeleton_data, spatial_columns
+    ):
+        """Regression: a cell flat in y and z produced three 0x0 panels and an
+        entirely blank figure. Assert actual ink reaches the canvas."""
+        import io
+
+        vertices, _, vertex_indices = simple_skeleton_data
+        vertex_df = pd.DataFrame(
+            vertices, columns=spatial_columns, index=vertex_indices
+        )
+        edges_with_indices = np.array(
+            [[vertex_indices[i + 1], vertex_indices[i]] for i in range(4)]
+        )
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=vertex_df,
+            edges=edges_with_indices,
+            spatial_columns=spatial_columns,
+            root=vertex_indices[0],
+        )
+        with pytest.warns(UserWarning, match="degenerate"):
+            axes_dict = plot.plot_cell_multiview(cell)
+        fig = list(axes_dict.values())[0].figure
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=100, facecolor="white")
+        buf.seek(0)
+        img = plt.imread(buf)
+        assert (img[..., :3].min(axis=-1) < 0.9).sum() > 0
+        plt.close(fig)
+
+    def test_plot_cell_multiview_three_dimensional_cell_is_silent(
+        self, spatial_columns
+    ):
+        """A cell with spread in every axis needs no padding and must not warn."""
+        verts = np.array([[0.0, 0, 0], [1, 2, 1], [2, 1, 3], [3, 4, 2], [4, 3, 5]])
+        idx = np.array([100, 101, 102, 103, 104])
+        vertex_df = pd.DataFrame(verts, columns=spatial_columns, index=idx)
+        edges = np.array([[idx[i + 1], idx[i]] for i in range(4)])
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=vertex_df,
+            edges=edges,
+            spatial_columns=spatial_columns,
+            root=idx[0],
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            axes_dict = plot.plot_cell_multiview(cell)
+        plt.close(list(axes_dict.values())[0].figure)
 
 
 class TestFigureUtilities:
@@ -781,16 +840,22 @@ class TestErrorHandling:
             root=vertex_indices[0],
         )
 
-        # Should not raise errors even when synapses are requested but don't exist
-        ax = plot.plot_cell_2d(cell, projection="xy", synapses="both")
+        # "both" degrades gracefully and stays silent: the user did not ask for
+        # a specific layer, so a missing one is not worth a warning.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            ax = plot.plot_cell_2d(cell, projection="xy", synapses="both")
         assert ax is not None
         plt.close(ax.figure)
 
-        ax = plot.plot_cell_2d(cell, projection="xy", synapses="pre")
+        # Asking for a specific layer that is absent does warn.
+        with pytest.warns(UserWarning, match="synapses='pre' requested"):
+            ax = plot.plot_cell_2d(cell, projection="xy", synapses="pre")
         assert ax is not None
         plt.close(ax.figure)
 
-        ax = plot.plot_cell_2d(cell, projection="xy", synapses="post")
+        with pytest.warns(UserWarning, match="synapses='post' requested"):
+            ax = plot.plot_cell_2d(cell, projection="xy", synapses="post")
         assert ax is not None
         plt.close(ax.figure)
 
@@ -1338,10 +1403,13 @@ class TestPlotLineup:
         plt.close("all")
 
     def test_creates_figure_with_units_per_inch(self, two_cells):
-        ax = plot.plot_lineup(two_cells, units_per_inch=1000)
+        # These cells are tiny relative to units_per_inch=1000, so the figure
+        # would be sub-visible; single_panel_figure clamps it and says so.
+        with pytest.warns(UserWarning, match="degenerate bounds"):
+            ax = plot.plot_lineup(two_cells, units_per_inch=1000)
         fig = ax.get_figure()
         w, h = fig.get_size_inches()
-        assert w > 0 and h > 0
+        assert w >= 0.5 and h >= 0.5
         plt.close("all")
 
     # --- horizontal layout ---

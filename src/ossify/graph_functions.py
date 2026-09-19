@@ -13,7 +13,14 @@ from .utils import build_csgraph, single_path_length
 class DAGCache:
     """
     Container for cached DAG properties to optimize repeated computations.
-    Cache values are always in positional indices.
+
+    Cache values are in positional indices of the layer that owns the cache,
+    **except** the two ``base_``-prefixed fields, which are in positional
+    indices of the original unmasked skeleton (``base_csgraph`` /
+    ``base_csgraph_binary``). On an unmasked layer the two spaces coincide; on
+    a masked one they do not, so never index a ``base_`` array with a
+    layer-positional index. Use
+    ``SkeletonLayer._vertices_to_base_positional`` to convert.
 
     Attributes
     ----------
@@ -37,9 +44,11 @@ class DAGCache:
     branch_points: Optional[np.ndarray] = None
     end_points: Optional[np.ndarray] = None
     segments: Optional[List[List[int]]] = None
-    distance_to_root: Optional[np.ndarray] = None
-    hops_to_root: Optional[np.ndarray] = None
+    segment_map: Optional[np.ndarray] = None
+    base_distance_to_root: Optional[np.ndarray] = None
+    base_hops_to_root: Optional[np.ndarray] = None
     cover_paths: Optional[List[List[int]]] = None
+    path_lengths: Optional[Dict[Tuple[int, int], float]] = None
     root: Optional[int] = None
 
     def __post_init__(self):
@@ -55,10 +64,12 @@ class DAGCache:
         self.branch_points = None
         self.end_points = None
         self.segments = None
+        self.segment_map = None
         self.root = None
-        self.distance_to_root = None
-        self.hops_to_root = None
+        self.base_distance_to_root = None
+        self.base_hops_to_root = None
         self.cover_paths = None
+        self.path_lengths = None
 
 
 def build_parent_node_array(vertices, edges) -> np.ndarray:

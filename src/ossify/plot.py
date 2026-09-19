@@ -1514,6 +1514,53 @@ def plot_cell_multiview(
     return axes
 
 
+_MIN_PANEL_INCHES = 0.5
+
+
+def _pad_degenerate_axes(
+    bounds_min: np.ndarray,
+    bounds_max: np.ndarray,
+    fraction: float = 0.02,
+) -> Tuple[np.ndarray, np.ndarray, List[int]]:
+    """Expand any zero-extent axis so a flat cell is still renderable.
+
+    A cell that is perfectly flat along one axis -- a planar reconstruction, a
+    2D-derived skeleton stored with z=0, or a synthetic test skeleton -- has a
+    zero extent there. Panel sizes are derived from the extents, so a zero
+    extent yields a zero-size panel and an empty figure, and matplotlib warns
+    when asked to set identical axis limits. Padding the degenerate axis to a
+    small fraction of the largest extent keeps the panel a thin strip, which is
+    an honest depiction of flat data.
+
+    Parameters
+    ----------
+    bounds_min, bounds_max : np.ndarray
+        Per-axis data bounds.
+    fraction : float
+        Width to give a degenerate axis, as a fraction of the largest
+        non-degenerate extent. If every axis is degenerate (a single point),
+        one unit is used.
+
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray, List[int]]
+        Padded ``(bounds_min, bounds_max)`` and the indices of the axes padded.
+    """
+    bounds_min = np.array(bounds_min, dtype=float)
+    bounds_max = np.array(bounds_max, dtype=float)
+    extents = bounds_max - bounds_min
+    degenerate = np.flatnonzero(extents <= 0)
+    if len(degenerate) == 0:
+        return bounds_min, bounds_max, []
+    largest = float(extents.max())
+    pad = fraction * largest if largest > 0 else 1.0
+    for i in degenerate:
+        center = (bounds_min[i] + bounds_max[i]) / 2
+        bounds_min[i] = center - pad / 2
+        bounds_max[i] = center + pad / 2
+    return bounds_min, bounds_max, [int(i) for i in degenerate]
+
+
 def single_panel_figure(
     data_bounds_min: np.ndarray,
     data_bounds_max: np.ndarray,
@@ -1548,8 +1595,12 @@ def single_panel_figure(
     >>> fig, ax = create_single_panel_figure(bounds_min, bounds_max, 10)
     >>> # Creates 10" x 5" figure with 10 units per inch
     """
-    data_bounds_min = np.asarray(data_bounds_min)
-    data_bounds_max = np.asarray(data_bounds_max)
+    # Pad a flat axis before deriving sizes, so the panel is not zero-sized and
+    # matplotlib is never asked for identical limits. The clamp below already
+    # reports degenerate input, so this does not warn separately.
+    data_bounds_min, data_bounds_max, _ = _pad_degenerate_axes(
+        data_bounds_min, data_bounds_max
+    )
 
     # Calculate data extents
     data_width = data_bounds_max[0] - data_bounds_min[0]
@@ -1562,7 +1613,7 @@ def single_panel_figure(
     # Clamp degenerate dimensions so the figure is still renderable and
     # compatible with peers in a lineup or panel. We warn — the data is
     # degenerate, and the caller likely wants to know.
-    _MIN_INCHES = 0.5
+    _MIN_INCHES = _MIN_PANEL_INCHES
     if fig_width < _MIN_INCHES or fig_height < _MIN_INCHES:
         warnings.warn(
             f"single_panel_figure received degenerate bounds "
@@ -1641,18 +1692,28 @@ def multi_panel_figure(
     >>> fig, axes_dict = create_multi_panel_figure(bounds_min, bounds_max, 10, "side_by_side")
     >>> xy_ax, zy_ax = axes_dict["xy"], axes_dict["zy"]
     """
-    data_bounds_min = np.asarray(data_bounds_min)
-    data_bounds_max = np.asarray(data_bounds_max)
+    data_bounds_min, data_bounds_max, degenerate = _pad_degenerate_axes(
+        data_bounds_min, data_bounds_max
+    )
+    if degenerate:
+        axis_names = ", ".join("xyz"[i] for i in degenerate)
+        warnings.warn(
+            f"multi_panel_figure received a degenerate {axis_names} extent "
+            f"(0 units); padding it so the panel remains visible. The cell is "
+            f"flat along {'these axes' if len(degenerate) > 1 else 'this axis'}.",
+            stacklevel=2,
+        )
 
     # Calculate data extents for each dimension
     x_extent = data_bounds_max[0] - data_bounds_min[0]
     y_extent = data_bounds_max[1] - data_bounds_min[1]
     z_extent = data_bounds_max[2] - data_bounds_min[2]
 
-    # Convert to sizes in inches
-    x_inches = x_extent / units_per_inch
-    y_inches = y_extent / units_per_inch
-    z_inches = z_extent / units_per_inch
+    # Convert to sizes in inches. Clamp as single_panel_figure does, so a panel
+    # of a thin or flat cell is still large enough to see.
+    x_inches = max(x_extent / units_per_inch, _MIN_PANEL_INCHES)
+    y_inches = max(y_extent / units_per_inch, _MIN_PANEL_INCHES)
+    z_inches = max(z_extent / units_per_inch, _MIN_PANEL_INCHES)
 
     if layout == "side_by_side":
         # xy | zy layout
