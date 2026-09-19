@@ -57,11 +57,14 @@ print(f"Selected positional indices: {positional_indices}")
 ### Layer-Level Masking
 
 ```python
-# Apply boolean mask to create filtered skeleton
-filtered_skeleton = skeleton.apply_mask(
+# Apply boolean mask. Because this skeleton belongs to a Cell, the mask
+# propagates to every linked layer and a new *Cell* comes back -- not a
+# bare layer. Reach through it to get the masked skeleton.
+filtered_cell = skeleton.apply_mask(
     mask=quality_mask,
     as_positional=True    # Mask is boolean array (positional)
 )
+filtered_skeleton = filtered_cell.skeleton
 
 print(f"Filtered skeleton vertices: {filtered_skeleton.n_vertices}")
 print(f"Filtered skeleton edges: {len(filtered_skeleton.edges)}")
@@ -70,10 +73,17 @@ print(f"Filtered skeleton edges: {len(filtered_skeleton.edges)}")
 subset_skeleton = skeleton.apply_mask(
     mask=vertex_indices,
     as_positional=False   # Mask contains vertex indices
-)
+).skeleton
 
 print(f"Subset skeleton vertices: {subset_skeleton.n_vertices}")
 ```
+
+!!! important "Masking a linked layer returns a `Cell`"
+
+    `layer.apply_mask(...)` returns a new `Cell` whenever that layer belongs to
+    one, because the mask has to propagate to every linked layer. Use
+    `.skeleton` / `.mesh` / `.annotations` on the result to get back to a layer,
+    or pass `self_only=True` to mask just that layer and get a layer back.
 
 ### Preserving Connectivity
 
@@ -92,15 +102,23 @@ print(f"Filtered edges: {filtered_edges}")
 ### Mask Effects on Different Layer Types
 
 ```python
-# Add a mesh to demonstrate masking across layer types
-mesh_vertices = np.random.randn(10, 3)
-mesh_faces = np.array([[0,1,2], [1,2,3], [4,5,6], [7,8,9]])
+# Add a mesh to demonstrate masking across layer types. Two mesh vertices sit
+# near each skeleton vertex, and `linkage` records that correspondence -- a
+# layer added without a linkage cannot take part in mask propagation.
+mesh_vertices = np.repeat(vertices, 2, axis=0).astype(float)
+mesh_vertices[:, 1] += 0.1
+mesh_faces = np.array([[0,1,2], [2,3,4], [4,5,6], [6,7,8]])
 
-cell.add_mesh(vertices=mesh_vertices, faces=mesh_faces)
+cell.add_mesh(
+    vertices=mesh_vertices,
+    faces=mesh_faces,
+    linkage=ossify.Link(mapping=np.repeat(np.arange(5), 2), target="skeleton"),
+)
 
-# Mask mesh vertices
+# Mask mesh vertices. `self_only=True` masks just this layer and returns a
+# layer, rather than propagating across the cell.
 mesh_mask = np.array([True, True, False, True, False, True, True, False, True, False])
-filtered_mesh = cell.mesh.apply_mask(mesh_mask, as_positional=True)
+filtered_mesh = cell.mesh.apply_mask(mesh_mask, as_positional=True, self_only=True)
 
 print(f"Original mesh: {cell.mesh.n_vertices} vertices, {len(cell.mesh.faces)} faces")
 print(f"Filtered mesh: {filtered_mesh.n_vertices} vertices, {len(filtered_mesh.faces)} faces")
@@ -138,7 +156,8 @@ annotation_points = np.array([[0.5, 0.1, 0.0], [2.5, 0.1, 0.0], [4.1, 0.1, 0.0]]
 cell.add_point_annotations(
     name="markers",
     vertices=annotation_points,
-    linkage=ossify.Link(target="skeleton", distance_threshold=0.5)
+    # Link each marker to the skeleton vertex it belongs to.
+    linkage=ossify.Link(mapping=np.array([0, 2, 4]), target="skeleton"),
 )
 
 # Mask propagates through linkages
@@ -155,11 +174,12 @@ print(f"Filtered annotations: {len(filtered_cell_with_annos.annotations.markers.
 ### Layer Context Managers
 
 ```python
-# Temporarily mask a layer for analysis
-with skeleton.mask_context(quality_mask) as temp_skeleton:
+# Temporarily mask a layer for analysis. Like apply_mask, this yields a Cell
+# when the layer is part of one, so reach through it with .skeleton.
+with skeleton.mask_context(quality_mask) as temp_cell:
     # Work with high-quality vertices only
-    cable_length = temp_skeleton.cable_length()
-    branch_points = temp_skeleton.branch_points
+    cable_length = temp_cell.skeleton.cable_length()
+    branch_points = temp_cell.skeleton.branch_points
     
     print(f"High-quality cable length: {cable_length}")
     print(f"High-quality branch points: {branch_points}")
@@ -199,16 +219,17 @@ cell.describe()
 Here's a sophisticated example that combines masking with algorithmic analysis and visualization:
 
 ```python
-# Load example cell and add Strahler analysis
-cell = ossify.load_cell('https://github.com/ceesem/ossify/raw/refs/heads/main/864691135336055529.osy')
+# Load example cell and add Strahler analysis. This downloads a real
+# neuron, and uses its own name so it does not clobber the `cell` built above.
+example_cell = ossify.load_cell('https://github.com/ceesem/ossify/raw/refs/heads/main/864691135336055529.osy')
 
 from ossify.algorithms import strahler_number
-strahler_values = strahler_number(cell.skeleton)
-cell.skeleton.add_feature(strahler_values, 'strahler_number')
+strahler_values = strahler_number(example_cell.skeleton)
+example_cell.skeleton.add_feature(strahler_values, 'strahler_number')
 
 # Mask to axon compartment (compartment == 2) and visualize
-with cell.skeleton.mask_context(cell.skeleton.features['compartment'] == 2) as masked_cell:
-    fig = ossify.plot_cell_2d(
+with example_cell.skeleton.mask_context(example_cell.skeleton.features['compartment'] == 2) as masked_cell:
+    ax = ossify.plot.plot_cell_2d(
         masked_cell,
         color='strahler_number',    # Color by branching complexity
         palette='coolwarm',         # Blue to red colormap
@@ -228,7 +249,7 @@ with cell.skeleton.mask_context(cell.skeleton.features['compartment'] == 2) as m
     print(f"Axon Strahler range: {masked_cell.skeleton.get_feature('strahler_number').min()}-{masked_cell.skeleton.get_feature('strahler_number').max()}")
 
 # Original cell unchanged - can analyze other compartments
-with cell.skeleton.mask_context(cell.skeleton.features['compartment'] == 3) as dendrite_cell:
+with example_cell.skeleton.mask_context(example_cell.skeleton.features['compartment'] == 3) as dendrite_cell:
     print(f"Dendrite cable length: {dendrite_cell.skeleton.cable_length():.0f} nm")
 ```
 
@@ -270,7 +291,7 @@ y_coords = vertices[:, 1]
 region_mask = (x_coords > 1.0) & (x_coords < 3.0) & (y_coords > -0.5) & (y_coords < 0.5)
 region_filtered = skeleton.apply_mask(region_mask, as_positional=True)
 
-print(f"Vertices in region: {region_filtered.n_vertices}")
+print(f"Vertices in region: {region_filtered.skeleton.n_vertices}")
 ```
 
 ### Tree-Specific Masking (Skeletons)
@@ -282,18 +303,20 @@ if hasattr(skeleton, 'branch_points'):  # Skeleton-specific feature
     branch_point = skeleton.branch_points[0] if len(skeleton.branch_points) > 0 else skeleton.root
     
     # Get all downstream vertices
-    downstream_mask = skeleton.vertex_index.isin(
-        skeleton.downstream_vertices(branch_point, inclusive=True, as_positional=False)
+    # `vertex_index` is a numpy array, so use np.isin rather than Series.isin.
+    downstream_mask = np.isin(
+        skeleton.vertex_index,
+        skeleton.downstream_vertices(branch_point, inclusive=True, as_positional=False),
     )
-    
-    subtree = skeleton.apply_mask(downstream_mask, as_positional=False)
+
+    subtree = skeleton.apply_mask(downstream_mask, as_positional=False).skeleton
     print(f"Subtree vertices: {subtree.n_vertices}")
-    
+
     # Mask to specific paths
     if len(skeleton.cover_paths) > 0:
         first_path = skeleton.cover_paths[0]
-        path_mask = skeleton.vertex_index.isin(first_path)
-        path_skeleton = skeleton.apply_mask(path_mask, as_positional=False)
+        path_mask = np.isin(skeleton.vertex_index, first_path)
+        path_skeleton = skeleton.apply_mask(path_mask, as_positional=False).skeleton
         print(f"Single path vertices: {path_skeleton.n_vertices}")
 ```
 
@@ -317,18 +340,20 @@ completely_unmapped = skeleton.get_unmapped_vertices()  # Checks all other layer
 
 ```python
 # Remove unmapped vertices
-clean_skeleton = skeleton.mask_out_unmapped(target_layers="mesh")
+clean_skeleton = skeleton.mask_out_unmapped(target_layers="mesh").skeleton
 print(f"Cleaned skeleton: {clean_skeleton.n_vertices} vertices")
 
-# Clean entire cell (removes unmapped from all layers)
+# Clean entire cell (removes unmapped from all layers). Note the mask names the
+# vertices to *keep*, so invert the unmapped set rather than passing it directly.
+unmapped = skeleton.get_unmapped_vertices(target_layers="mesh")
 clean_cell = cell.apply_mask(
-    layer="skeleton", 
-    mask=skeleton.get_unmapped_vertices(target_layers="mesh"),
-    as_positional=False
+    layer="skeleton",
+    mask=np.setdiff1d(skeleton.vertex_index, unmapped),
+    as_positional=False,
 )
 
 # Alternative: use mask_out_unmapped at cell level
-fully_clean_skeleton = skeleton.mask_out_unmapped()  # Removes vertices unmapped to any layer
+fully_clean_skeleton = skeleton.mask_out_unmapped().skeleton  # unmapped to any layer
 ```
 
 ## Masking Validation
@@ -377,7 +402,8 @@ def filter_by_quality(layer, quality_feature="quality", threshold=0.8):
     """Filter layer to high-quality vertices."""
     quality_values = layer.get_feature(quality_feature)
     quality_mask = quality_values >= threshold
-    return layer.apply_mask(quality_mask, as_positional=True)
+    # self_only keeps the return a layer, matching this helper's contract.
+    return layer.apply_mask(quality_mask, as_positional=True, self_only=True)
 
 high_quality_skeleton = filter_by_quality(skeleton, threshold=0.8)
 ```
@@ -397,8 +423,8 @@ def filter_to_region(layer, x_range=None, y_range=None, z_range=None):
         mask &= (vertices[:, 1] >= y_range[0]) & (vertices[:, 1] <= y_range[1])
     if z_range:
         mask &= (vertices[:, 2] >= z_range[0]) & (vertices[:, 2] <= z_range[1])
-    
-    return layer.apply_mask(mask, as_positional=True)
+
+    return layer.apply_mask(mask, as_positional=True, self_only=True)
 
 # Filter to specific anatomical region
 region_skeleton = filter_to_region(skeleton, x_range=[1.0, 3.0], y_range=[-1.0, 1.0])
