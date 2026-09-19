@@ -61,6 +61,20 @@
   because an empty Python list is `float64`. Empty selections now return empty
   results.
 
+- **`plot_cell_multiview` produced a blank figure for a cell that is flat in
+  one axis.** Panel sizes are derived from the data extent, so a zero extent
+  (a planar reconstruction, or a skeleton stored with `z=0`) gave every panel a
+  size of 0×0 and nothing was drawn. A degenerate axis is now padded to a small
+  fraction of the largest extent and panel sizes are clamped to a minimum, as
+  `single_panel_figure` already did, with a warning naming the flat axes.
+  Because the panels keep an equal aspect ratio, a flat cell renders as a thin
+  strip rather than being silently stretched. Cells with spread in all three
+  axes are unaffected.
+
+- **`import_legacy_meshwork(..., as_pcg_skel=True)`** emitted a spurious
+  "`name` is ignored" warning: it passed a redundant column name alongside an
+  already-named DataFrame. Imported features are unchanged.
+
 ### Internal
 
 - `distance_to_root` and `hops_to_root` now share a single
