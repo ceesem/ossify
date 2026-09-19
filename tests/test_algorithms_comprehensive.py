@@ -247,6 +247,52 @@ class TestfeatureAxonFromSynapseFlow:
         # Results may be different due to multiple iterations
         assert len(is_axon_single) == len(is_axon)
 
+    @pytest.mark.parametrize("extend", [False, True])
+    def test_label_axon_non_positional_vertex_index(self, spatial_columns, extend):
+        """Regression: ``_label_axon_synapse_flow`` works entirely in positional
+        indices, but passed them to ``distance_to_root``/``segments`` as vertex
+        indices. The ``nrn`` fixture's skeleton happens to be indexed 0..n-1, so
+        the two spaces coincided there and the bug stayed hidden. With a real
+        (non-positional) vertex index this raised KeyError.
+        """
+        vid = np.array([100, 101, 102, 103, 104, 105])
+        df = pd.DataFrame(
+            np.c_[np.arange(6) * 10.0, np.zeros((6, 2))],
+            columns=spatial_columns,
+            index=vid,
+        )
+        edges = np.array([[101, 100], [102, 101], [103, 102], [104, 103], [105, 104]])
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=df, edges=edges, spatial_columns=spatial_columns, root=100
+        )
+        is_axon = algorithms.label_axon_from_synapse_flow(
+            cell.skeleton,
+            pre_syn=np.array([4, 5]),
+            post_syn=np.array([0, 1]),
+            extend_feature_to_segment=extend,
+            as_positional=True,
+        )
+        assert len(is_axon) == cell.skeleton.n_vertices
+        assert is_axon.dtype == bool
+
+    @pytest.mark.parametrize("extend", [False, True])
+    def test_label_axon_multiple_times_extends_to_segment(self, nrn, extend):
+        """Regression: ntimes > 1 runs ``_label_axon_synapse_flow`` inside a
+        ``mask_context``. With ``extend_feature_to_segment=True`` it indexed
+        masked arrays with base-space vertex ids and raised IndexError.
+        """
+        is_axon = algorithms.label_axon_from_synapse_flow(
+            nrn,
+            pre_syn="pre_syn",
+            post_syn="post_syn",
+            ntimes=2,
+            extend_feature_to_segment=extend,
+        )
+        assert len(is_axon) == nrn.skeleton.n_vertices
+        assert is_axon.dtype == bool
+        assert np.any(is_axon)
+
 
 class TestfeatureAxonFromSpectralSplit:
     """Tests for label_axon_from_spectral_split algorithm."""

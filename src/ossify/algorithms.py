@@ -547,11 +547,17 @@ def _label_axon_synapse_flow(
     """feature an axon compartment by synapse betweenness. All parameters are as positional indices."""
     syn_btw = synapse_betweenness(skeleton, pre_syn_inds, post_syn_inds)
     high_vinds = np.flatnonzero(syn_btw == max(syn_btw))
-    close_vind = high_vinds[np.argmin(skeleton.distance_to_root(high_vinds))]
+    # Everything here is positional, so every lookup must say so: on a masked
+    # skeleton (the ntimes > 1 path runs inside a mask_context) vertex indices
+    # and positional indices are different spaces.
+    close_vind = high_vinds[
+        np.argmin(skeleton.distance_to_root(high_vinds, as_positional=True))
+    ]
     if extend_feature_to_segment:
         relseg = skeleton.segment_map[close_vind]
-        min_ind = np.argmin(skeleton.distance_to_root(skeleton.segments[relseg]))
-        axon_split_ind = skeleton.segments[relseg][min_ind]
+        seg = skeleton.segments_positional[relseg]
+        min_ind = np.argmin(skeleton.distance_to_root(seg, as_positional=True))
+        axon_split_ind = seg[min_ind]
     else:
         axon_split_ind = close_vind
     downstream_inds = skeleton.downstream_vertices(

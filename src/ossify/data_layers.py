@@ -459,18 +459,26 @@ class PointMixin(ABC):
         as_positional : bool
             Whether input vertices are positional indices (True) or vertex indices (False).
         vertex_index : Optional[np.ndarray], optional
-            Custom vertex index array to use for mapping. If None, uses self.vertex_index.
+            The index space the result is expressed in: positions are returned
+            relative to this array. If None, uses self.vertex_index. Passing a
+            different array (e.g. ``base_vertex_index``) maps this layer's
+            vertices into that other space.
 
         Returns
         -------
         Tuple[np.ndarray, bool]
             Tuple of (positional_indices, is_positional_flag).
         """
-        if vertex_index is None:
-            vertex_index = self.vertex_index
         if vertices is None:
-            vertices = np.arange(len(self.vertex_index))
-            as_positional = True
+            if vertex_index is None:
+                vertices = np.arange(len(self.vertex_index))
+                as_positional = True
+            else:
+                # "All of my vertices", but expressed in the caller's target
+                # index space -- going via vertex ids is the only way to cross
+                # between spaces, since positions do not correspond.
+                vertices = self.vertex_index
+                as_positional = False
         else:
             vertices = np.asarray(vertices)
             if np.issubdtype(vertices.dtype, np.bool_):
@@ -480,11 +488,15 @@ class PointMixin(ABC):
                     )
                 vertices = np.flatnonzero(vertices)
                 as_positional = True
+            elif vertices.size == 0:
+                # An empty list arrives as float64, and fastremap passes the
+                # dtype straight through, leaving a result that is not a legal
+                # index array. Give it an integer dtype up front.
+                vertices = vertices.astype(np.intp)
+        if vertex_index is None:
+            vertex_index = self.vertex_index
         if not as_positional:
-            if vertex_index is None:
-                vertex_index_map = self.vertex_index_map
-            else:
-                vertex_index_map = {v: i for i, v in enumerate(vertex_index)}
+            vertex_index_map = {v: i for i, v in enumerate(vertex_index)}
             # fastremap.remap rejects 0-d arrays, so a scalar vertex would crash
             # here. Remap on a 1-d view and restore the caller's shape, keeping
             # scalar-in -> scalar-out (as the positional path already does).
@@ -2164,6 +2176,56 @@ class SkeletonLayer(GraphLayer):
         """
         return np.asarray(self._base_properties["base_parent_array"])
 
+    def _vertices_to_base_positional(
+        self, vertices: Optional[np.ndarray], as_positional: bool
+    ) -> np.ndarray:
+        """Map a vertex selection on this (possibly masked) layer to positional
+        indices into the **base**, unmasked arrays.
+
+        ``base_csgraph``/``base_csgraph_binary`` span the original unmasked
+        skeleton, so anything used to index their dijkstra results must be in
+        base positional space -- not this layer's. The two only coincide when
+        unmasked. Conversion always goes via vertex ids, the one index space
+        the masked layer and the base snapshot share.
+
+        Parameters
+        ----------
+        vertices : Optional[np.ndarray]
+            Vertex indices, positional indices, or a boolean mask over this
+            layer's vertices. If None, every vertex of *this* layer is used, in
+            this layer's positional order, so the result lines up 1:1 with
+            ``self.vertices``.
+        as_positional : bool
+            Whether ``vertices`` are positional indices into this layer. A
+            boolean mask is implicitly positional whatever this says.
+
+        Returns
+        -------
+        np.ndarray
+            Positional indices into the base (unmasked) arrays. Scalar in,
+            scalar out.
+        """
+        if vertices is None:
+            vertices = self.vertex_index
+        else:
+            vertices = np.asarray(vertices)
+            if np.issubdtype(vertices.dtype, np.bool_):
+                if len(vertices) != self.n_vertices:
+                    raise ValueError(
+                        "If vertices is a boolean array, it must have the same length as the number of vertices."
+                    )
+                vertices = self.vertex_index[np.flatnonzero(vertices)]
+            else:
+                if vertices.size == 0:
+                    # An empty list is float64, which cannot index an array.
+                    vertices = vertices.astype(np.intp)
+                if as_positional:
+                    vertices = self.vertex_index[vertices]
+        base_positional, _ = self._vertices_to_positional(
+            vertices, as_positional=False, vertex_index=self.base_vertex_index
+        )
+        return base_positional
+
     def _reset_derived_properties(self) -> None:
         super()._reset_derived_properties()
         self._dag_cache = gf.DAGCache()
@@ -2366,35 +2428,30 @@ class SkeletonLayer(GraphLayer):
         Parameters
         ----------
         vertices : Optional[np.ndarray]
-            The vertices to get the distance from the root for. If None, all vertices are used.
+            The vertices to get the distance from the root for. If None, every
+            vertex of this layer is used, in this layer's positional order, so
+            the result lines up 1:1 with ``self.vertices``.
         as_positional : bool
             If True, the vertices are treated as positional indices. If False, they are treated as vertex features.
 
         Returns
         -------
         np.ndarray
-            The distance from the root for each vertex.
+            The distance from the root for each vertex. One value per requested
+            vertex of *this* layer, so on a masked skeleton ``distance_to_root()``
+            always equals ``distance_to_root(np.arange(n), as_positional=True)``
+            and ``distance_to_root(self.vertex_index)``.
         """
-        # Vertices must be positional but in the base space for the dijkstra
-        if as_positional:
-            if vertices is None:
-                vertices = self.vertex_index
-            else:
-                vertices = self.vertex_index[vertices]
-            as_positional = False
-        vertices, as_positional = self._vertices_to_positional(
-            vertices, as_positional, vertex_index=self.base_vertex_index
-        )
-        if self._dag_cache.distance_to_root is not None:
-            dtr = self._dag_cache.distance_to_root
-        else:
-            dtr = sparse.csgraph.dijkstra(
+        # The dijkstra runs on the base graph, so the selection must be in base
+        # positional space -- which is not this layer's space when masked.
+        base_positional = self._vertices_to_base_positional(vertices, as_positional)
+        if self._dag_cache.base_distance_to_root is None:
+            self._dag_cache.base_distance_to_root = sparse.csgraph.dijkstra(
                 self.base_csgraph,
                 directed=False,
                 indices=self.base_root_positional,
-            )
-            self._dag_cache.distance_to_root = dtr.flatten()
-        return dtr[vertices]
+            ).flatten()
+        return self._dag_cache.base_distance_to_root[base_positional]
 
     def hops_to_root(
         self,
@@ -2406,26 +2463,29 @@ class SkeletonLayer(GraphLayer):
         Parameters
         ----------
         vertices : Optional[np.ndarray]
-            The vertices to get the distance from the root for. If None, all vertices are used.
+            The vertices to get the distance from the root for. If None, every
+            vertex of this layer is used, in this layer's positional order, so
+            the result lines up 1:1 with ``self.vertices``.
         as_positional : bool
             If True, the vertices are treated as positional indices. If False, they are treated as vertex features.
 
         Returns
         -------
         np.ndarray
-            The distance from the root for each vertex.
+            The hop count from the root for each vertex. One value per requested
+            vertex of *this* layer, so on a masked skeleton ``hops_to_root()``
+            always equals ``hops_to_root(np.arange(n), as_positional=True)`` and
+            ``hops_to_root(self.vertex_index)``.
         """
-        vertices, _ = self._vertices_to_positional(vertices, as_positional)
-        if self._dag_cache.hops_to_root is not None:
-            htr = self._dag_cache.hops_to_root
-        else:
-            htr = sparse.csgraph.dijkstra(
+        # Same base-space contract as distance_to_root; see that method.
+        base_positional = self._vertices_to_base_positional(vertices, as_positional)
+        if self._dag_cache.base_hops_to_root is None:
+            self._dag_cache.base_hops_to_root = sparse.csgraph.dijkstra(
                 self.base_csgraph_binary,
                 directed=False,
                 indices=self.base_root_positional,
-            )
-            self._dag_cache.hops_to_root = htr
-        return htr[vertices]
+            ).flatten()
+        return self._dag_cache.base_hops_to_root[base_positional]
 
     def child_vertices(self, vertices=None, as_positional=False) -> dict:
         """Get mapping from vertices to their child nodes.
@@ -3327,8 +3387,9 @@ class PointCloudLayer(PointMixin):
         if self._cell.skeleton is None:
             raise ValueError("Cell does not have a Skeleton object.")
 
-        if vertices is None:
-            vertices = self.vertex_index
+        # Do not pre-fill ``vertices`` here: it would hand vertex ids to a call
+        # that may be reading them as positional indices. ``map_index_to_layer``
+        # already resolves None correctly for *both* index spaces.
         skel_idx = self.map_index_to_layer(
             layer=SKEL_LAYER_NAME, source_index=vertices, as_positional=as_positional
         )
