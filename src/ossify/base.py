@@ -470,6 +470,7 @@ class Cell:
         *,
         vertex_index: Optional[Union[str, np.ndarray]] = None,
         edges_as_positional: Optional[bool] = None,
+        root_as_positional: bool = False,
         linkage: Optional[Link] = None,
         spatial_columns: Optional[list] = None,
         inherited_properties: Optional[dict] = None,
@@ -494,6 +495,11 @@ class Cell:
             opposite convention to ``edges``, which are positional when
             ``vertex_index`` is given. Required if the edges are not already
             consistent with a single root.
+        root_as_positional : bool
+            Whether ``root`` is a positional index into ``vertices`` rather
+            than a vertex index. Default False. This is the escape hatch for
+            the asymmetry noted above: ``edges`` and ``root`` keep different
+            defaults, but either can be stated explicitly.
         vertex_index : Optional[Union[str, np.ndarray]]
             Vertex indices to label the skeleton's vertices by: either the name of
             a column in ``vertices``, or an array with one value per vertex.
@@ -530,6 +536,7 @@ class Cell:
                     edges_as_positional=edges_as_positional,
                     features=features,
                     root=root,
+                    root_as_positional=root_as_positional,
                     morphsync=self._morphsync,
                     spatial_columns=spatial_columns,
                     linkage=linkage,

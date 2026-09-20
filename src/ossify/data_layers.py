@@ -301,7 +301,7 @@ class FaceMixin(ABC):
     def surface_area(
         self,
         vertices: Optional[np.ndarray] = None,
-        as_positional: bool = True,
+        as_positional: bool = False,
         inclusive: bool = False,
     ) -> float:
         """Calculate the surface area of the mesh, or a subset of vertices.
@@ -311,7 +311,8 @@ class FaceMixin(ABC):
         vertices : Optional[np.ndarray], optional
             Vertex indices to calculate surface area for. If None, uses entire mesh.
         as_positional : bool, optional
-            Whether the input vertices are positional indices or vertex indices. Default True.
+            Whether the input vertices are positional indices or vertex indices.
+            Default False, matching every other ``as_positional`` in the API.
         inclusive : bool, optional
             Whether to include faces that are covered by any vertex (True) or only those fully covered (False). Default False.
 
@@ -1910,6 +1911,7 @@ class SkeletonLayer(GraphLayer):
         *,
         vertex_index: Optional[Union[str, np.ndarray]] = None,
         edges_as_positional: Optional[bool] = None,
+        root_as_positional: bool = False,
         features: Optional[Union[dict, pd.DataFrame]] = None,
         morphsync: MorphSync = None,
         linkage: Optional[dict] = None,
@@ -1937,11 +1939,13 @@ class SkeletonLayer(GraphLayer):
             self._setup_linkage(linkage)
 
             # Establish the root and then build the base properties
-            self._root = self._infer_root(root)
+            self._root = self._infer_root(root, as_positional=root_as_positional)
             self._dag_cache = gf.DAGCache(
                 root=self.root_positional
             )  # Cache of properties associated with rooted skeletons
-            self._dag_cache.parent_node_array = self._apply_root_to_edges(root)
+            # Use the resolved root, not the raw argument: _infer_root may have
+            # converted it out of positional space or inferred it from the edges.
+            self._dag_cache.parent_node_array = self._apply_root_to_edges(self._root)
 
             self._set_base_properties(
                 base_properties={
@@ -2283,16 +2287,20 @@ class SkeletonLayer(GraphLayer):
         if np.array_equal(self.vertex_index, self.base_vertex_index):
             self._base_properties["base_csgraph"] = self.csgraph
 
-    def _infer_root(self, root: Optional[int]) -> int:
+    def _infer_root(self, root: Optional[int], as_positional: bool = False) -> int:
         """Infer the root node from the graph structure or validate provided root.
 
         Parameters
         ----------
         root : Optional[int]
-            Proposed root, as a **vertex index** -- the same space as
+            Proposed root. By default a **vertex index** -- the same space as
             ``vertex_index``, not a positional index. Note this differs from
-            ``edges``, which are positional when ``vertex_index`` is supplied.
+            ``edges``, which are positional when ``vertex_index`` is supplied;
+            pass ``as_positional=True`` to use that space here instead.
             If None, attempts to infer from graph structure.
+        as_positional : bool
+            Whether ``root`` is a positional index into this layer's vertices.
+            Default False, matching ``as_positional`` everywhere else.
 
         Returns
         -------
@@ -2306,6 +2314,10 @@ class SkeletonLayer(GraphLayer):
             root was specified and multiple potential roots were found.
         """
         if root is not None:
+            if as_positional:
+                # Positional in, vertex index out: `root` is stored and
+                # returned as a vertex index whichever space it arrived in.
+                root = int(self.vertex_index[int(root)])
             root = int(root)
             # Numpy membership rather than building a Python set: a layer can
             # have millions of vertices and this runs on every construction.

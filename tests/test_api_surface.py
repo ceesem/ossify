@@ -262,3 +262,49 @@ class TestMembersRequiringArguments:
         by_index, _ = skel.segments_capped(1.0, positional=False)
         for positions, ids in zip(capped, by_index):
             np.testing.assert_array_equal(skel.vertex_index[positions], ids)
+
+
+class TestAsPositionalConvention:
+    """``as_positional`` means the same thing everywhere it appears.
+
+    ``MeshLayer.surface_area`` used to be the lone exception, defaulting to
+    True where the other thirteen defaulted to False, so the same argument
+    named the opposite index space depending on which method you called.
+    """
+
+    def test_every_as_positional_defaults_to_false(self):
+        import ossify
+        from ossify import data_layers
+
+        offenders = []
+        for module in (data_layers, ossify.base, ossify.algorithms):
+            for obj_name in dir(module):
+                obj = getattr(module, obj_name)
+                members = vars(obj).values() if inspect.isclass(obj) else [obj]
+                for member in members:
+                    if not inspect.isfunction(member):
+                        continue
+                    try:
+                        param = inspect.signature(member).parameters.get(
+                            "as_positional"
+                        )
+                    except (ValueError, TypeError):
+                        continue
+                    if param is not None and param.default is True:
+                        offenders.append(f"{obj_name}.{member.__name__}")
+        assert not offenders, f"as_positional defaults to True in: {offenders}"
+
+    def test_surface_area_default_reads_vertex_indices(self, full_cell):
+        mesh = full_cell.mesh
+        # This mesh is indexed 300.. so the two spaces are distinguishable.
+        assert not np.array_equal(mesh.vertex_index, np.arange(mesh.n_vertices))
+
+        positions = np.array([0, 1, 2])
+        by_position = mesh.surface_area(vertices=positions, as_positional=True)
+        by_index = mesh.surface_area(vertices=mesh.vertex_index[positions])
+
+        assert by_index == pytest.approx(by_position)
+        # And the default really is the vertex-index reading.
+        assert mesh.surface_area(
+            vertices=mesh.vertex_index[positions]
+        ) == pytest.approx(by_position)

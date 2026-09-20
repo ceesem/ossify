@@ -756,6 +756,50 @@ class TestConnectivityIndexSpace:
         assert len(cell.graph.edges) == 0
 
 
+class TestRootIndexSpace:
+    """``root`` defaults to a vertex index, and ``root_as_positional`` is the
+    escape hatch.
+
+    ``edges`` and ``root`` keep different defaults -- edges follow
+    ``vertex_index``, root does not -- which is the one asymmetry in the
+    constructor. Both are now statable, and whichever space it arrives in,
+    ``root`` is stored and returned as a vertex index.
+    """
+
+    SPATIAL = ["x", "y", "z"]
+    VERTS = np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0]])
+    IDS = np.array([100, 101, 102])
+    EDGES = np.array([[1, 0], [2, 1]])  # positional, per vertex_index
+
+    def _skeleton(self, **kwargs):
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=pd.DataFrame(self.VERTS, columns=self.SPATIAL),
+            edges=self.EDGES,
+            spatial_columns=self.SPATIAL,
+            vertex_index=self.IDS,
+            **kwargs,
+        )
+        return cell.skeleton
+
+    def test_both_spaces_select_the_same_root(self):
+        by_index = self._skeleton(root=100)
+        by_position = self._skeleton(root=0, root_as_positional=True)
+        assert by_index.root == by_position.root == 100
+        assert by_index.root_positional == by_position.root_positional == 0
+
+    def test_root_is_returned_as_a_vertex_index_either_way(self):
+        # Whichever space it arrived in, `root` reads back in vertex-index
+        # space, matching the accessor and reroot().
+        skel = self._skeleton(root=2, root_as_positional=True)
+        assert skel.root == 102
+        assert skel.root in skel.vertex_index
+
+    def test_default_is_still_the_vertex_index_reading(self):
+        with pytest.raises(ValueError, match="not a vertex of this layer"):
+            self._skeleton(root=0)  # positional, without saying so
+
+
 class TestPointCloudDistanceToRoot:
     """``PointCloudLayer.distance_to_root`` is the same family of accessor and
     owes the same guarantee: all equivalent call forms agree."""
