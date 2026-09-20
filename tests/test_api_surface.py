@@ -448,3 +448,82 @@ class TestUnmappedVertexDetection:
         )
         assert cleaned.n_vertices == 2
         np.testing.assert_array_equal(cleaned.vertex_index, [100, 101])
+
+
+class TestMapIndexMissing:
+    """``map_index_to_layer`` raises on unmapped vertices unless given a fill.
+
+    The fill is the caller's to choose, not the library's, because it decides
+    the dtype. Vertex ids here are routinely above 2**53, where a float64 round
+    trip silently changes them -- so a library that quietly returned NaN would
+    corrupt every id it handed back. An integer fill keeps the array integral.
+    """
+
+    SPATIAL = ["x", "y", "z"]
+    VERTS = np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]])
+    # Above 2**53, so a float64 round trip is lossy.
+    BIG = np.array([173194386090230235, 173194386090230236], dtype=np.int64)
+
+    def _cell(self):
+        from ossify import Link
+
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=pd.DataFrame(
+                self.VERTS, columns=self.SPATIAL, index=[100, 101, 102, 103]
+            ),
+            edges=np.array([[101, 100], [102, 101], [103, 102]]),
+            spatial_columns=self.SPATIAL,
+            root=100,
+        )
+        cell.add_graph(
+            vertices=pd.DataFrame(self.VERTS[:2], columns=self.SPATIAL, index=self.BIG),
+            edges=np.array([[self.BIG[1], self.BIG[0]]]),
+            spatial_columns=self.SPATIAL,
+            linkage=Link(
+                mapping=np.array([100, 101]),
+                target="skeleton",
+                map_value_is_index=True,
+            ),
+        )
+        return cell
+
+    def test_default_raises_and_names_the_vertices(self):
+        skel = self._cell().skeleton
+        with pytest.raises(KeyError, match=r"102"):
+            skel.map_index_to_layer("graph")
+
+    def test_integer_fill_keeps_the_dtype_and_the_ids(self):
+        skel = self._cell().skeleton
+        out = skel.map_index_to_layer("graph", missing=-1)
+        assert out.dtype == np.int64
+        # The ids survive exactly -- this is what a float64 route would break.
+        assert out[0] == self.BIG[0]
+        assert out[1] == self.BIG[1]
+        np.testing.assert_array_equal(out[2:], [-1, -1])
+        # And the result is still a normal numpy array.
+        np.testing.assert_array_equal(
+            np.isin(out, self.BIG), [True, True, False, False]
+        )
+
+    def test_a_float_fill_widens_as_documented(self):
+        skel = self._cell().skeleton
+        out = skel.map_index_to_layer("graph", missing=np.nan)
+        assert out.dtype == np.float64
+        # Documented consequence of asking for a float fill, not a silent
+        # default: above 2**53 the id no longer round-trips.
+        assert int(out[0]) != self.BIG[0]
+
+    def test_fully_mapped_selection_is_unaffected(self):
+        skel = self._cell().skeleton
+        for kwargs in ({}, {"missing": -1}):
+            out = skel.map_index_to_layer(
+                "graph", source_index=np.array([100, 101]), **kwargs
+            )
+            np.testing.assert_array_equal(out, self.BIG)
+            assert out.dtype == np.int64
+
+    def test_an_unknown_string_is_rejected(self):
+        skel = self._cell().skeleton
+        with pytest.raises(ValueError, match="must be 'raise' or a fill value"):
+            skel.map_index_to_layer("graph", missing="drop")

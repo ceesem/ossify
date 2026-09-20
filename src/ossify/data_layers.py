@@ -727,7 +727,11 @@ class PointMixin(ABC):
         return mapping.values
 
     def _map_index_one_to_one(
-        self, layer: str, source_index: np.ndarray, validate: bool = False
+        self,
+        layer: str,
+        source_index: np.ndarray,
+        validate: bool = False,
+        missing: Union[str, int, float] = "raise",
     ) -> np.ndarray:
         """Map source indices to single target indices in a one-to-one manner.
 
@@ -742,6 +746,10 @@ class PointMixin(ABC):
             Source indices to map from.
         validate : bool, optional
             Whether to validate for ambiguous mappings, i.e. multiple targets are possible. Default False.
+        missing : Union[str, int, float], optional
+            What to do with source vertices that have no mapping. ``"raise"``
+            (default) raises a KeyError naming them. Any other value is used to
+            fill their slots. Default False.
 
         Returns
         -------
@@ -759,7 +767,36 @@ class PointMixin(ABC):
                 raise ValueError(
                     f"Ambiguous index mapping from {self.layer_name} to {layer}."
                 )
-        return mapping[~mapping.index.duplicated(keep="first")].loc[source_index].values
+        mapping = mapping[~mapping.index.duplicated(keep="first")]
+        if isinstance(missing, str):
+            if missing != "raise":
+                raise ValueError(
+                    f"missing must be 'raise' or a fill value, got {missing!r}."
+                )
+            # .loc raises a KeyError naming the unmapped vertices.
+            return mapping.loc[source_index].values
+        # Look the positions up in numpy rather than reindexing: pandas would
+        # upcast an integer Series to float64 to hold the NaN, and vertex ids
+        # here routinely exceed 2**53, so they would not survive that round
+        # trip. Build the output at the mapping's own dtype instead, and let
+        # the caller's choice of fill decide if it has to widen.
+        source_index = np.atleast_1d(source_index)
+        values = mapping.to_numpy()
+        positions = mapping.index.get_indexer(source_index)
+        found = positions >= 0
+        try:
+            out = np.empty(len(source_index), dtype=values.dtype)
+            out[found] = values[positions[found]]
+            out[~found] = missing
+        except (ValueError, OverflowError, TypeError):
+            # The fill does not fit the mapping's dtype -- np.nan into an
+            # integer array, say. Widen rather than silently truncating, and
+            # let the caller live with the consequences they asked for.
+            out = np.empty(len(source_index), dtype=object)
+            out[found] = values[positions[found]]
+            out[~found] = missing
+            out = np.asarray(out.tolist())
+        return out
 
     def _map_index_to_list_of_lists(self, layer: str, source_index: np.ndarray) -> dict:
         """Map source indices to lists of all corresponding target indices.
@@ -851,6 +888,7 @@ class PointMixin(ABC):
         as_positional: bool,
         how: str,
         validate: bool = False,
+        missing: Union[str, int, float] = "raise",
     ) -> Union[np.ndarray, dict]:
         """Master function for mapping indices from source to target layer with various strategies.
 
@@ -886,7 +924,10 @@ class PointMixin(ABC):
             match how:
                 case "one_to_one":
                     mapping = self._map_index_one_to_one(
-                        layer=layer, source_index=source_index, validate=validate
+                        layer=layer,
+                        source_index=source_index,
+                        validate=validate,
+                        missing=missing,
                     )
                 case "range_to_range":
                     mapping = self._map_range_to_range(
@@ -922,6 +963,7 @@ class PointMixin(ABC):
         source_index: Optional[np.ndarray] = None,
         as_positional: bool = False,
         validate: bool = False,
+        missing: Union[str, int, float] = "raise",
     ) -> np.ndarray:
         """Map each vertex index from the current layer to a single index in the specified layer.
 
@@ -935,6 +977,18 @@ class PointMixin(ABC):
             Whether to treat source_index and mapped index as positional (i_th element of the array) or as a dataframe index.
         validate : bool
             Whether to raise an error is the mapping is ambiguous, i.e. it is not clear which target index to use.
+        missing : Union[str, int, float]
+            What to do with vertices that have no mapping to ``layer``.
+            ``"raise"`` (default) raises a KeyError naming them. Anything else
+            is used to fill their slots -- ``missing=-1`` is the usual choice.
+
+            The fill is yours to pick rather than the library's, because it
+            decides the result's dtype. An integer keeps the array integral,
+            which matters here: vertex ids are routinely above 2**53, where a
+            float64 round trip silently changes them. ``missing=np.nan`` is
+            allowed and does exactly that, so only reach for it when the ids
+            are small. Use :meth:`get_unmapped_vertices` to find which
+            vertices are unmapped in the first place.
 
         Returns
         -------
@@ -950,6 +1004,7 @@ class PointMixin(ABC):
                 as_positional=as_positional,
                 how="one_to_one",
                 validate=validate,
+                missing=missing,
             )
         )
 
