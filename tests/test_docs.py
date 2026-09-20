@@ -22,6 +22,7 @@ test will keep it honest.
 import io
 import os
 import re
+import textwrap
 import traceback
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -43,6 +44,17 @@ EXAMPLE_URL = (
 EXAMPLE_LOCAL = REPO / "864691135336055529.osy"
 
 # Pages whose examples are known to run end to end.
+#
+# Three guide pages are deliberately absent, because their examples cannot be
+# executed rather than because they are broken. Their API usage has been
+# checked by running them against a pre-seeded namespace:
+#
+# * faq.md -- standalone fragments that answer one question each, written
+#   against placeholder names a reader supplies.
+# * visualization_and_plotting.md -- the later sections need PyVista (the
+#   optional `viz` extra) and a rendering context.
+# * data_import_export.md -- reads and writes against CAVE, cloud storage and
+#   file paths the reader provides.
 EXECUTABLE_PAGES = [
     "algorithms_and_analysis.md",
     "cell_object.md",
@@ -58,9 +70,13 @@ EXECUTABLE_PAGES = [
 
 
 def _python_blocks(text: str):
-    """Yield ``(source, first_line_number)`` for each python fence."""
-    for match in re.finditer(r"```python\n(.*?)```", text, re.S):
-        yield match.group(1), text[: match.start()].count("\n") + 2
+    """Yield ``(source, first_line_number)`` for each python fence.
+
+    Fences nested inside a list item are indented, which is valid Markdown but
+    not valid Python, so the source is dedented before it is handed back.
+    """
+    for match in re.finditer(r"^([ \t]*)```python\n(.*?)^\1```", text, re.S | re.M):
+        yield textwrap.dedent(match.group(2)), text[: match.start()].count("\n") + 2
 
 
 @pytest.fixture

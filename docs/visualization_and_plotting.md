@@ -266,8 +266,8 @@ ossify.plot.plot_annotations_2d(
 # Sqrt size scale for area-like features (radius ∝ √area)
 fig, ax = plt.subplots(figsize=(10, 8))
 ossify.plot.plot_annotations_2d(
-    cell.annotations["synapses"],
-    size="cross_section_area",
+    cell.annotations["pre_syn"],
+    size="size",                  # a feature this annotation actually carries
     size_scale="sqrt",
     sizes=(2, 50),
     ax=ax,
@@ -280,9 +280,9 @@ ossify.plot.plot_cell_2d(
     color="radius",
     color_scale="log",            # skeleton color transform
     synapses="both",
-    pre_color="count",
+    pre_color="size",             # a feature the synapse annotations carry
     syn_color_scale="log",        # synapse color transform
-    syn_size="count",
+    syn_size="size",
     syn_size_scale="log",         # synapse size transform
 )
 ```
@@ -583,8 +583,8 @@ A few practical notes:
 
 if hasattr(cell, 'skeleton') and cell.skeleton is not None:
     # Convert from nanometers to micrometers for display
+    # `Cell.name` is read-only; set it when the cell is created if you need one.
     display_cell = cell.transform(lambda x: x / 1000)
-    display_cell.name = f"{cell.name}_display"
     
     # Plot with appropriate scaling
     fig, ax = ossify.plot.single_panel_figure(
