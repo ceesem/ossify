@@ -1,5 +1,99 @@
 # Changelog
 
+## 0.3.0
+
+Most of this release comes from executing the API rather than reading it:
+roughly 40% of the public members on `Cell` and the four layer classes had
+never been called by a test, and that is where the bugs were. Every public
+member is now exercised, and the contracts they violated are asserted.
+
+### Behaviour changes
+
+These change what existing code does. All five are corrections — the previous
+behaviour was wrong — but code written against it will see different results.
+
+- **`segments_plus` returns vertex indices**, not coordinates. It indexed the
+  Nx3 coordinate array where its sibling `segments` used the vertex index, so
+  it returned an `(n, 3)` float array from a property documented, and named,
+  to return indices. Relatedly, the root's segment no longer has the `-1`
+  "no parent" sentinel appended, which read as the *last* vertex once mapped.
+
+- **`segments_capped(positional=...)` was inverted.** `positional=True`
+  returned vertex indices and `positional=False` returned positions, the exact
+  opposite of the argument's name. It now means what it says.
+
+- **`downstream_vertices(inclusive=...)` was backwards.** The underlying
+  traversal already returns the subtree root, so `inclusive=False` still
+  contained the vertex and `inclusive=True` listed it twice.
+
+- **`MeshLayer.surface_area(as_positional=...)` now defaults to `False`**,
+  matching the other thirteen parameters of that name. It was the only one
+  defaulting to `True`, so the same argument named the opposite index space
+  depending on which method you called.
+
+- **`get_unmapped_vertices` and `mask_out_unmapped` now work.** Source and
+  target were swapped in the underlying mapping call, so the first returned
+  the *target* layer's vertices rather than this layer's, and the second
+  compared two disjoint index spaces and therefore removed nothing at all.
+  Code that called `mask_out_unmapped` was silently getting an unfiltered
+  layer back and will now get a filtered one.
+
+### Deprecations
+
+- **`layer.apply_mask()` will return a layer, not a `Cell`, from 1.0.**
+  Masking a layer and getting a `Cell` back is the most confusing thing in the
+  API. Nothing changes yet: an unset call behaves exactly as before and raises
+  a `FutureWarning`. Pass `return_cell=True` to keep the current behaviour or
+  `return_cell=False` to opt into the new one. `mask_context` and
+  `mask_out_unmapped` take the same argument.
+
+### New
+
+- **`layer.is_fully_mapped_to(other)` and `layer.mapping_coverage(other)`.**
+  A link existing does not mean it is usable in the direction you want — an
+  incompletely mapped cell is well defined, but not every operation is
+  meaningful on it, much as with a mesh that is not watertight. Completeness
+  is directional: every mesh vertex may reach the graph while some graph
+  vertices are reached by no mesh vertex.
+
+- **`describe()` marks incomplete link directions**, e.g.
+  `mesh <-> graph (graph 81% mapped)`, with no note meaning complete both
+  ways. Pass `coverage=False` to skip the walk on very large cells.
+
+- **`map_index_to_layer(..., missing=...)`.** The default, `"raise"`, is
+  unchanged. Any other value fills the slots of unmapped vertices; `-1` is the
+  usual choice. The fill is yours to pick because it decides the dtype: vertex
+  ids here routinely exceed 2**53, where a `NaN` would force float64 and
+  silently change every id it returned.
+
+- **`add_skeleton(..., root_as_positional=...)`.** `root` still defaults to a
+  vertex index while `edges` are positional when `vertex_index` is given; that
+  asymmetry stays, but both can now be stated outright.
+
+- **A four-layer example cell**, `864691135336055529_full.osy` — mesh, graph,
+  skeleton and synapse annotations, all linked, in 3.5MB. Its mesh is
+  decimated about 30x from the published reconstruction, so its surface area
+  is roughly half the true value; use the full mesh for quantitative surface
+  work. `scripts/build_example_cell.py` regenerates it.
+
+### Documentation
+
+- The linking guide gains a section on mapping completeness, including a table
+  of what each mapping operation does when vertices are unmapped.
+- The mesh guide now works on a real neuron rather than a tetrahedron.
+
+### Internal
+
+- `tests/test_api_surface.py` asserts the contracts the above bugs violated:
+  an `X`/`X_positional` pair must describe the same vertices, a positional
+  result must be usable to index the layer's arrays, an index result must come
+  from `vertex_index`, and a per-vertex array must have one entry per vertex.
+  It also touches every public property and calls every zero-argument public
+  method.
+- `describe()` evaluated `.faces` and `.edges` twice per call site, and each
+  access remaps the whole facet array. On a cell with 2.6M mesh vertices that
+  was 82% of its runtime.
+
 ## 0.2.8
 
 ### Bug fixes
