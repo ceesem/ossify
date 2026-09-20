@@ -1524,7 +1524,7 @@ class GraphLayer(PointMixin, EdgeMixin):
         self._cell = None
 
         if not existing:
-            if vertex_index:
+            if vertex_index is not None:
                 edges = self._map_edges_to_index(edges, vertices.index)
             self._morphsync.add_graph(
                 graph=(vertices, edges),
@@ -1894,7 +1894,7 @@ class SkeletonLayer(GraphLayer):
 
         if inherited_properties is None:
             # Add as a morphsync layer
-            if vertex_index:
+            if vertex_index is not None:
                 edges = self._map_edges_to_index(edges, vertices.index)
             self._morphsync.add_graph(
                 graph=(vertices, edges),
@@ -2256,24 +2256,38 @@ class SkeletonLayer(GraphLayer):
         Parameters
         ----------
         root : Optional[int]
-            Proposed root node index. If None, attempts to infer from graph structure.
+            Proposed root, as a **vertex index** -- the same space as
+            ``vertex_index``, not a positional index. Note this differs from
+            ``edges``, which are positional when ``vertex_index`` is supplied.
+            If None, attempts to infer from graph structure.
 
         Returns
         -------
         int
-            The root node index.
+            The root vertex index.
 
         Raises
         ------
         ValueError
-            If no root specified and multiple potential roots found.
+            If the given root is not one of this layer's vertices, or if no
+            root was specified and multiple potential roots were found.
         """
         if root is not None:
-            return int(root)
+            root = int(root)
+            # Numpy membership rather than building a Python set: a layer can
+            # have millions of vertices and this runs on every construction.
+            if not np.any(self.vertex_index == root):
+                raise ValueError(
+                    f"root {root} is not a vertex of this layer. `root` is a "
+                    "vertex index, not a positional index -- note that `edges` "
+                    "use the opposite convention when `vertex_index` is given."
+                )
+            return root
         else:
             potential_roots = np.flatnonzero(self.csgraph_binary.sum(axis=1) == 0)
             if len(potential_roots) == 1:
-                return int(potential_roots[0])
+                # ``potential_roots`` is positional; the root is a vertex index.
+                return int(self.vertex_index[potential_roots[0]])
             else:
                 raise ValueError(
                     "No root specified and edges are not consistent with a single root. Please set a valid root."
@@ -3515,7 +3529,7 @@ class MeshLayer(FaceMixin, PointMixin):
         self._cell = None
 
         if not existing:
-            if vertex_index:
+            if vertex_index is not None:
                 faces = self._map_faces_to_index(faces, vertices.index)
             self._morphsync.add_mesh(
                 mesh=(vertices, faces),

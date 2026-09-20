@@ -537,6 +537,106 @@ class TestEdgeOrientationIndependence:
             assert from_cache == from_edges
 
 
+class TestVertexIndexConventions:
+    """``vertex_index`` may be a column name or an array of ids, and the three
+    ``add_*`` methods must agree on what that implies for edges and faces.
+
+    Two bugs lived here. ``if vertex_index:`` raised on any array of more than
+    one element, so the documented ndarray form never worked at all. And
+    ``_infer_root`` returned a *positional* index where a vertex index is
+    required, so a skeleton with real ids and no explicit root raised
+    IndexError from deep inside edge reorientation.
+    """
+
+    SPATIAL = ["x", "y", "z"]
+    VERTS = np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0]])
+    IDS = np.array([100, 101, 102])
+
+    def _frame(self):
+        return pd.DataFrame(self.VERTS, columns=self.SPATIAL)
+
+    def test_array_vertex_index_accepted_by_every_layer(self):
+        edges = np.array([[1, 0], [2, 1]])  # positional, per the contract
+
+        cell = Cell()
+        cell.add_graph(
+            vertices=self._frame(),
+            edges=edges,
+            spatial_columns=self.SPATIAL,
+            vertex_index=self.IDS,
+        )
+        np.testing.assert_array_equal(cell.graph.vertex_index, self.IDS)
+        np.testing.assert_array_equal(cell.graph.edges, [[101, 100], [102, 101]])
+
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=self._frame(),
+            edges=edges,
+            spatial_columns=self.SPATIAL,
+            root=100,
+            vertex_index=self.IDS,
+        )
+        np.testing.assert_array_equal(cell.skeleton.vertex_index, self.IDS)
+        assert cell.skeleton.root == 100
+
+        cell = Cell()
+        cell.add_mesh(
+            vertices=self._frame(),
+            faces=np.array([[0, 1, 2]]),
+            spatial_columns=self.SPATIAL,
+            vertex_index=self.IDS,
+        )
+        np.testing.assert_array_equal(cell.mesh.vertex_index, self.IDS)
+        np.testing.assert_array_equal(cell.mesh.faces, [[100, 101, 102]])
+
+    def test_array_vertex_index_keeps_features(self):
+        frame = self._frame()
+        frame["quality"] = [0.9, 0.8, 0.7]
+        cell = Cell()
+        cell.add_graph(
+            vertices=frame,
+            edges=np.array([[1, 0], [2, 1]]),
+            spatial_columns=self.SPATIAL,
+            vertex_index=self.IDS,
+        )
+        assert cell.graph.feature_names == ["quality"]
+        np.testing.assert_allclose(cell.graph.get_feature("quality"), [0.9, 0.8, 0.7])
+
+    def test_inferred_root_is_a_vertex_index(self):
+        # Edges as vertex ids, no vertex_index, no explicit root.
+        df = pd.DataFrame(self.VERTS, columns=self.SPATIAL, index=self.IDS)
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=df,
+            edges=np.array([[101, 100], [102, 101]]),
+            spatial_columns=self.SPATIAL,
+        )
+        assert cell.skeleton.root == 100
+        assert cell.skeleton.root_positional == 0
+
+    def test_root_outside_the_vertex_index_is_rejected_clearly(self):
+        df = pd.DataFrame(self.VERTS, columns=self.SPATIAL, index=self.IDS)
+        cell = Cell()
+        with pytest.raises(ValueError, match="not a vertex of this layer"):
+            cell.add_skeleton(
+                vertices=df,
+                edges=np.array([[101, 100], [102, 101]]),
+                spatial_columns=self.SPATIAL,
+                root=0,  # positional, which is not the convention for root
+            )
+
+    def test_edges_are_positional_only_when_vertex_index_is_given(self):
+        # Without vertex_index the frame's own index is used, so edges are ids.
+        df = pd.DataFrame(self.VERTS, columns=self.SPATIAL, index=self.IDS)
+        cell = Cell()
+        cell.add_graph(
+            vertices=df,
+            edges=np.array([[101, 100], [102, 101]]),
+            spatial_columns=self.SPATIAL,
+        )
+        np.testing.assert_array_equal(cell.graph.edges, [[101, 100], [102, 101]])
+
+
 class TestPointCloudDistanceToRoot:
     """``PointCloudLayer.distance_to_root`` is the same family of accessor and
     owes the same guarantee: all equivalent call forms agree."""
