@@ -637,6 +637,125 @@ class TestVertexIndexConventions:
         np.testing.assert_array_equal(cell.graph.edges, [[101, 100], [102, 101]])
 
 
+class TestConnectivityIndexSpace:
+    """``edges``/``faces`` may be positional or vertex indices, and the caller
+    can now say which.
+
+    The historical rule -- positional exactly when ``vertex_index`` is given --
+    is kept as the default so existing callers are untouched, but it cannot
+    disambiguate a vertex index whose values are also valid positions. There
+    the choice silently changes the graph, so an explicit flag is the only
+    correct answer.
+    """
+
+    SPATIAL = ["x", "y", "z"]
+    VERTS = np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]])
+    # A permutation of 0..3: every id is also a valid positional index.
+    AMBIGUOUS_IDS = np.array([3, 1, 0, 2])
+    EDGES = np.array([[1, 3], [0, 1], [2, 0]])
+
+    def _frame(self):
+        return pd.DataFrame(self.VERTS, columns=self.SPATIAL)
+
+    def _graph(self, **kwargs):
+        cell = Cell()
+        cell.add_graph(
+            vertices=self._frame(),
+            edges=self.EDGES,
+            spatial_columns=self.SPATIAL,
+            vertex_index=self.AMBIGUOUS_IDS,
+            **kwargs,
+        )
+        return cell.graph
+
+    def test_default_is_unchanged(self):
+        # Historical behaviour: vertex_index given => edges read as positional.
+        by_default = self._graph()
+        explicit = self._graph(edges_as_positional=True)
+        np.testing.assert_array_equal(by_default.edges, explicit.edges)
+
+    def test_explicit_false_takes_edges_as_vertex_indices(self):
+        graph = self._graph(edges_as_positional=False)
+        np.testing.assert_array_equal(graph.edges, self.EDGES)
+
+    def test_the_two_readings_genuinely_differ(self):
+        # Guards the guard: if these ever coincided the tests above would pass
+        # while proving nothing.
+        assert not np.array_equal(
+            self._graph(edges_as_positional=True).edges,
+            self._graph(edges_as_positional=False).edges,
+        )
+
+    def test_flag_applies_without_a_vertex_index(self):
+        # Without vertex_index the frame's own index is used; asking for
+        # positional still remaps.
+        df = pd.DataFrame(self.VERTS, columns=self.SPATIAL, index=self.AMBIGUOUS_IDS)
+        cell = Cell()
+        cell.add_graph(
+            vertices=df,
+            edges=np.array([[1, 0], [2, 1], [3, 2]]),
+            spatial_columns=self.SPATIAL,
+            edges_as_positional=True,
+        )
+        np.testing.assert_array_equal(cell.graph.edges, [[1, 3], [0, 1], [2, 0]])
+
+    def test_out_of_range_values_name_the_convention(self):
+        # The realistic mistake: segment ids where positions were expected.
+        ids = np.array([864691135000000000 + i for i in range(4)], dtype=np.int64)
+        cell = Cell()
+        with pytest.raises(ValueError, match="outside the valid positional range"):
+            cell.add_graph(
+                vertices=self._frame(),
+                edges=ids[np.array([[1, 0], [2, 1]])],
+                spatial_columns=self.SPATIAL,
+                vertex_index=ids,
+            )
+
+    def test_explicit_true_is_validated_too(self):
+        cell = Cell()
+        with pytest.raises(ValueError, match="must be positional indices"):
+            cell.add_graph(
+                vertices=self._frame(),
+                edges=np.array([[99, 0]]),
+                spatial_columns=self.SPATIAL,
+                edges_as_positional=True,
+            )
+
+    def test_faces_take_the_same_flag(self):
+        cell = Cell()
+        cell.add_mesh(
+            vertices=self._frame(),
+            faces=np.array([[0, 1, 2]]),
+            spatial_columns=self.SPATIAL,
+            vertex_index=self.AMBIGUOUS_IDS,
+            faces_as_positional=False,
+        )
+        np.testing.assert_array_equal(cell.mesh.faces, [[0, 1, 2]])
+
+    def test_skeleton_takes_the_same_flag(self):
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=self._frame(),
+            edges=self.EDGES,
+            spatial_columns=self.SPATIAL,
+            vertex_index=self.AMBIGUOUS_IDS,
+            root=3,
+            edges_as_positional=False,
+        )
+        np.testing.assert_array_equal(cell.skeleton.edges, self.EDGES)
+        assert cell.skeleton.root == 3
+
+    def test_empty_connectivity_is_accepted(self):
+        cell = Cell()
+        cell.add_graph(
+            vertices=self._frame(),
+            edges=np.empty((0, 2), dtype=int),
+            spatial_columns=self.SPATIAL,
+            vertex_index=self.AMBIGUOUS_IDS,
+        )
+        assert len(cell.graph.edges) == 0
+
+
 class TestPointCloudDistanceToRoot:
     """``PointCloudLayer.distance_to_root`` is the same family of accessor and
     owes the same guarantee: all equivalent call forms agree."""

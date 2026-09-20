@@ -1,7 +1,6 @@
 from enum import IntEnum
 from typing import TYPE_CHECKING, Literal, Optional, Tuple, Union
 
-import fastremap
 import numpy as np
 import pandas as pd
 
@@ -310,13 +309,10 @@ def load_cell_from_client(
         l2_df = l2_df.reset_index()
 
     if restore_graph:
-        l2_graph = client.chunkedgraph.level2_chunk_graph(root_id)
-        l2_map = {v: k for k, v in l2_df["l2_id"].to_dict().items()}
-
-        edges = fastremap.remap(
-            l2_graph,
-            l2_map,
-        )
+        # The chunkedgraph gives edges as l2_id pairs, which is what the graph
+        # is indexed by, so hand them over as-is rather than round-tripping
+        # them through positional indices and straight back again.
+        edges = client.chunkedgraph.level2_chunk_graph(root_id)
     else:
         edges = []
 
@@ -335,6 +331,7 @@ def load_cell_from_client(
             spatial_columns=l2_spatial_columns,
             edges=edges,
             vertex_index="l2_id",
+            edges_as_positional=False,
         )
         .add_skeleton(
             vertices=np.array(sk["vertices"]),

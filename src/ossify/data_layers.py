@@ -89,26 +89,6 @@ class EdgeMixin(ABC):
             return np.empty((0, 2), dtype=int)
         return self.layer.edges_positional
 
-    def _map_edges_to_index(
-        self, edges: np.ndarray, vertex_indices: np.ndarray
-    ) -> np.ndarray:
-        """Remap positional edges to vertex indices.
-
-        Parameters
-        ----------
-        edges : np.ndarray
-            Edge array with positional indices.
-        vertex_indices : np.ndarray
-            Array of vertex indices to map to.
-
-        Returns
-        -------
-        np.ndarray
-            Edge array with vertex indices instead of positional indices.
-        """
-        index_map = {ii: v for ii, v in enumerate(vertex_indices)}
-        return fastremap.remap(edges, index_map)
-
     @property
     def csgraph(self) -> sparse.csr_matrix:
         """
@@ -318,26 +298,6 @@ class FaceMixin(ABC):
         self._csgraph = None
         self._trimesh = None
 
-    def _map_faces_to_index(
-        self, faces: np.ndarray, vertex_indices: np.ndarray
-    ) -> np.ndarray:
-        """Remap positional faces to vertex indices.
-
-        Parameters
-        ----------
-        faces : np.ndarray
-            Face array with positional indices.
-        vertex_indices : np.ndarray
-            Array of vertex indices to map to.
-
-        Returns
-        -------
-        np.ndarray
-            Face array with vertex indices instead of positional indices.
-        """
-        index_map = {ii: v for ii, v in enumerate(vertex_indices)}
-        return fastremap.remap(faces, index_map)
-
     def surface_area(
         self,
         vertices: Optional[np.ndarray] = None,
@@ -443,6 +403,75 @@ class PointMixin(ABC):
                     self._morphsync.layers[linkage.source].nodes[linkage.mapping].values
                 )
             self._process_linkage(linkage)
+
+    def _index_connectivity(
+        self,
+        connectivity: np.ndarray,
+        vertices: pd.DataFrame,
+        as_positional: Optional[bool],
+        vertex_index: Optional[Union[str, np.ndarray]],
+        what: str = "edges",
+    ) -> np.ndarray:
+        """Put edges or faces into vertex-index space at construction.
+
+        Every layer type takes connectivity that may be written either as
+        positional indices into ``vertices`` or as vertex indices, so the rule
+        lives here once rather than in each constructor.
+
+        ``as_positional=None`` keeps the historical behaviour -- positional
+        exactly when ``vertex_index`` was supplied -- so callers that never
+        pass the flag are unaffected. An explicit ``True``/``False`` overrides
+        it, and is the only way to disambiguate a vertex index whose values
+        are also valid positions.
+
+        Parameters
+        ----------
+        connectivity : np.ndarray
+            Edge pairs or face triples.
+        vertices : pd.DataFrame
+            The processed vertex table; its index supplies the vertex indices.
+        as_positional : Optional[bool]
+            Whether ``connectivity`` holds positional indices. None infers it.
+        vertex_index : Optional[Union[str, np.ndarray]]
+            The vertex index argument, used only for the inference above.
+        what : str
+            Name used in error messages -- "edges" or "faces".
+
+        Returns
+        -------
+        np.ndarray
+            ``connectivity`` in vertex-index space.
+        """
+        positional = (
+            vertex_index is not None if as_positional is None else bool(as_positional)
+        )
+        if not positional:
+            return connectivity
+
+        arr = np.asarray(connectivity)
+        if arr.size:
+            # Without this check, values that are actually vertex indices
+            # surface as KeyError from inside fastremap, which says nothing
+            # about the convention that was violated.
+            low, high = int(arr.min()), int(arr.max())
+            if low < 0 or high >= len(vertices):
+                if as_positional is None:
+                    hint = (
+                        f"`{what}` are read as positional indices because "
+                        f"`vertex_index` was given; pass "
+                        f"{what}_as_positional=False if they are vertex "
+                        "indices already."
+                    )
+                else:
+                    hint = (
+                        f"`{what}_as_positional=True` was given, so `{what}` "
+                        "must be positional indices."
+                    )
+                raise ValueError(
+                    f"{what} contain values outside the valid positional range "
+                    f"0..{len(vertices) - 1} (found {low}..{high}). {hint}"
+                )
+        return fastremap.remap(arr, dict(enumerate(vertices.index)))
 
     def _vertices_to_positional(
         self,
@@ -1507,6 +1536,7 @@ class GraphLayer(PointMixin, EdgeMixin):
         spatial_columns: Optional[list] = None,
         *,
         vertex_index: Optional[Union[str, np.ndarray]] = None,
+        edges_as_positional: Optional[bool] = None,
         features: Optional[Union[dict, pd.DataFrame]] = None,
         morphsync: MorphSync = None,
         linkage: Optional[Link] = None,
@@ -1524,8 +1554,9 @@ class GraphLayer(PointMixin, EdgeMixin):
         self._cell = None
 
         if not existing:
-            if vertex_index is not None:
-                edges = self._map_edges_to_index(edges, vertices.index)
+            edges = self._index_connectivity(
+                edges, vertices, edges_as_positional, vertex_index, "edges"
+            )
             self._morphsync.add_graph(
                 graph=(vertices, edges),
                 name=self.layer_name,
@@ -1878,6 +1909,7 @@ class SkeletonLayer(GraphLayer):
         root: Optional[int] = None,
         *,
         vertex_index: Optional[Union[str, np.ndarray]] = None,
+        edges_as_positional: Optional[bool] = None,
         features: Optional[Union[dict, pd.DataFrame]] = None,
         morphsync: MorphSync = None,
         linkage: Optional[dict] = None,
@@ -1894,8 +1926,9 @@ class SkeletonLayer(GraphLayer):
 
         if inherited_properties is None:
             # Add as a morphsync layer
-            if vertex_index is not None:
-                edges = self._map_edges_to_index(edges, vertices.index)
+            edges = self._index_connectivity(
+                edges, vertices, edges_as_positional, vertex_index, "edges"
+            )
             self._morphsync.add_graph(
                 graph=(vertices, edges),
                 name=self.layer_name,
@@ -3512,6 +3545,7 @@ class MeshLayer(FaceMixin, PointMixin):
         spatial_columns: Optional[list] = None,
         *,
         vertex_index: Optional[Union[str, np.ndarray]] = None,
+        faces_as_positional: Optional[bool] = None,
         features: Optional[Union[dict, pd.DataFrame]] = None,
         morphsync: MorphSync = None,
         linkage: Optional[Link] = None,
@@ -3529,8 +3563,9 @@ class MeshLayer(FaceMixin, PointMixin):
         self._cell = None
 
         if not existing:
-            if vertex_index is not None:
-                faces = self._map_faces_to_index(faces, vertices.index)
+            faces = self._index_connectivity(
+                faces, vertices, faces_as_positional, vertex_index, "faces"
+            )
             self._morphsync.add_mesh(
                 mesh=(vertices, faces),
                 name=self.layer_name,
