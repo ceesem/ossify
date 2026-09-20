@@ -1,6 +1,76 @@
 # Changelog
 
-## Unreleased
+## 0.2.8
+
+### Bug fixes
+
+- **`SkeletonLayer.cover_paths_specific` always raised.** It called a
+  `graph_functions` name that does not exist, so every call ended in
+  `AttributeError`. It had no test coverage.
+
+- **Branch points and end points were wrong for skeletons whose edges were
+  written `[parent, child]`.** Edges are reoriented to `[child, parent]` at
+  construction, but the cached graph had already been built from the original
+  orientation and was not invalidated, so it disagreed with `edges_positional`
+  afterwards. Everything read off the directed graph followed it: a branching
+  skeleton reported no branch points and a single end point, and segments and
+  cover paths inherited that. `parent_node_array` was correct throughout,
+  which is why it went unnoticed.
+
+- **`"majority"` aggregation failed inside a per-feature dict.**
+  `map_features_to_layer` translated ossify's own `"majority"` reducer only
+  when it was the entire `agg` argument. Passed per feature — the documented
+  way to mix aggregations — the string reached pandas untouched and raised.
+
+- **`vertex_index` as an array never worked.** The array form is part of the
+  signature of `add_skeleton`, `add_graph` and `add_mesh`, but the
+  implementation tested it for truthiness, which raises on any array of more
+  than one element. Only the string-column form was reachable.
+
+- **Root inference returned a positional index where a vertex index is
+  required.** Any skeleton whose vertices are not indexed `0..n-1` failed at
+  construction with an opaque `IndexError` whenever `root` was left to be
+  inferred — the normal case for data keyed by segment id. A `root` that is
+  not one of the layer's vertices now raises an error naming the convention.
+
+- **Plotting no longer warns on every `root_marker=True` figure.** A lone
+  RGB/RGBA colour was passed to matplotlib's `c`, where it is ambiguous with
+  one scalar value per point.
+
+### API
+
+- **`edges_as_positional` / `faces_as_positional`** on `add_skeleton`,
+  `add_graph` and `add_mesh` declare whether connectivity is written as
+  positional indices into `vertices` or as vertex indices. The default,
+  `None`, keeps the previous rule — positional exactly when `vertex_index` is
+  supplied — so existing callers are unaffected. The flag matters because that
+  rule cannot disambiguate a vertex index whose values are also valid
+  positions: there, the inferred reading silently builds a different graph.
+  Connectivity outside the positional range now raises an error naming the
+  convention rather than a `KeyError` from inside `fastremap`.
+
+- The convention itself is now documented on the `edges`, `faces`,
+  `vertex_index` and `root` parameters of all three methods, including the one
+  asymmetry: `root` is a vertex index while `edges` in the same call may be
+  positional.
+
+### Documentation
+
+- Ten of the thirteen user-guide pages now run end to end, and
+  `tests/test_docs.py` executes them so they cannot silently rot. Most pages
+  previously began mid-stream using a `cell` no page defined, so nothing on
+  them could be run as written. The three remaining pages are external- or
+  optional-dependency bound rather than broken; their API usage was checked
+  separately and corrected.
+
+### Internal
+
+- The rule for interpreting edges and faces lives in one place,
+  `PointMixin._index_connectivity`, instead of being repeated per layer.
+- `translate.py` no longer remaps chunkedgraph edges from `l2_id` to
+  positional indices purely so that `add_graph` can remap them back.
+
+## 0.2.7
 
 ### Bug fixes
 
