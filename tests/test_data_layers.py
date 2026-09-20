@@ -1856,6 +1856,49 @@ class TestScalarVertexArguments:
         assert np.asarray(d).item() == pytest.approx(4.0)
 
 
+class TestCoverPathsSpecific:
+    """``cover_paths_specific`` called a graph_functions name that does not
+    exist, so every call raised AttributeError. It had no test coverage."""
+
+    def _skel(self, spatial_columns):
+        # Y-shape: 100 -> 101 -> {102 -> 104, 103}
+        verts = np.array([[0.0, 0, 0], [1, 0, 0], [2, 1, 0], [2, -1, 0], [3, 1, 0]])
+        idx = np.array([100, 101, 102, 103, 104])
+        df = pd.DataFrame(verts, columns=spatial_columns, index=idx)
+        edges = np.array([[101, 100], [102, 101], [103, 101], [104, 102]])
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=df, edges=edges, spatial_columns=spatial_columns, root=100
+        )
+        return cell.skeleton
+
+    def test_returns_a_path_per_source(self, spatial_columns):
+        skel = self._skel(spatial_columns)
+        paths = skel.cover_paths_specific(skel.end_points)
+        assert len(paths) == len(skel.end_points)
+        # Vertex-index space by default, and each path ends at the root.
+        for path in paths:
+            assert np.all(np.isin(path, skel.vertex_index))
+        assert any(path[-1] == skel.root for path in paths)
+
+    def test_positional_form_matches_index_form(self, spatial_columns):
+        skel = self._skel(spatial_columns)
+        by_index = skel.cover_paths_specific(skel.end_points)
+        by_pos = skel.cover_paths_specific(
+            skel.end_points_positional, as_positional=True
+        )
+        assert len(by_index) == len(by_pos)
+        for ip, pp in zip(by_index, by_pos):
+            np.testing.assert_array_equal(ip, skel.vertex_index[pp])
+
+    def test_does_not_clobber_the_cover_paths_cache(self, spatial_columns):
+        skel = self._skel(spatial_columns)
+        full = [p.copy() for p in skel.cover_paths_positional]
+        skel.cover_paths_specific(skel.end_points[:1])
+        for before, after in zip(full, skel.cover_paths_positional):
+            np.testing.assert_array_equal(before, after)
+
+
 class TestMaskContextTeardown:
     """``mask_context`` yields a scoped temporary that must be torn down when
     the block exits, so the masked copy is reclaimed promptly rather than

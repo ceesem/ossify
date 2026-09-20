@@ -2336,6 +2336,16 @@ class SkeletonLayer(GraphLayer):
                 edges_positional_new[:, ii]
             ]
 
+        # The edges just changed direction, but ``csgraph``/``csgraph_binary``
+        # were built (by the connected_components call above) from the *old*
+        # orientation. Everything read off the directed graph -- branch points,
+        # end points, segments, cover paths -- would otherwise be computed from
+        # a stale graph that disagrees with ``edges_positional``. Drop only the
+        # edge-derived caches: the DAG cache holds root/parent state that the
+        # callers set around this method.
+        self._csgraph = None
+        self._csgraph_binary = None
+
     def reroot(self, new_root: int, as_positional=False) -> Self:
         """Reroot to a new index. Important: that this will reset any inherited properties from an unmasked skeleton!
 
@@ -2641,7 +2651,7 @@ class SkeletonLayer(GraphLayer):
             A list of cover paths, each path is a list of vertex indices, ordered as the typical `cover_paths` method.
         """
         sources, as_positional = self._vertices_to_positional(sources, as_positional)
-        cps = gf.compute_cover_paths(
+        cps = gf.build_cover_paths(
             sources,
             self.parent_node_array,
             self.distance_to_root(as_positional=True),
