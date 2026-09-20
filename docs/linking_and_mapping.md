@@ -166,6 +166,80 @@ cell.add_point_annotations(
 )
 ```
 
+## Mapping Completeness
+
+A link existing does not mean every vertex on both sides is covered by it. An
+incompletely mapped cell is perfectly well defined — much like a mesh that
+isn't watertight — but not every operation is meaningful on one.
+
+**Completeness is directional.** Every mesh vertex can reach the graph while
+some graph vertices are reached by no mesh vertex, so ask in the direction you
+intend to use:
+
+```python
+# The four-layer example cell, so the mesh is present too.
+cell = osy.load_cell('https://github.com/ceesem/ossify/raw/refs/heads/main/864691135336055529_full.osy')
+
+print(cell.mesh.is_fully_mapped_to('graph'))     # True  — every mesh vertex maps
+print(cell.graph.is_fully_mapped_to('mesh'))     # False — the mesh misses part of the arbor
+print(f"{cell.graph.mapping_coverage('mesh'):.0%}")
+```
+
+`describe()` marks the directions that are incomplete, so you can see it at a
+glance:
+
+```python
+cell.describe()
+```
+
+```
+└── Linkage (4 connections)
+    ├── mesh <-> graph (graph 81% mapped)
+    ├── post_syn <-> graph (graph 18% mapped)
+    ├── pre_syn <-> graph (graph 7% mapped)
+    └── graph <-> skeleton
+```
+
+`graph <-> skeleton` carries no note, meaning it is complete in both
+directions. On a cell with millions of mesh vertices this walk costs a second
+or so; pass `cell.describe(coverage=False)` to skip it.
+
+!!! important "Partial coverage is not automatically a fault"
+
+    A sparse annotation is *expected* to reach only a few vertices — `pre_syn`
+    covering 7% of the graph is what "synapses are sparse" looks like, not a
+    broken link. It is the layers meant to cover each other that are worth a
+    second look: `graph` only 81% mapped to `mesh` says the mesh does not span
+    the whole arbor.
+
+### Which operations need a complete mapping
+
+| Operation | With unmapped vertices |
+|---|---|
+| `map_index_to_layer` | **Raises `KeyError`** naming them, unless you pass `missing=` |
+| `map_index_to_layer_region` | Returns a dict, omitting the unmapped keys |
+| `map_region_to_layer` | Returns only the mapped targets |
+| `map_features_to_layer` | Returns a row per target vertex; unmapped ones are null |
+| `map_mask_to_layer` | Returns only the mapped targets |
+| `mask_out_unmapped` | Exists precisely to remove them |
+
+`map_index_to_layer` is the strict one because it promises one target per
+source: there is no honest answer for a vertex with no counterpart. Either fix
+the input first, or say what should stand in:
+
+```python
+# Check, then act
+if not cell.skeleton.is_fully_mapped_to('mesh'):
+    clean = cell.skeleton.mask_out_unmapped(target_layers='mesh', return_cell=False)
+
+# Or map in one call with an explicit fill
+mapped = cell.skeleton.map_index_to_layer('mesh', missing=-1)
+```
+
+Pick the fill yourself rather than letting a null be invented for you: vertex
+ids here routinely exceed 2**53, and a `NaN` would force the array to float64
+and silently change every id in it. An integer fill keeps it exact.
+
 ## Finding Unmapped Vertices
 
 Not every vertex in one layer necessarily maps to a vertex in another. You can find and handle these:

@@ -1032,7 +1032,39 @@ class Cell:
 
         return self
 
-    def describe(self, html: bool = False) -> None:
+    def _coverage_note(self, source: str, target: str, enabled: bool = True) -> str:
+        """Annotate a link with the directions that are not fully mapped.
+
+        A link existing does not mean it is usable in the direction you want:
+        completeness is directional, so every mesh vertex can reach the graph
+        while some graph vertices are reached by no mesh vertex. Operations
+        that need a total mapping -- ``map_index_to_layer`` chief among them --
+        care about that, in the way a mesh's volume cares about watertightness.
+
+        Partial coverage is not automatically a fault. A sparse annotation is
+        expected to reach few of the skeleton's vertices; only the layers that
+        are meant to cover each other are worth a second look.
+        """
+        if not enabled:
+            return ""
+        notes = []
+        for a, b in ((source, target), (target, source)):
+            layer = self._all_objects.get(a)
+            if layer is None or b not in self._all_objects:
+                continue
+            try:
+                # Cheap check first; only pay for the fraction when there is
+                # something to report. describe() is called casually and can
+                # be run on a cell with millions of mesh vertices.
+                if layer.is_fully_mapped_to(b):
+                    continue
+                coverage = layer.mapping_coverage(b)
+            except Exception:  # noqa: BLE001 - describe must never fail
+                continue
+            notes.append(f"{a} {coverage:.0%} mapped")
+        return f" ({'; '.join(notes)})" if notes else ""
+
+    def describe(self, html: bool = False, coverage: bool = True) -> None:
         """Generate a hierarchical summary description of the cell and its layers.
 
         Provides a tree-like overview including:
@@ -1045,6 +1077,12 @@ class Cell:
         html : bool, optional
             If True, create expandable HTML widgets in Jupyter.
             If False, print formatted string (default).
+        coverage : bool, optional
+            Annotate links whose mapping is incomplete with how much of each
+            side is covered. Default True. This walks the link tables, so it
+            costs O(vertices) per link -- negligible on a normal cell, a couple
+            of seconds on one with millions of mesh vertices. Pass False to
+            skip it.
 
         Returns
         -------
@@ -1055,13 +1093,14 @@ class Cell:
         --------
         >>> cell.describe()  # Prints formatted string
         >>> cell.describe(html=True)  # Shows HTML widgets in Jupyter
+        >>> cell.describe(coverage=False)  # Skip the mapping-coverage walk
         """
         if html:
             self._describe_html()
         else:
-            print(self._describe_text())
+            print(self._describe_text(coverage=coverage))
 
-    def _describe_text(self) -> str:
+    def _describe_text(self, coverage: bool = True) -> str:
         """Generate text-based hierarchical description."""
         lines = []
 
@@ -1109,9 +1148,11 @@ class Cell:
                 vertex_count = len(layer_obj.vertices)
 
                 if hasattr(layer_obj, "faces"):  # Mesh layers
-                    face_count = (
-                        len(layer_obj.faces) if len(layer_obj.faces.shape) > 1 else 0
-                    )
+                    # Bind once: `faces` remaps the whole facet array on every
+                    # access, so evaluating it twice here doubled the cost of
+                    # describing a large mesh.
+                    faces = layer_obj.faces
+                    face_count = len(faces) if faces.ndim > 1 else 0
                     lines.append(
                         f"│   {prefix} {layer_name}: {vertex_count} vertices, {face_count} faces"
                     )
@@ -1169,12 +1210,16 @@ class Cell:
                 # Check if bidirectional link exists
                 if reverse_key in self._morphsync.links:
                     # Bidirectional link
-                    link_display_items.append(f"{source} <-> {target}")
+                    link_display_items.append(
+                        f"{source} <-> {target}{self._coverage_note(source, target, coverage)}"
+                    )
                     processed_pairs.add(link_key)
                     processed_pairs.add(reverse_key)
                 else:
                     # Unidirectional link
-                    link_display_items.append(f"{source} → {target}")
+                    link_display_items.append(
+                        f"{source} → {target}{self._coverage_note(source, target, coverage)}"
+                    )
                     processed_pairs.add(link_key)
 
             # Show the actual number of connection pairs being displayed
@@ -1421,9 +1466,8 @@ class Cell:
                 vertex_count = len(layer_obj.vertices)
 
                 if hasattr(layer_obj, "faces"):
-                    face_count = (
-                        len(layer_obj.faces) if len(layer_obj.faces.shape) > 1 else 0
-                    )
+                    faces = layer_obj.faces  # remaps on access; bind once
+                    face_count = len(faces) if faces.ndim > 1 else 0
                     details = f"vertices: {vertex_count:,} | faces: {face_count:,}"
                 elif hasattr(layer_obj, "edges"):
                     edge_count = (
@@ -1464,10 +1508,12 @@ class Cell:
                 vertex_count = len(layer.vertices)
 
                 if hasattr(layer, "faces"):
-                    face_count = len(layer.faces) if len(layer.faces.shape) > 1 else 0
+                    faces = layer.faces  # remaps on access; bind once
+                    face_count = len(faces) if faces.ndim > 1 else 0
                     details = f"vertices: {vertex_count:,} | faces: {face_count:,}"
                 elif hasattr(layer, "edges"):
-                    edge_count = len(layer.edges) if len(layer.edges.shape) > 1 else 0
+                    edges = layer.edges  # remaps on access; bind once
+                    edge_count = len(edges) if edges.ndim > 1 else 0
                     details = f"vertices: {vertex_count:,} | edges: {edge_count:,}"
                 else:
                     details = f"vertices: {vertex_count:,}"

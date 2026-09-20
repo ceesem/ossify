@@ -527,3 +527,97 @@ class TestMapIndexMissing:
         skel = self._cell().skeleton
         with pytest.raises(ValueError, match="must be 'raise' or a fill value"):
             skel.map_index_to_layer("graph", missing="drop")
+
+
+class TestMappingCompleteness:
+    """A link existing does not mean it is usable in the direction you want.
+
+    Completeness is directional and pairwise, not a property of the cell: every
+    mesh vertex can reach the graph while some graph vertices are reached by no
+    mesh vertex. Operations that need a total mapping care about that, the way
+    a mesh's volume cares about watertightness.
+    """
+
+    def test_directional_asymmetry(self, full_cell):
+        """The headline case: same link, opposite answers by direction."""
+        # Two mesh vertices per skeleton vertex, so every mesh vertex maps...
+        assert full_cell.mesh.is_fully_mapped_to("skeleton")
+        # ...and every skeleton vertex is covered, here.
+        assert full_cell.skeleton.is_fully_mapped_to("mesh")
+        # The sparse annotation is the asymmetric one.
+        assert full_cell.annotations.syn.is_fully_mapped_to("skeleton")
+        assert not full_cell.skeleton.is_fully_mapped_to("syn")
+
+    def test_coverage_agrees_with_get_unmapped_vertices(self, full_cell):
+        for source, target in (
+            ("skeleton", "syn"),
+            ("syn", "skeleton"),
+            ("mesh", "skeleton"),
+            ("skeleton", "graph"),
+        ):
+            layer = full_cell._all_objects[source]
+            expected = (
+                1
+                - len(layer.get_unmapped_vertices(target_layers=target))
+                / layer.n_vertices
+            )
+            assert layer.mapping_coverage(target) == pytest.approx(expected)
+
+    def test_coverage_counts_vertices_not_rows(self, full_cell):
+        """A one-to-many mapping repeats index entries, so counting null rows
+        rather than distinct vertices sends the fraction out of range."""
+        for source in full_cell._all_objects:
+            layer = full_cell._all_objects[source]
+            for target in full_cell._all_objects:
+                if target == source:
+                    continue
+                assert 0.0 <= layer.mapping_coverage(target) <= 1.0
+
+    def test_predicate_matches_coverage(self, full_cell):
+        for source in full_cell._all_objects:
+            layer = full_cell._all_objects[source]
+            for target in full_cell._all_objects:
+                if target == source:
+                    continue
+                assert layer.is_fully_mapped_to(target) == (
+                    layer.mapping_coverage(target) == 1.0
+                )
+
+    def test_describe_marks_incomplete_directions(self, full_cell, capsys):
+        full_cell.describe()
+        out = capsys.readouterr().out
+        # The sparse annotation link is marked...
+        assert "mapped)" in out
+        assert "skeleton" in out
+
+    def test_describe_can_skip_the_coverage_walk(self, full_cell, capsys):
+        full_cell.describe(coverage=False)
+        assert "mapped)" not in capsys.readouterr().out
+
+    def test_complete_links_carry_no_note(self):
+        """Only the incomplete directions are annotated, so a clean cell stays
+        readable."""
+        from ossify import Cell, Link
+
+        spatial = ["x", "y", "z"]
+        verts = np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0]])
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=pd.DataFrame(verts, columns=spatial, index=[100, 101, 102]),
+            edges=np.array([[101, 100], [102, 101]]),
+            spatial_columns=spatial,
+            root=100,
+        )
+        cell.add_graph(
+            vertices=pd.DataFrame(verts, columns=spatial, index=[200, 201, 202]),
+            edges=np.array([[201, 200], [202, 201]]),
+            spatial_columns=spatial,
+            linkage=Link(
+                mapping=np.array([100, 101, 102]),
+                target="skeleton",
+                map_value_is_index=True,
+            ),
+        )
+        assert cell.skeleton.is_fully_mapped_to("graph")
+        assert cell.graph.is_fully_mapped_to("skeleton")
+        assert "mapped)" not in cell._describe_text()

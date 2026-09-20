@@ -1396,6 +1396,79 @@ class PointMixin(ABC):
 
         return unique_unmapped
 
+    def mapping_coverage(self, layer: str) -> float:
+        """Fraction of this layer's vertices that map to ``layer``.
+
+        Mapping completeness is directional: every mesh vertex may reach the
+        graph while some graph vertices are reached by no mesh vertex, so ask
+        in the direction you intend to use.
+
+        Parameters
+        ----------
+        layer : str
+            The target layer name.
+
+        Returns
+        -------
+        float
+            Between 0.0 and 1.0. Returns 1.0 for a layer with no vertices.
+        """
+        if self.n_vertices == 0:
+            return 1.0
+        mapping = self._morphsync.get_mapping(
+            source=self.layer_name, target=layer, dropna=False
+        )
+        null = mapping.isna()
+        if not null.any():
+            return 1.0
+        # A mapping can be one-to-many -- one skeleton vertex, several synapses
+        # -- so the Series has repeated index entries. Count distinct unmapped
+        # *vertices*, not null rows, or the fraction runs past 1. This is the
+        # expensive half, which is why the complete case returns above.
+        n_unmapped = mapping.index[null].nunique()
+        return float(1.0 - n_unmapped / self.n_vertices)
+
+    def is_fully_mapped_to(self, layer: str) -> bool:
+        """Whether every vertex of this layer maps to ``layer``.
+
+        The cheap precondition check for operations that need a total mapping,
+        in the spirit of a mesh's ``is_watertight``: an incompletely mapped
+        cell is perfectly well defined, but not every operation is meaningful
+        on it. :meth:`map_index_to_layer` raises by default rather than
+        inventing a value for the vertices that have no counterpart.
+
+        Note that partial coverage is not always a defect. A sparse annotation
+        such as synapses is *expected* to reach only a few of the skeleton's
+        vertices; it is a mesh that fails to cover the arbor that is a problem.
+
+        Parameters
+        ----------
+        layer : str
+            The target layer name.
+
+        Returns
+        -------
+        bool
+            True when no vertex of this layer is unmapped.
+
+        See Also
+        --------
+        get_unmapped_vertices : which vertices are unmapped.
+        mapping_coverage : the fraction that are mapped.
+        """
+        if self.n_vertices == 0:
+            return True
+        # Only asks whether any hole exists, so it skips the distinct-vertex
+        # count that mapping_coverage needs. That is the point: this is meant
+        # to be cheap enough to call before an operation, not after.
+        return (
+            not self._morphsync.get_mapping(
+                source=self.layer_name, target=layer, dropna=False
+            )
+            .isna()
+            .any()
+        )
+
     def mask_out_unmapped(
         self,
         target_layers: Optional[Union[str, List[str]]] = None,
