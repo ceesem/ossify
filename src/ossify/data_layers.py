@@ -2762,10 +2762,14 @@ class SkeletonLayer(GraphLayer):
         List[np.ndarray]
             List of segment arrays including parent nodes in positional indices.
         """
-        segs = self.segments_positional
-        return [
-            np.concatenate((seg, [self.parent_node_array[seg[-1]]])) for seg in segs
-        ]
+        # The root's segment has no parent, and -1 is the sentinel for that.
+        # Appending it would put -1 into a list of positional indices, which
+        # then reads as the *last* vertex once mapped through vertex_index.
+        out = []
+        for seg in self.segments_positional:
+            parent = self.parent_node_array[seg[-1]]
+            out.append(np.concatenate((seg, [parent])) if parent != -1 else seg)
+        return out
 
     @property
     def segments_plus(self) -> List[np.ndarray]:
@@ -2776,7 +2780,10 @@ class SkeletonLayer(GraphLayer):
         List[np.ndarray]
             List of segment arrays including parent nodes in dataframe indices.
         """
-        return [self.vertices[seg] for seg in self.segments_plus_positional]
+        # ``self.vertices`` is the Nx3 coordinate array, so indexing it here
+        # returned coordinates from a property documented -- and named, next to
+        # ``segments`` -- to return vertex indices.
+        return [self.vertex_index[seg] for seg in self.segments_plus_positional]
 
     @property
     def segment_map(self) -> np.ndarray:

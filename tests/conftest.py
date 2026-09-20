@@ -218,3 +218,73 @@ def mesh(simple_mesh_data):
         spatial_columns=["x", "y", "z"],
         features={"value": feat},
     )
+
+
+@pytest.fixture
+def full_cell():
+    """A small cell exercising every layer family at once.
+
+    Skeleton, graph, mesh and a point annotation, all linked to the skeleton,
+    with a deliberately non-positional vertex index on each layer so that a
+    vertex-index/positional mix-up is observable rather than a no-op.
+
+        100 -- 101 -- 102 -- 104
+                |
+               103 -- 105
+    """
+    from ossify import Cell, Link
+
+    spatial = ["x", "y", "z"]
+    skel_ids = np.array([100, 101, 102, 103, 104, 105])
+    skel_verts = np.array(
+        [
+            [0.0, 0.0, 0.0],  # 100 root
+            [1.0, 0.0, 0.0],  # 101 branch point
+            [2.0, 1.0, 0.0],  # 102
+            [2.0, -1.0, 0.0],  # 103
+            [3.0, 1.0, 0.0],  # 104 tip
+            [3.0, -1.0, 0.0],  # 105 tip
+        ]
+    )
+    skel_edges = np.array([[101, 100], [102, 101], [103, 101], [104, 102], [105, 103]])
+
+    cell = Cell(name="full_cell")
+    cell.add_skeleton(
+        vertices=pd.DataFrame(skel_verts, columns=spatial, index=skel_ids),
+        edges=skel_edges,
+        spatial_columns=spatial,
+        root=100,
+        features={"radius": [3.0, 2.5, 2.0, 2.0, 1.0, 1.0]},
+    )
+
+    # Two graph vertices per skeleton vertex.
+    graph_ids = np.arange(200, 212)
+    graph_verts = np.repeat(skel_verts, 2, axis=0)
+    graph_verts[1::2, 2] += 0.1
+    cell.add_graph(
+        vertices=pd.DataFrame(graph_verts, columns=spatial, index=graph_ids),
+        edges=np.array([[201, 200], [202, 201], [203, 202], [204, 203]]),
+        spatial_columns=spatial,
+        linkage=Link(mapping=np.repeat(skel_ids, 2), target="skeleton"),
+    )
+
+    mesh_ids = np.arange(300, 312)
+    mesh_verts = np.repeat(skel_verts, 2, axis=0)
+    mesh_verts[1::2, 1] += 0.1
+    cell.add_mesh(
+        vertices=pd.DataFrame(mesh_verts, columns=spatial, index=mesh_ids),
+        faces=np.array([[300, 301, 302], [302, 303, 304], [304, 305, 306]]),
+        spatial_columns=spatial,
+        linkage=Link(mapping=np.repeat(skel_ids, 2), target="skeleton"),
+    )
+
+    cell.add_point_annotations(
+        name="syn",
+        vertices=pd.DataFrame(
+            skel_verts[[1, 2, 4, 5]] + 0.05, columns=spatial, index=[400, 401, 402, 403]
+        ),
+        spatial_columns=spatial,
+        features={"size": [1.0, 2.0, 3.0, 4.0]},
+        linkage=Link(mapping=np.array([101, 102, 104, 105]), target="skeleton"),
+    )
+    return cell
