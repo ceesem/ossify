@@ -674,6 +674,44 @@ class TestFacetRemapFastPath:
         first[0, 0] = 12345
         assert full_cell.mesh.faces_positional[0, 0] != 12345
 
+    def test_the_fast_path_is_actually_taken(self, full_cell, monkeypatch):
+        """Equivalence tests alone would still pass if the condition silently
+        stopped matching -- it would just get slow again. Assert which path
+        runs, not only that both agree."""
+        import ossify._sync.base as base
+
+        calls = []
+        real = base._mask_and_remap
+
+        def counting(arr, mask):
+            calls.append(len(mask))
+            return real(arr, mask)
+
+        monkeypatch.setattr(base, "_mask_and_remap", counting)
+
+        # A mesh with the default 0..n-1 index: identity, so the general path
+        # must not run at all. (The full_cell fixture deliberately uses
+        # non-positional indices, so it is not the case to check here.)
+        identity = Cell()
+        identity.add_mesh(
+            vertices=np.array([[0.0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]),
+            faces=np.array([[0, 1, 2], [1, 2, 3]]),
+            spatial_columns=["x", "y", "z"],
+        )
+        layer = identity._morphsync.layers[identity.mesh.layer_name]
+        assert np.array_equal(
+            identity.mesh.vertex_index, np.arange(identity.mesh.n_vertices)
+        )
+        calls.clear()
+        layer.facets_positional
+        assert calls == [], "identity index should not reach the general path"
+
+        # The fixture's mesh is indexed 300.., which must take the general path.
+        other = full_cell._morphsync.layers[full_cell.mesh.layer_name]
+        calls.clear()
+        other.facets_positional
+        assert calls, "a non-positional index must take the general path"
+
     def test_masked_layer_takes_the_general_path(self, full_cell):
         masked = full_cell.skeleton.apply_mask(
             full_cell.skeleton.vertex_index[:4], return_cell=True
