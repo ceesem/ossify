@@ -16,6 +16,18 @@ A `SkeletonLayer` contains:
 - **Root**: A designated root vertex that defines tree orientation
 - **Tree properties**: Branch points, end points, paths, distances to root
 
+## Setup
+
+The examples on this page use the same example neuron as
+[Getting Started](getting_started.md):
+
+```python
+import numpy as np
+import ossify
+
+cell = ossify.load_cell('https://github.com/ceesem/ossify/raw/refs/heads/main/864691135336055529.osy')
+```
+
 ## Inspecting Skeleton Layers
 
 ### Quick Overview with `describe()`
@@ -109,11 +121,13 @@ print(f"Root location: {cell.skeleton.root_location}")
 ### Skeleton with Morphological features
 
 ```python
-# Add radius and compartment information
+# Add radius and compartment information. A Cell holds at most one skeleton,
+# so build a fresh Cell rather than adding a second one to `example`.
 radius_values = np.array([1.0, 0.8, 0.5, 0.5, 0.5])
 compartments = np.array([0, 0, 1, 1, 1])  # 0=dendrite, 1=axon
 
-cell.add_skeleton(
+featured = ossify.Cell(name="skeleton_with_features")
+featured.add_skeleton(
     vertices=vertices,
     edges=edges,
     root=0,
