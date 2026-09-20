@@ -398,6 +398,7 @@ class Cell:
         features: Optional[Union[dict, pd.DataFrame]] = None,
         *,
         vertex_index: Optional[Union[str, np.ndarray]] = None,
+        faces_as_positional: Optional[bool] = None,
         linkage: Optional[Link] = None,
         spatial_columns: Optional[list] = None,
     ) -> Self:
@@ -421,6 +422,12 @@ class Cell:
             Vertex indices to label the mesh's vertices by: either the name of
             a column in ``vertices``, or an array with one value per vertex.
             Supplying this changes how ``faces`` are read -- see above.
+        faces_as_positional : Optional[bool]
+            Whether ``faces`` are positional indices into ``vertices``. The
+            default, None, infers it as described above: positional exactly
+            when ``vertex_index`` is supplied. Pass it explicitly when the two
+            spaces overlap -- a ``vertex_index`` whose values are also valid
+            positions cannot be told apart any other way.
         linkage : Optional[Link]
             The linkage information for the mesh.
         spatial_columns: Optional[list] = None
@@ -443,6 +450,7 @@ class Cell:
                     name=self.MESH_LN,
                     vertices=vertices,
                     faces=faces,
+                    faces_as_positional=faces_as_positional,
                     features=features,
                     morphsync=self._morphsync,
                     spatial_columns=spatial_columns,
@@ -461,6 +469,7 @@ class Cell:
         root: Optional[int] = None,
         *,
         vertex_index: Optional[Union[str, np.ndarray]] = None,
+        edges_as_positional: Optional[bool] = None,
         linkage: Optional[Link] = None,
         spatial_columns: Optional[list] = None,
         inherited_properties: Optional[dict] = None,
@@ -489,6 +498,12 @@ class Cell:
             Vertex indices to label the skeleton's vertices by: either the name of
             a column in ``vertices``, or an array with one value per vertex.
             Supplying this changes how ``edges`` are read -- see above.
+        edges_as_positional : Optional[bool]
+            Whether ``edges`` are positional indices into ``vertices``. The
+            default, None, infers it as described above: positional exactly
+            when ``vertex_index`` is supplied. Pass it explicitly when the two
+            spaces overlap -- a ``vertex_index`` whose values are also valid
+            positions cannot be told apart any other way.
         linkage : Optional[Link]
             The linkage information for the skeleton. Typically, you will define the source vertices for the skeleton if using a graph-to-skeleton mapping.
         spatial_columns: Optional[list] = None
@@ -512,6 +527,7 @@ class Cell:
                     name=self.SKEL_LN,
                     vertices=vertices,
                     edges=edges,
+                    edges_as_positional=edges_as_positional,
                     features=features,
                     root=root,
                     morphsync=self._morphsync,
@@ -531,6 +547,7 @@ class Cell:
         features: Optional[Union[dict, pd.DataFrame]] = None,
         *,
         vertex_index: Optional[Union[str, np.ndarray]] = None,
+        edges_as_positional: Optional[bool] = None,
         spatial_columns: Optional[list] = None,
         linkage: Optional[Link] = None,
     ) -> Self:
@@ -554,6 +571,12 @@ class Cell:
             Vertex indices to label the graph's vertices by: either the name of
             a column in ``vertices``, or an array with one value per vertex.
             Supplying this changes how ``edges`` are read -- see above.
+        edges_as_positional : Optional[bool]
+            Whether ``edges`` are positional indices into ``vertices``. The
+            default, None, infers it as described above: positional exactly
+            when ``vertex_index`` is supplied. Pass it explicitly when the two
+            spaces overlap -- a ``vertex_index`` whose values are also valid
+            positions cannot be told apart any other way.
         spatial_columns: Optional[list] = None
             The spatial columns for the graph, if vertices are a dataframe.
 
@@ -575,6 +598,7 @@ class Cell:
                     name=self.GRAPH_LN,
                     vertices=vertices,
                     edges=edges,
+                    edges_as_positional=edges_as_positional,
                     features=features,
                     morphsync=self._morphsync,
                     spatial_columns=spatial_columns,
