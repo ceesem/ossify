@@ -50,7 +50,11 @@ mapped = cell.graph.map_features_to_layer(
     layer='skeleton',
     agg={'size_nm3': 'sum', 'max_dt_nm': 'mean'}
 )
-cell.skeleton.add_feature(mapped)
+# `size_nm3` was added by the example above, and each feature name may only be
+# used once, so rename the mapped columns to say how they were aggregated.
+cell.skeleton.add_feature(
+    mapped.rename(columns={"size_nm3": "size_nm3_sum", "max_dt_nm": "max_dt_nm_mean"})
+)
 ```
 
 ## Mapping Indices Between Layers
@@ -121,7 +125,12 @@ Links are created automatically when you use `load_cell_from_client`. The databa
 You can specify a link when adding a layer or annotation:
 
 ```python
+import numpy as np
 from ossify import Link
+
+# Two synapse locations, and the skeleton vertex each one belongs to.
+synapse_data = cell.skeleton.vertices[[10, 20]]
+skeleton_vertex_ids = cell.skeleton.vertex_index[[10, 20]]
 
 # Add annotations with an explicit link to the skeleton
 cell.add_point_annotations(
@@ -141,6 +150,14 @@ cell.add_point_annotations(
 If your annotations are defined by their link to another layer (e.g., you know which skeleton vertex each synapse belongs to, but not its exact coordinates), you can derive the coordinates from the link:
 
 ```python
+# These points have no coordinates of their own, only a link and some
+# per-point features. `vertices` must be a DataFrame here; its spatial columns
+# are filled in from the target layer.
+import pandas as pd
+
+skeleton_ids = cell.skeleton.vertex_index[[30, 40, 50]]
+annotation_data = pd.DataFrame({"score": [0.7, 0.8, 0.9]})
+
 cell.add_point_annotations(
     name="linked_points",
     vertices=annotation_data,
@@ -184,8 +201,11 @@ print(f"Max pre-synapses on one vertex: {counts.max()}")
 
 # Or use the built-in aggregation for skeleton vertices that
 # accounts for cable length around each vertex
+# `distance_threshold` is required: it sets the cable distance, in the
+# skeleton's units, over which each vertex collects nearby annotations.
 pre_density = cell.skeleton.map_annotations_to_feature(
     annotation='pre_syn',
+    distance_threshold=3000,
     agg='density'
 )
 cell.skeleton.add_feature(pre_density, 'pre_syn_density')

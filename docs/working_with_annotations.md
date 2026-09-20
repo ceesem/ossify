@@ -16,6 +16,30 @@ Annotations (`PointCloudLayer` in annotation context) contain:
 - **Linkage**: Optional connections to morphological layers
 - **Sparse nature**: Represent discrete events, not continuous morphology
 
+## Setup
+
+The snippets below use a small cell with a skeleton and a linked set of
+synapse annotations:
+
+```python
+import numpy as np
+import ossify
+from ossify import Link
+
+cell = ossify.Cell(name="annotated_cell")
+cell.add_skeleton(
+    vertices=np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0]]),
+    edges=np.array([[0, 1], [1, 2]]),
+    root=0,
+)
+cell.add_point_annotations(
+    name="synapses",
+    vertices=np.array([[0.5, 0.1, 0.0], [1.5, -0.1, 0.0], [0.8, 0.2, 0.0]]),
+    spatial_columns=["x", "y", "z"],
+    linkage=Link(mapping=np.array([0, 1, 0]), target="skeleton"),
+)
+```
+
 ## Inspecting Annotations
 
 ### Quick Overview with `describe()`
@@ -88,10 +112,13 @@ synapse_locations = np.array([
     [0.8, 0.2, 0.0],   # Between vertices
 ])
 
+# `linkage` records which skeleton vertex each synapse sits on. Without it the
+# annotation cannot be mapped to the skeleton or follow a mask.
 cell.add_point_annotations(
     name="synapses",
     vertices=synapse_locations,
-    spatial_columns=["x", "y", "z"]
+    spatial_columns=["x", "y", "z"],
+    linkage=Link(mapping=np.array([0, 1, 0]), target="skeleton"),
 )
 
 print(f"Added {len(cell.annotations.synapses.vertices)} synapses")
@@ -117,7 +144,8 @@ synapse_data = pd.DataFrame({
 cell.add_point_annotations(
     name="synapses_detailed",
     vertices=synapse_data,
-    spatial_columns=['x', 'y', 'z']
+    spatial_columns=['x', 'y', 'z'],
+    linkage=Link(mapping=np.array([0, 1, 0]), target="skeleton"),
 )
 
 # Access annotation metadata
@@ -135,15 +163,17 @@ pre_syn_locations = np.array([[0.2, 0.1, 0.0], [1.8, -0.1, 0.0]])
 cell.add_point_annotations(
     name="pre_syn",
     vertices=pre_syn_locations,
-    features={"strength": [0.8, 0.6]}
+    features={"strength": [0.8, 0.6]},
+    linkage=Link(mapping=np.array([0, 2]), target="skeleton"),
 )
 
 # Postsynaptic sites  
 post_syn_locations = np.array([[0.7, 0.2, 0.0], [1.3, 0.1, 0.0]])
 cell.add_point_annotations(
-    name="post_syn", 
+    name="post_syn",
     vertices=post_syn_locations,
-    features={"receptor_type": ["AMPA", "GABA"]}
+    features={"receptor_type": ["AMPA", "GABA"]},
+    linkage=Link(mapping=np.array([0, 1]), target="skeleton"),
 )
 
 # Dendritic spines
@@ -154,7 +184,8 @@ cell.add_point_annotations(
     features={
         "spine_type": ["mushroom", "thin", "stubby"],
         "volume": [0.05, 0.02, 0.03]
-    }
+    },
+    linkage=Link(mapping=np.array([0, 0, 1]), target="skeleton"),
 )
 
 print(f"All annotations: {cell.annotations.names}")
@@ -183,23 +214,37 @@ cell.add_point_annotations(
 )
 ```
 
-### Automatic Spatial Linkage
+### Linking by Proximity
+
+There is no automatic distance-based linkage: a `Link` carries an explicit
+mapping. To link by proximity, find the nearest target vertex yourself with the
+layer's KD-tree and pass the result as the mapping.
 
 ```python
-# Let ossify automatically find nearest skeleton vertices
+# Nearest skeleton vertex for each annotation
+_, nearest = cell.skeleton.kdtree.query(synapse_locations)
+
 cell.add_point_annotations(
     name="auto_linked_synapses",
     vertices=synapse_locations,
-    linkage=Link(
-        target="skeleton",
-        distance_threshold=0.5      # Max distance to link
-    ),
-    vertices_from_linkage=True     # Use target layer coordinates
+    spatial_columns=["x", "y", "z"],
+    linkage=Link(mapping=nearest, target="skeleton"),
 )
 
-# The annotation coordinates will be set to the linked skeleton vertices
-linked = cell.annotations.auto_linked_synapses
-print(f"Linked annotation coordinates: {linked.vertices}")
+# Snap the annotation coordinates onto the linked skeleton vertices by letting
+# the link supply them. `vertices` must then be a DataFrame of features only.
+import pandas as pd
+
+cell.add_point_annotations(
+    name="snapped_synapses",
+    vertices=pd.DataFrame({"confidence": [0.9, 0.8, 0.7]}),
+    linkage=Link(
+        mapping=cell.skeleton.vertex_index[nearest],
+        target="skeleton",
+        map_value_is_index=True,
+    ),
+    vertices_from_linkage=True,
+)
 ```
 
 ## Working with Annotation Data
@@ -231,7 +276,10 @@ types = synapses.get_feature('synapse_type')
 high_confidence = synapses.get_feature('confidence') > 0.9
 high_conf_annotations = synapses.apply_mask(high_confidence, as_positional=True)
 
-print(f"High confidence annotations: {high_conf_annotations.n_vertices}")
+print(
+    "High confidence annotations: "
+    f"{high_conf_annotations.annotations.synapses_detailed.n_vertices}"
+)
 
 # Filter by type
 excitatory_mask = synapses.get_feature('synapse_type') == 'excitatory'
@@ -280,8 +328,10 @@ if cell.skeleton is not None:
         validate=False
     )
     
-    # Add as skeleton feature
-    cell.skeleton.add_feature(synapse_counts, name="synapse_count")
+    # Add as skeleton feature. With agg="count" this comes back as a
+    # one-column DataFrame already named `synapses_count`, so passing `name`
+    # here would just be ignored.
+    cell.skeleton.add_feature(synapse_counts)
     
     # Aggregate by type
     type_counts = cell.skeleton.map_annotations_to_feature(
@@ -339,11 +389,12 @@ cell.add_point_annotations(
 cell.remove_annotation("additional_spines")
 print(f"Remaining annotations: {cell.annotations.names}")
 
-# Clear all annotations
-original_names = cell.annotations.names.copy()
-for name in original_names:
-    cell.remove_annotation(name)
-print(f"Annotations after clearing: {cell.annotations.names}")
+# Clear all annotations. Do this on a copy, so the sections below still have
+# the annotations created earlier.
+scratch = cell.copy()
+for name in list(scratch.annotations.names):
+    scratch.remove_annotation(name)
+print(f"Annotations after clearing: {scratch.annotations.names}")
 ```
 
 ### Copying and Transforming Annotations
@@ -372,9 +423,7 @@ print(f"Transformed Z coords: {transformed_synapses.vertices[:, 2]}")
 ### Density Analysis
 
 ```python
-# Recreate detailed synapses for analysis
-cell.add_point_annotations("synapses", vertices=synapse_data)
-
+# `synapses` was created and linked above; reuse it rather than re-adding it.
 # Calculate annotation density along skeleton
 if cell.skeleton is not None:
     # Density per unit length
@@ -397,21 +446,22 @@ if cell.skeleton is not None:
 ### Spatial Clustering
 
 ```python
-# Find clusters of annotations
-from sklearn.cluster import DBSCAN
+# Find clusters of annotations. scipy is already an ossify dependency; the
+# same idea works with sklearn's DBSCAN if you have it.
+from scipy.cluster.hierarchy import fcluster, linkage as hierarchical_linkage
 
 coordinates = cell.annotations.synapses.vertices
-clustering = DBSCAN(eps=0.3, min_samples=2).fit(coordinates)
-cluster_features = clustering.features_
+cluster_features = fcluster(
+    hierarchical_linkage(coordinates, method="single"),
+    t=0.3,               # Merge points closer than this
+    criterion="distance",
+)
 
 # Add cluster information
 cell.annotations.synapses.add_feature(cluster_features, name="cluster")
 
-# Analyze clusters
-n_clusters = len(set(cluster_features)) - (1 if -1 in cluster_features else 0)
-n_noise = list(cluster_features).count(-1)
-print(f"Number of clusters: {n_clusters}")
-print(f"Number of noise points: {n_noise}")
+n_clusters = len(np.unique(cluster_features))
+print(f"Found {n_clusters} clusters")
 ```
 
 ### Co-localization Analysis

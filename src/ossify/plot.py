@@ -981,7 +981,31 @@ def plot_points(
             # Single color string
             scatter_kws["color"] = colors
         else:
-            scatter_kws["c"] = colors
+            colors_arr = np.asarray(colors)
+            single_rgba = (
+                colors_arr.ndim == 1
+                and colors_arr.shape[0] in (3, 4)
+                and np.issubdtype(colors_arr.dtype, np.number)
+                and colors_arr.shape[0] != len(points_proj)
+            )
+            if single_rgba:
+                # One bare RGB/RGBA tuple means "this exact color", but as `c`
+                # it is ambiguous with one scalar value per point, and
+                # matplotlib warns. A 2-D single row is its documented way to
+                # say the former. Reached via root_marker, whose color is read
+                # off the root vertex as a single RGBA.
+                colors_arr = colors_arr.reshape(1, -1)
+            if (
+                colors_arr.ndim == 2
+                and colors_arr.shape[1] in (3, 4)
+                and np.issubdtype(colors_arr.dtype, np.number)
+            ):
+                # Explicit RGB/RGBA values are not colormapped, so a cmap set
+                # from a string palette above would be silently ignored --
+                # matplotlib says so out loud. Drop it and its norm.
+                for key in ("cmap", "vmin", "vmax"):
+                    scatter_kws.pop(key, None)
+            scatter_kws["c"] = colors_arr
 
     ax.scatter(
         x=points_proj[:, 0],

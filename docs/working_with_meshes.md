@@ -12,6 +12,33 @@ A `MeshLayer` contains:
 - **Faces**: Triangular faces connecting vertices (as indices)  
 - **Surface properties**: Face connectivity, area calculations, trimesh integration
 
+## Setup
+
+The example neuron used elsewhere in the guide ships without a mesh, so the
+snippets below work on a small tetrahedron built here. The `describe()` output
+shown next is from a real mesh, for illustration.
+
+```python
+import numpy as np
+import ossify
+
+vertices = np.array([
+    [0, 0, 0],
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1],
+])
+faces = np.array([
+    [0, 1, 2],
+    [0, 1, 3],
+    [0, 2, 3],
+    [1, 2, 3],
+])
+
+cell = ossify.Cell(name="mesh_example")
+cell.add_mesh(vertices=vertices, faces=faces)
+```
+
 ## Inspecting Mesh Layers
 
 ### Quick Overview with `describe()`
@@ -77,10 +104,12 @@ print(f"Mesh has {cell.mesh.n_vertices} vertices and {len(cell.mesh.faces)} face
 ### Mesh with features
 
 ```python
-# Add vertex features during creation
+# Add vertex features during creation. A Cell holds at most one mesh, so build
+# a fresh Cell rather than adding a second one.
 region_features = np.array([0, 0, 1, 1])  # Two regions
 
-cell.add_mesh(
+featured = ossify.Cell(name="mesh_with_features")
+featured.add_mesh(
     vertices=vertices,
     faces=faces,
     features={"region": region_features}

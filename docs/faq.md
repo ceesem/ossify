@@ -159,7 +159,7 @@ with cell.mask_context("skeleton", quality > 0.8) as clean_cell:
     clean_cell.skeleton.add_feature(strahler, "strahler")
     
     # Visualize
-    fig = ossify.plot_cell_2d(clean_cell, color="strahler")
+    fig = ossify.plot.plot_cell_2d(clean_cell, color="strahler")
     
     # Measure
     cable_length = clean_cell.skeleton.cable_length()
@@ -249,7 +249,7 @@ Plotting support for other layer types is planned for future releases.
 # Publication workflow
 display_cell = cell.transform(lambda x: x / 1000)  # Convert to μm
 
-fig, ax = ossify.single_panel_figure(
+fig, ax = ossify.plot.single_panel_figure(
     data_bounds_min=display_cell.skeleton.bbox[0],
     data_bounds_max=display_cell.skeleton.bbox[1],
     units_per_inch=50,  # 50 μm per inch
@@ -257,7 +257,7 @@ fig, ax = ossify.single_panel_figure(
     dpi=300
 )
 
-ossify.plot_morphology_2d(
+ossify.plot.plot_morphology_2d(
     display_cell,
     color="compartment",
     palette={1: 'navy', 2: 'tomato', 3: 'forestgreen'},
@@ -368,9 +368,11 @@ if hasattr(cell.annotations, 'pre_syn'):
 ```python
 # Analyze individual paths
 for path in cell.skeleton.cover_paths:
-    path_mask = cell.skeleton.vertex_index.isin(path)
-    
-    with cell.skeleton.mask_context(path_mask) as path_skeleton:
+    path_mask = np.isin(cell.skeleton.vertex_index, path)
+
+    # mask_context on a linked layer yields a Cell, so reach through it.
+    with cell.skeleton.mask_context(path_mask) as path_cell:
+        path_skeleton = path_cell.skeleton
         path_length = path_skeleton.cable_length()
         path_synapses = count_synapses_on_path(path_skeleton)
         
@@ -386,7 +388,7 @@ Masking removes vertices, and edges are automatically filtered to maintain valid
 ```python
 # Check edge preservation
 print(f"Original: {skeleton.n_vertices} vertices, {len(skeleton.edges)} edges")
-filtered = skeleton.apply_mask(mask, as_positional=True)
+filtered = skeleton.apply_mask(mask, as_positional=True).skeleton
 print(f"Filtered: {filtered.n_vertices} vertices, {len(filtered.edges)} edges")
 
 # Edges are remapped to new vertex indices

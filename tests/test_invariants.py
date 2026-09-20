@@ -477,6 +477,66 @@ class TestMaskedTraversalOrder:
             assert np.all(np.diff(hops[seg]) < 0)
 
 
+class TestEdgeOrientationIndependence:
+    """Building a skeleton must not depend on which way round the caller wrote
+    its edges.
+
+    ``_apply_root_to_edges`` reorients edges to [child, parent] at construction,
+    but the cached csgraph had already been built from the original
+    orientation, so it disagreed with ``edges_positional`` afterwards. Anything
+    read off the directed graph was then computed from a stale graph: a
+    branching skeleton written [parent, child] reported no branch points and a
+    single end point.
+    """
+
+    VERTS = np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0], [1, 1, 0], [1, -1, 0]])
+    IDS = np.array([100, 101, 102, 103, 104])
+
+    def _skel(self, edges, spatial_columns=("x", "y", "z")):
+        df = pd.DataFrame(self.VERTS, columns=list(spatial_columns), index=self.IDS)
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=df,
+            edges=edges,
+            spatial_columns=list(spatial_columns),
+            root=100,
+        )
+        return cell.skeleton
+
+    @staticmethod
+    def _child_parent():
+        return np.array([[101, 100], [102, 101], [103, 101], [104, 101]])
+
+    @staticmethod
+    def _parent_child():
+        return np.array([[100, 101], [101, 102], [101, 103], [101, 104]])
+
+    def test_topology_matches_either_orientation(self):
+        a = self._skel(self._child_parent())
+        b = self._skel(self._parent_child())
+        np.testing.assert_array_equal(a.branch_points, b.branch_points)
+        np.testing.assert_array_equal(a.end_points, b.end_points)
+        np.testing.assert_array_equal(a.parent_node_array, b.parent_node_array)
+        assert len(a.segments) == len(b.segments)
+
+    def test_topology_is_actually_correct(self):
+        # 101 has three children, so it is the one branch point and 102/103/104
+        # are the tips -- whichever way the edges were written.
+        for edges in (self._child_parent(), self._parent_child()):
+            skel = self._skel(edges)
+            np.testing.assert_array_equal(skel.branch_points, [101])
+            np.testing.assert_array_equal(np.sort(skel.end_points), [102, 103, 104])
+
+    def test_cached_graph_agrees_with_edges(self):
+        # The invariant the bug violated: the cached graph and the stored edges
+        # must describe the same directed tree.
+        for edges in (self._child_parent(), self._parent_child()):
+            skel = self._skel(edges)
+            from_cache = set(map(tuple, np.argwhere(skel.csgraph_binary.toarray())))
+            from_edges = set(map(tuple, skel.edges_positional))
+            assert from_cache == from_edges
+
+
 class TestPointCloudDistanceToRoot:
     """``PointCloudLayer.distance_to_root`` is the same family of accessor and
     owes the same guarantee: all equivalent call forms agree."""

@@ -15,6 +15,18 @@ A `GraphLayer` contains:
 - **Edges**: Connections between vertices (can form cycles)
 - **Network properties**: Connectivity analysis, distance calculations between arbitrary vertices
 
+## Setup
+
+The examples on this page use the same example neuron as
+[Getting Started](getting_started.md):
+
+```python
+import numpy as np
+import ossify
+
+cell = ossify.load_cell('https://github.com/ceesem/ossify/raw/refs/heads/main/864691135336055529.osy')
+```
+
 ## Inspecting Graph Layers
 
 ### Quick Overview with `describe()`
@@ -79,10 +91,12 @@ print(f"Graph has {cell.graph.n_vertices} vertices and {len(cell.graph.edges)} e
 ### Graph with features
 
 ```python
-# Add vertex features during creation
+# Add vertex features during creation. A Cell holds at most one graph, so
+# build a fresh Cell rather than adding a second one.
 compartment_features = np.array([0, 1, 1, 0])  # Different compartments
 
-cell.add_graph(
+featured = ossify.Cell(name="graph_with_features")
+featured.add_graph(
     vertices=vertices,
     edges=edges,
     features={"compartment": compartment_features}
@@ -104,7 +118,8 @@ edges = np.array([
     # No edges between components
 ])
 
-cell.add_graph(vertices=vertices, edges=edges)
+multi_component = ossify.Cell(name="graph_components")
+multi_component.add_graph(vertices=vertices, edges=edges)
 ```
 
 ## Graph-Specific Features
@@ -234,15 +249,18 @@ l2_data = pd.DataFrame({
     'size_nm3': [1e6, 1.5e6, 0.8e6, 1.2e6, 0.9e6]
 })
 
-# L2 edges (fewer edges than complete graph)
+# L2 edges. When `vertex_index` names a column, edges are given as *positional*
+# indices into the vertex table -- ossify remaps them onto the vertex index for
+# you -- so these are rows 0-4, not l2_id values.
 l2_edges = np.array([
-    [100, 101],
-    [101, 102], 
-    [101, 103],
-    [103, 104]
+    [0, 1],  # 100 -> 101
+    [1, 2],  # 101 -> 102
+    [1, 3],  # 101 -> 103
+    [3, 4],  # 103 -> 104
 ])
 
-cell.add_graph(
+l2_cell = ossify.Cell(name="l2_graph_example")
+l2_cell.add_graph(
     vertices=l2_data,
     edges=l2_edges,
     spatial_columns=['rep_coord_nm_x', 'rep_coord_nm_y', 'rep_coord_nm_z'],
@@ -250,7 +268,7 @@ cell.add_graph(
     features={'volume': 'size_nm3'}
 )
 
-print(f"L2 graph vertex indices: {cell.graph.vertex_index}")
+print(f"L2 graph vertex indices: {l2_cell.graph.vertex_index}")
 ```
 
 ## Graph Analysis Patterns
@@ -259,7 +277,7 @@ print(f"L2 graph vertex indices: {cell.graph.vertex_index}")
 
 ```python
 # Find isolated vertices (no edges)
-degrees = np.array([len(nx.neighbors(G, v)) for v in G.nodes()])
+degrees = np.array([G.degree(v) for v in G.nodes()])
 isolated_vertices = graph.vertex_index[degrees == 0]
 print(f"Isolated vertices: {isolated_vertices}")
 
@@ -274,16 +292,17 @@ print(f"Hub vertices: {hub_vertices}")
 ```python
 # Extract subgraph around specific vertices
 center_vertices = graph.vertex_index[:3]
-subgraph_mask = graph.vertex_index.isin(center_vertices)
+subgraph_mask = np.isin(graph.vertex_index, center_vertices)
 
 # Expand to include neighbors
 for center in center_vertices:
     neighbors = list(G.neighbors(center))
-    neighbor_mask = graph.vertex_index.isin(neighbors)
+    neighbor_mask = np.isin(graph.vertex_index, neighbors)
     subgraph_mask = subgraph_mask | neighbor_mask
 
 # Create masked subgraph
-subgraph = graph.apply_mask(subgraph_mask, as_positional=False)
+# Masking a layer that belongs to a Cell returns a Cell, so reach through it.
+subgraph = graph.apply_mask(subgraph_mask, as_positional=False).graph
 print(f"Subgraph has {subgraph.n_vertices} vertices")
 ```
 

@@ -1856,6 +1856,96 @@ class TestScalarVertexArguments:
         assert np.asarray(d).item() == pytest.approx(4.0)
 
 
+class TestMajorityAggregation:
+    """ "majority" is ossify's own reducer, not a pandas one. It was translated
+    only when it was the entire ``agg`` argument, so the per-feature dict form
+    -- the documented way to mix aggregations -- reached pandas untouched and
+    raised AttributeError."""
+
+    def _cell(self, spatial_columns):
+        sv = np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]])
+        se = np.array([[1, 0], [2, 1], [3, 2]])
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=sv, edges=se, spatial_columns=spatial_columns, root=0
+        )
+        mv = np.repeat(sv, 2, axis=0)
+        mv[:, 1] += 0.1
+        cell.add_mesh(
+            vertices=mv,
+            faces=np.array([[0, 1, 2], [2, 3, 4], [4, 5, 6]]),
+            spatial_columns=spatial_columns,
+            linkage=Link(mapping=np.repeat(np.arange(4), 2), target="skeleton"),
+        )
+        cell.skeleton.add_feature(np.array([0.9, 0.8, 0.7, 0.6]), name="quality")
+        cell.skeleton.add_feature(np.array([0, 0, 1, 1]), name="region")
+        return cell
+
+    def test_majority_inside_a_per_feature_dict(self, spatial_columns):
+        cell = self._cell(spatial_columns)
+        out = cell.skeleton.map_features_to_layer(
+            features=["quality", "region"],
+            layer="mesh",
+            agg={"quality": "mean", "region": "majority"},
+        )
+        assert list(out.columns) == ["quality", "region"]
+        assert len(out) == cell.mesh.n_vertices
+        # Two mesh vertices per skeleton vertex, so values simply broadcast.
+        np.testing.assert_array_equal(
+            out["region"].to_numpy(), [0, 0, 0, 0, 1, 1, 1, 1]
+        )
+
+    def test_majority_as_the_whole_agg_still_works(self, spatial_columns):
+        cell = self._cell(spatial_columns)
+        out = cell.skeleton.map_features_to_layer(
+            features="region", layer="mesh", agg="majority"
+        )
+        np.testing.assert_array_equal(np.asarray(out).ravel(), [0, 0, 0, 0, 1, 1, 1, 1])
+
+
+class TestCoverPathsSpecific:
+    """``cover_paths_specific`` called a graph_functions name that does not
+    exist, so every call raised AttributeError. It had no test coverage."""
+
+    def _skel(self, spatial_columns):
+        # Y-shape: 100 -> 101 -> {102 -> 104, 103}
+        verts = np.array([[0.0, 0, 0], [1, 0, 0], [2, 1, 0], [2, -1, 0], [3, 1, 0]])
+        idx = np.array([100, 101, 102, 103, 104])
+        df = pd.DataFrame(verts, columns=spatial_columns, index=idx)
+        edges = np.array([[101, 100], [102, 101], [103, 101], [104, 102]])
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=df, edges=edges, spatial_columns=spatial_columns, root=100
+        )
+        return cell.skeleton
+
+    def test_returns_a_path_per_source(self, spatial_columns):
+        skel = self._skel(spatial_columns)
+        paths = skel.cover_paths_specific(skel.end_points)
+        assert len(paths) == len(skel.end_points)
+        # Vertex-index space by default, and each path ends at the root.
+        for path in paths:
+            assert np.all(np.isin(path, skel.vertex_index))
+        assert any(path[-1] == skel.root for path in paths)
+
+    def test_positional_form_matches_index_form(self, spatial_columns):
+        skel = self._skel(spatial_columns)
+        by_index = skel.cover_paths_specific(skel.end_points)
+        by_pos = skel.cover_paths_specific(
+            skel.end_points_positional, as_positional=True
+        )
+        assert len(by_index) == len(by_pos)
+        for ip, pp in zip(by_index, by_pos):
+            np.testing.assert_array_equal(ip, skel.vertex_index[pp])
+
+    def test_does_not_clobber_the_cover_paths_cache(self, spatial_columns):
+        skel = self._skel(spatial_columns)
+        full = [p.copy() for p in skel.cover_paths_positional]
+        skel.cover_paths_specific(skel.end_points[:1])
+        for before, after in zip(full, skel.cover_paths_positional):
+            np.testing.assert_array_equal(before, after)
+
+
 class TestMaskContextTeardown:
     """``mask_context`` yields a scoped temporary that must be torn down when
     the block exits, so the masked copy is reclaimed promptly rather than

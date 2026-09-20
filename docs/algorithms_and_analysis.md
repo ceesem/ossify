@@ -65,23 +65,15 @@ print(f"Fine process vertices: {len(fine_process_vertices)}")
 Classify neuron compartments as axon or dendrite based on synapse distributions:
 
 ```python
-# Add synapse annotations for classification
-pre_syn_locations = np.array([
-    [1.8, 0.1, 0.0],   # Near end of one branch
-    [1.9, 1.0, 0.0],   # Near another end
-])
-
-post_syn_locations = np.array([
-    [0.2, 0.1, 0.0],   # Near root
-    [0.8, 0.1, 0.0],   # Middle region
-    [1.1, -0.8, 0.0], # Another branch
-])
-
-cell.add_point_annotations("pre_syn", vertices=pre_syn_locations)
-cell.add_point_annotations("post_syn", vertices=post_syn_locations)
+# The example cell already carries `pre_syn` and `post_syn` annotations, linked
+# to the skeleton. These algorithms need that link: it is what tells them which
+# skeleton vertex each synapse sits on.
+print(f"Annotations: {cell.annotations.names}")
+print(f"Pre-synaptic sites: {cell.annotations.pre_syn.n_vertices}")
+print(f"Post-synaptic sites: {cell.annotations.post_syn.n_vertices}")
 
 # Classify compartments using synapse flow
-is_axon = ossify.label_axon_from_synapse_flow(
+is_axon = ossify.algorithms.label_axon_from_synapse_flow(
     cell=cell,
     pre_syn="pre_syn",           # Presynaptic annotation name
     post_syn="post_syn",         # Postsynaptic annotation name
@@ -89,7 +81,6 @@ is_axon = ossify.label_axon_from_synapse_flow(
     ntimes=1,                    # Number of split iterations
     return_segregation_index=False,
     segregation_index_threshold=0.0,  # Minimum segregation to accept split
-    as_postitional=False         # Use vertex indices
 )
 
 # Add classification as feature
@@ -104,14 +95,16 @@ print(f"Dendrite vertices: {len(dendrite_vertices)}")
 
 # Convert to compartment features (0=dendrite, 1=axon)
 compartment_features = is_axon.astype(int)
-cell.skeleton.add_feature(compartment_features, name="compartment")
+# The example cell already ships a `compartment` feature, and a name may only
+# be used once, so store the freshly computed one under its own name.
+cell.skeleton.add_feature(compartment_features, name="compartment_from_flow")
 ```
 
 ### Advanced Synapse Flow Classification
 
 ```python
 # Multiple iterations for better classification
-is_axon_multi, segregation_idx = ossify.label_axon_from_synapse_flow(
+is_axon_multi, segregation_idx = ossify.algorithms.label_axon_from_synapse_flow(
     cell=cell,
     pre_syn="pre_syn",
     post_syn="post_syn",
@@ -135,7 +128,7 @@ Alternative classification method using spectral analysis:
 
 ```python
 # Spectral split method (smoother boundaries)
-is_axon_spectral = ossify.label_axon_from_spectral_split(
+is_axon_spectral = ossify.algorithms.label_axon_from_spectral_split(
     cell=cell,
     pre_syn="pre_syn",
     post_syn="post_syn",
@@ -175,7 +168,7 @@ post_syn_indices = cell.annotations.post_syn.map_index_to_layer(
 )
 
 # Compute synapse betweenness
-syn_betweenness = ossify.synapse_betweenness(
+syn_betweenness = ossify.algorithms.synapse_betweenness(
     skel=cell.skeleton,
     pre_inds=pre_syn_indices,
     post_inds=post_syn_indices
@@ -199,32 +192,20 @@ Quantify how well pre- and post-synaptic sites are segregated:
 # Count synapses by compartment
 axon_mask = cell.skeleton.get_feature("is_axon")
 
-# Count pre/post synapses in each compartment
-axon_pre = len(cell.annotations.pre_syn.map_index_to_layer("skeleton")[
-    cell.skeleton.vertex_index[axon_mask]
-])
-axon_post = len(cell.annotations.post_syn.map_index_to_layer("skeleton")[
-    cell.skeleton.vertex_index[axon_mask]
-])
+# `map_index_to_layer` gives the skeleton vertex each synapse sits on, so count
+# how many of those fall on axon vertices. Membership, not indexing: these are
+# vertex ids, not positions into the array.
+pre_on_skeleton = cell.annotations.pre_syn.map_index_to_layer("skeleton")
+post_on_skeleton = cell.annotations.post_syn.map_index_to_layer("skeleton")
 
-dendrite_pre = len(cell.annotations.pre_syn.map_index_to_layer("skeleton")[
-    cell.skeleton.vertex_index[~axon_mask]
-])
-dendrite_post = len(cell.annotations.post_syn.map_index_to_layer("skeleton")[
-    cell.skeleton.vertex_index[~axon_mask]
-])
+axon_ids = cell.skeleton.vertex_index[axon_mask]
+dendrite_ids = cell.skeleton.vertex_index[~axon_mask]
 
-# Calculate segregation index
-segregation = ossify.segregation_index(
-    axon_pre=axon_pre,
-    axon_post=axon_post,
-    dendrite_pre=dendrite_pre,
-    dendrite_post=dendrite_post
-)
+axon_pre = int(np.isin(pre_on_skeleton, axon_ids).sum())
+axon_post = int(np.isin(post_on_skeleton, axon_ids).sum())
+dendrite_pre = int(np.isin(pre_on_skeleton, dendrite_ids).sum())
+dendrite_post = int(np.isin(post_on_skeleton, dendrite_ids).sum())
 
-print(f"Segregation index: {segregation:.3f}")
-print(f"Axon: {axon_pre} pre, {axon_post} post")
-print(f"Dendrite: {dendrite_pre} pre, {dendrite_post} post")
 ```
 
 ## feature Smoothing
@@ -242,7 +223,7 @@ noisy_features[noise_indices] = 1 - noisy_features[noise_indices]
 cell.skeleton.add_feature(noisy_features, name="noisy_compartment")
 
 # Smooth the features
-smoothed_features = ossify.smooth_features(
+smoothed_features = ossify.algorithms.smooth_features(
     cell=cell.skeleton,
     feature=noisy_features,
     alpha=0.90  # Smoothing strength (0-1, higher = more smoothing)
@@ -395,7 +376,7 @@ def characterize_morphology(cell):
     results['total_cable_length'] = skeleton.cable_length()
     
     # Strahler analysis
-    strahler = ossify.strahler_number(skeleton)
+    strahler = ossify.algorithms.strahler_number(skeleton)
     results['max_strahler_order'] = np.max(strahler)
     results['strahler_complexity'] = len(np.unique(strahler))
     
@@ -435,12 +416,15 @@ def analyze_synapse_distribution(cell):
         return
     
     # Map synapses to skeleton
+    # Returns a one-column DataFrame indexed by vertex id; take the values so
+    # the arithmetic below is plain elementwise numpy. `distance_threshold` is
+    # in the skeleton's own units -- nanometres for this cell.
     pre_counts = cell.skeleton.map_annotations_to_feature(
-        "pre_syn", distance_threshold=0.5, agg="count"
-    )
+        "pre_syn", distance_threshold=3000, agg="count"
+    ).to_numpy().ravel()
     post_counts = cell.skeleton.map_annotations_to_feature(
-        "post_syn", distance_threshold=0.5, agg="count"
-    )
+        "post_syn", distance_threshold=3000, agg="count"
+    ).to_numpy().ravel()
     
     # Synapse density
     cable_lengths = cell.skeleton.half_edge_length
@@ -468,15 +452,15 @@ analyze_synapse_distribution(cell)
 ## Key Algorithm Functions
 
 ### Tree Analysis
-- `ossify.strahler_number(cell)` - Compute Strahler numbers for branching complexity
-- `ossify.smooth_features(cell, feature, alpha=0.90)` - Smooth features along skeleton topology
+- `ossify.algorithms.strahler_number(cell)` - Compute Strahler numbers for branching complexity
+- `ossify.algorithms.smooth_features(cell, feature, alpha=0.90)` - Smooth features along skeleton topology
 
 ### Compartment Classification
-- `ossify.label_axon_from_synapse_flow(cell, pre_syn, post_syn, extend_feature_to_segment=False, ntimes=1, ...)` - Classify using synapse flow
-- `ossify.label_axon_from_spectral_split(cell, pre_syn, post_syn, aggregation_distance=1, smoothing_alpha=0.99, ...)` - Classify using spectral method
+- `ossify.algorithms.label_axon_from_synapse_flow(cell, pre_syn, post_syn, extend_feature_to_segment=False, ntimes=1, ...)` - Classify using synapse flow
+- `ossify.algorithms.label_axon_from_spectral_split(cell, pre_syn, post_syn, aggregation_distance=1, smoothing_alpha=0.99, ...)` - Classify using spectral method
 
 ### Synapse Analysis
-- `ossify.synapse_betweenness(skel, pre_inds, post_inds)` - Compute synapse traffic through vertices
+- `ossify.algorithms.synapse_betweenness(skel, pre_inds, post_inds)` - Compute synapse traffic through vertices
 - `ossify.segregation_index(axon_pre, axon_post, dendrite_pre, dendrite_post)` - Quantify compartment segregation
 
 ### Morphological Measurements
