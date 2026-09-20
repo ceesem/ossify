@@ -14,30 +14,25 @@ A `MeshLayer` contains:
 
 ## Setup
 
-The example neuron used elsewhere in the guide ships without a mesh, so the
-snippets below work on a small tetrahedron built here. The `describe()` output
-shown next is from a real mesh, for illustration.
+The examples on this page use a four-layer version of the example neuron --
+mesh, graph, skeleton and synapse annotations, all linked:
 
 ```python
 import numpy as np
 import ossify
 
-vertices = np.array([
-    [0, 0, 0],
-    [1, 0, 0],
-    [0, 1, 0],
-    [0, 0, 1],
-])
-faces = np.array([
-    [0, 1, 2],
-    [0, 1, 3],
-    [0, 2, 3],
-    [1, 2, 3],
-])
+cell = ossify.load_cell('https://github.com/ceesem/ossify/raw/refs/heads/main/864691135336055529_full.osy')
 
-cell = ossify.Cell(name="mesh_example")
-cell.add_mesh(vertices=vertices, faces=faces)
+print(f"Mesh: {cell.mesh.n_vertices:,} vertices, {len(cell.mesh.faces):,} faces")
 ```
+
+!!! note "This mesh is decimated"
+
+    The published reconstruction has 2.6 million mesh vertices, which is too
+    large to ship with the docs, so this copy is reduced about 30x. It keeps
+    the shape and the links, which is what the examples here are about, but its
+    surface area is roughly half the true value. Use the full mesh for
+    quantitative surface measurements.
 
 ## Inspecting Mesh Layers
 

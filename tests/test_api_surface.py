@@ -20,6 +20,7 @@ member is entirely unexercised.
 import inspect
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from ossify import Cell, GraphLayer, MeshLayer, PointCloudLayer, SkeletonLayer
@@ -386,3 +387,64 @@ class TestApplyMaskReturnDeprecation:
             assert isinstance(
                 skel.mask_out_unmapped(target_layers="graph", return_cell=True), Cell
             )
+
+
+class TestUnmappedVertexDetection:
+    """``get_unmapped_vertices`` reports vertices of *this* layer that fail to
+    reach the target.
+
+    Source and target were swapped in the underlying ``get_mapping`` call, so
+    it returned the target layer's vertices instead. ``mask_out_unmapped``
+    then compared this layer's vertices against another layer's ids -- two
+    disjoint index spaces on any real cell -- so it silently removed nothing.
+    """
+
+    SPATIAL = ["x", "y", "z"]
+    VERTS = np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]])
+
+    def _partially_linked_cell(self):
+        """A graph covering only the first two of four skeleton vertices."""
+        from ossify import Link
+
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=pd.DataFrame(
+                self.VERTS, columns=self.SPATIAL, index=[100, 101, 102, 103]
+            ),
+            edges=np.array([[101, 100], [102, 101], [103, 102]]),
+            spatial_columns=self.SPATIAL,
+            root=100,
+        )
+        cell.add_graph(
+            vertices=pd.DataFrame(
+                self.VERTS[:2], columns=self.SPATIAL, index=[200, 201]
+            ),
+            edges=np.array([[201, 200]]),
+            spatial_columns=self.SPATIAL,
+            linkage=Link(
+                mapping=np.array([100, 101]),
+                target="skeleton",
+                map_value_is_index=True,
+            ),
+        )
+        return cell
+
+    def test_reports_this_layers_vertices(self):
+        cell = self._partially_linked_cell()
+        unmapped = cell.skeleton.get_unmapped_vertices(target_layers="graph")
+        np.testing.assert_array_equal(unmapped, [102, 103])
+        # And they are this layer's vertices, not the target's.
+        assert np.all(np.isin(unmapped, cell.skeleton.vertex_index))
+
+    def test_fully_mapped_layer_reports_nothing(self):
+        cell = self._partially_linked_cell()
+        # Every graph vertex does reach the skeleton.
+        assert len(cell.graph.get_unmapped_vertices(target_layers="skeleton")) == 0
+
+    def test_mask_out_unmapped_actually_removes_them(self):
+        cell = self._partially_linked_cell()
+        cleaned = cell.skeleton.mask_out_unmapped(
+            target_layers="graph", return_cell=False
+        )
+        assert cleaned.n_vertices == 2
+        np.testing.assert_array_equal(cleaned.vertex_index, [100, 101])

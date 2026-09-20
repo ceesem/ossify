@@ -38,10 +38,11 @@ REPO = Path(__file__).resolve().parents[1]
 DOCS = REPO / "docs"
 
 # The example neuron the guide downloads, and the copy committed alongside it.
-EXAMPLE_URL = (
-    "https://github.com/ceesem/ossify/raw/refs/heads/main/864691135336055529.osy"
-)
-EXAMPLE_LOCAL = REPO / "864691135336055529.osy"
+_RAW = "https://github.com/ceesem/ossify/raw/refs/heads/main/"
+EXAMPLE_CELLS = {
+    _RAW + "864691135336055529.osy": REPO / "864691135336055529.osy",
+    _RAW + "864691135336055529_full.osy": REPO / "864691135336055529_full.osy",
+}
 
 # Pages whose examples are known to run end to end.
 #
@@ -82,13 +83,14 @@ def _python_blocks(text: str):
 @pytest.fixture
 def local_example_cell(monkeypatch):
     """Serve the documented example URL from the committed copy."""
-    if not EXAMPLE_LOCAL.exists():
-        pytest.skip(f"{EXAMPLE_LOCAL.name} is not present")
+    missing = [p.name for p in EXAMPLE_CELLS.values() if not p.exists()]
+    if missing:
+        pytest.skip(f"example cells not present: {missing}")
     real_load = ossify.load_cell
 
     def load(path, *args, **kwargs):
-        if isinstance(path, str) and path == EXAMPLE_URL:
-            path = str(EXAMPLE_LOCAL)
+        if isinstance(path, str) and path in EXAMPLE_CELLS:
+            path = str(EXAMPLE_CELLS[path])
         return real_load(path, *args, **kwargs)
 
     monkeypatch.setattr(ossify, "load_cell", load)
@@ -124,12 +126,13 @@ def test_doc_page_examples_run(page, local_example_cell, tmp_path, monkeypatch):
             )
 
 
-def test_example_cell_is_committed():
-    """The redirect above is what keeps these tests offline; if the file goes
+@pytest.mark.parametrize("local", sorted(EXAMPLE_CELLS.values()))
+def test_example_cells_are_committed(local):
+    """The redirect above is what keeps these tests offline; if a file goes
     missing every page test silently skips instead of failing."""
-    assert EXAMPLE_LOCAL.exists(), (
-        f"{EXAMPLE_LOCAL.name} is referenced by the guide and needed by the doc "
-        "tests; it must stay in the repository root."
+    assert local.exists(), (
+        f"{local.name} is referenced by the guide and needed by the doc tests; "
+        "it must stay in the repository root."
     )
 
 

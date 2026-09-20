@@ -1315,10 +1315,14 @@ class PointMixin(ABC):
         all_unmapped_indices = []
 
         for target_layer in target_layers:
-            # Get mapping with nulls preserved
+            # Get mapping with nulls preserved. Source is *this* layer: the
+            # question is which of its vertices fail to reach the target. With
+            # these swapped the method returned the target layer's vertices
+            # instead, so mask_out_unmapped compared two disjoint index spaces
+            # and removed nothing.
             mapping = self._morphsync.get_mapping(
-                source=target_layer,
-                target=self.layer_name,
+                source=self.layer_name,
+                target=target_layer,
                 dropna=False,
             )
 
