@@ -175,7 +175,9 @@ Not every vertex in one layer necessarily maps to a vertex in another. You can f
 unmapped = cell.skeleton.get_unmapped_vertices(target_layers='graph')
 
 # Remove them
-clean_skeleton = cell.skeleton.mask_out_unmapped(target_layers='graph')
+clean_skeleton = cell.skeleton.mask_out_unmapped(
+    target_layers='graph', return_cell=False
+)
 ```
 
 ## Worked Example: Synapse Count Per Skeleton Vertex

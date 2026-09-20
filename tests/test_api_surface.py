@@ -308,3 +308,81 @@ class TestAsPositionalConvention:
         assert mesh.surface_area(
             vertices=mesh.vertex_index[positions]
         ) == pytest.approx(by_position)
+
+
+class TestApplyMaskReturnDeprecation:
+    """``apply_mask`` on a linked layer returns a Cell today and a layer from
+    1.0, with ``return_cell`` fixing the behaviour either way.
+
+    Layer-in/Cell-out is the single most confusing thing in the API -- it
+    prompted a user bug report and appeared wrong on six guide pages -- so the
+    default is changing. Until it does, an unset call warns rather than
+    silently changing under anyone.
+    """
+
+    def test_unset_warns_and_keeps_the_current_behaviour(self, full_cell):
+        from ossify import Cell
+
+        keep = full_cell.skeleton.vertex_index[:3]
+        with pytest.warns(FutureWarning, match="will return a masked layer"):
+            out = full_cell.skeleton.apply_mask(keep)
+        assert isinstance(out, Cell)
+
+    def test_explicit_true_returns_a_cell_without_warning(self, full_cell, recwarn):
+        from ossify import Cell
+
+        keep = full_cell.skeleton.vertex_index[:3]
+        out = full_cell.skeleton.apply_mask(keep, return_cell=True)
+        assert isinstance(out, Cell)
+        assert not [w for w in recwarn if issubclass(w.category, FutureWarning)]
+
+    def test_explicit_false_returns_the_masked_layer(self, full_cell, recwarn):
+        keep = full_cell.skeleton.vertex_index[:3]
+        out = full_cell.skeleton.apply_mask(keep, return_cell=False)
+        assert isinstance(out, SkeletonLayer)
+        assert out.n_vertices == 3
+        assert not [w for w in recwarn if issubclass(w.category, FutureWarning)]
+
+    def test_both_forms_describe_the_same_masking(self, full_cell):
+        keep = full_cell.skeleton.vertex_index[:3]
+        as_cell = full_cell.skeleton.apply_mask(keep, return_cell=True)
+        as_layer = full_cell.skeleton.apply_mask(keep, return_cell=False)
+        np.testing.assert_array_equal(
+            as_cell.skeleton.vertex_index, as_layer.vertex_index
+        )
+
+    def test_the_mask_still_propagates_when_a_layer_is_returned(self, full_cell):
+        """Returning a layer must not quietly turn into self_only=True."""
+        keep = full_cell.skeleton.vertex_index[:3]
+        as_layer = full_cell.skeleton.apply_mask(keep, return_cell=False)
+        # The returned layer belongs to a masked cell, and its siblings were
+        # masked too -- unlike self_only, which leaves them out entirely.
+        assert as_layer._cell is not None
+        assert as_layer._cell.graph.n_vertices < full_cell.graph.n_vertices
+
+    def test_self_only_returns_a_detached_layer(self, full_cell, recwarn):
+        keep = full_cell.skeleton.vertex_index[:3]
+        out = full_cell.skeleton.apply_mask(keep, self_only=True)
+        assert isinstance(out, SkeletonLayer)
+        assert out._cell is None
+        # self_only is unambiguous, so it does not warn.
+        assert not [w for w in recwarn if issubclass(w.category, FutureWarning)]
+
+    @pytest.mark.parametrize("method", ["mask_context", "mask_out_unmapped"])
+    def test_wrappers_forward_the_flag(self, full_cell, method):
+        from ossify import Cell
+
+        skel = full_cell.skeleton
+        if method == "mask_context":
+            with skel.mask_context(skel.vertex_index[:3], return_cell=False) as out:
+                assert isinstance(out, SkeletonLayer)
+            with skel.mask_context(skel.vertex_index[:3], return_cell=True) as out:
+                assert isinstance(out, Cell)
+        else:
+            assert isinstance(
+                skel.mask_out_unmapped(target_layers="graph", return_cell=False),
+                SkeletonLayer,
+            )
+            assert isinstance(
+                skel.mask_out_unmapped(target_layers="graph", return_cell=True), Cell
+            )

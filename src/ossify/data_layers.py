@@ -1121,35 +1121,65 @@ class PointMixin(ABC):
         self,
         mask: np.ndarray,
         as_positional: bool = False,
+        return_cell: Optional[bool] = None,
         self_only: bool = False,
     ) -> Union[Self, "Cell"]:
-        """Apply a mask on the current layer. Returns a new object with the masked morphsync.
-        If the object is associated with a CellSync, a new CellSync will be created, otherwise
-        a new object of the same class will be returned.
+        """Apply a mask to this layer.
 
-        Properties
+        When the layer belongs to a :class:`Cell`, the mask propagates to every
+        linked layer -- that is what links are for. What comes back is either
+        that masked cell or this layer's masked counterpart from it.
+
+        .. deprecated:: 0.3
+            The default return is changing. Today, calling this without
+            ``return_cell`` returns the masked :class:`Cell` and warns; from
+            1.0 it will return a masked layer, since a layer is the thing you
+            asked to mask and can stand on its own. Pass ``return_cell``
+            explicitly to fix the behaviour either way and silence the warning.
+
+        Parameters
         ----------
         mask: np.ndarray
             The mask to apply, either in boolean, vertex index, or positional index form.
         as_positional: bool
             If providing indices, specify if they are positional indices (True) or vertex indices (False).
+        return_cell: Optional[bool]
+            True returns the masked :class:`Cell`, False returns this layer's
+            masked counterpart from it. Leaving it unset keeps today's
+            behaviour, True, and warns that the default becomes False at 1.0.
         self_only: bool
-            If True, only apply the mask to the current object and not to any associated CellSync.
+            Mask only this layer, leaving any linked layers out of it entirely.
+            The result is a standalone layer, not attached to a cell. Differs
+            from the default, which masks the whole cell and then hands back
+            this layer from it.
 
         Returns
         -------
-        masked_object Union[Self, "CellSync"]
-            Either a new object of the same class or a new CellSync will be returned.
+        Union[Self, "Cell"]
+            A masked layer of the same class, or the masked Cell when
+            ``return_cell`` is True.
         """
         new_morphsync = self._mask_morphsync(mask=mask, as_positional=as_positional)
         if self._cell is None or self_only:
             return self.__class__._from_existing(
                 new_morphsync=new_morphsync, old_obj=self
             )
-        else:
-            return self._cell.__class__._from_existing(
-                new_morphsync=new_morphsync, old_obj=self._cell
+        if return_cell is None:
+            warn(
+                f"{type(self).__name__}.apply_mask currently returns a Cell, but "
+                "from ossify 1.0 it will return a masked layer. Pass "
+                "return_cell=True to keep the current behaviour, or "
+                "return_cell=False to opt into the new one.",
+                FutureWarning,
+                stacklevel=2,
             )
+            return_cell = True
+        new_cell = self._cell.__class__._from_existing(
+            new_morphsync=new_morphsync, old_obj=self._cell
+        )
+        if return_cell:
+            return new_cell
+        return new_cell._all_objects[self.name]
 
     def copy(self) -> Self:
         """Create a deep copy of the current object.
@@ -1204,25 +1234,32 @@ class PointMixin(ABC):
             reset()
 
     @contextlib.contextmanager
-    def mask_context(self, mask: np.ndarray) -> Generator[Self, None, None]:
+    def mask_context(
+        self, mask: np.ndarray, return_cell: Optional[bool] = None
+    ) -> Generator[Self, None, None]:
         """Context manager to temporarily apply a mask via the current layer.
 
         Parameters
         ----------
         mask: np.ndarray
             The mask to apply, either in boolean, vertex index, or positional index form.
+        return_cell: Optional[bool]
+            What to yield: the masked :class:`Cell` (True) or this layer's
+            masked counterpart (False). Follows :meth:`apply_mask`, including
+            its deprecation -- unset yields a Cell today and warns that it will
+            yield a layer from 1.0.
 
         Yields
         ------
         Self
-            A new object of the same class with the mask applied.
+            The masked object, per ``return_cell``.
 
         Example
         -------
-        >>> with cell.skeleton.mask_context(mask) as masked_cell:
-        >>>     masked_path_length = masked_cell.mesh.surface_area()
+        >>> with cell.skeleton.mask_context(mask, return_cell=True) as masked_cell:
+        >>>     masked_area = masked_cell.mesh.surface_area()
         """
-        new_self = self.apply_mask(mask=mask)
+        new_self = self.apply_mask(mask=mask, return_cell=return_cell)
         try:
             yield new_self
         finally:
@@ -1303,6 +1340,7 @@ class PointMixin(ABC):
     def mask_out_unmapped(
         self,
         target_layers: Optional[Union[str, List[str]]] = None,
+        return_cell: Optional[bool] = None,
         self_only: bool = False,
     ) -> Union[Self, "Cell"]:
         """Create a new object with unmapped vertices removed.
@@ -1356,7 +1394,10 @@ class PointMixin(ABC):
 
         # Apply mask using existing functionality
         return self.apply_mask(
-            mask=keep_indices, as_positional=False, self_only=self_only
+            mask=keep_indices,
+            as_positional=False,
+            return_cell=return_cell,
+            self_only=self_only,
         )
 
     def describe(self) -> None:

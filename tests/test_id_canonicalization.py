@@ -393,8 +393,9 @@ class TestTransitiveMasking:
                     "graph"
                 ].astype("uint64")
 
-        # Keep only the dendritic skeleton vertex (index 0).
-        masked = cell.skeleton.apply_mask(np.array([0]))
+        # Keep only the dendritic skeleton vertex (index 0). This assertion is
+        # about the other layers, so ask for the masked cell.
+        masked = cell.skeleton.apply_mask(np.array([0]), return_cell=True)
 
         # The graph keeps only the dendritic ID_A ...
         assert list(masked.graph.vertex_index) == [ID_A]
@@ -431,19 +432,19 @@ class TestTransitiveMasking:
 class TestMaskedLinkIntegrity:
     def test_synthetic_cell_masked_links_reference_retained_nodes(self):
         cell = _transitive_cell()
-        masked = cell.skeleton.apply_mask(np.array([0]))
+        masked = cell.skeleton.apply_mask(np.array([0]), return_cell=True)
         _assert_link_integrity(masked._morphsync)
 
     def test_real_cell_masked_links_reference_retained_nodes(self, nrn):
         # Mask to an arbitrary subtree of skeleton vertices and confirm no link
         # endpoint dangles into a removed node.
         keep = nrn.skeleton.vertex_index[: max(1, nrn.skeleton.n_vertices // 3)]
-        masked = nrn.skeleton.apply_mask(keep)
+        masked = nrn.skeleton.apply_mask(keep, return_cell=True)
         _assert_link_integrity(masked._morphsync)
 
     def test_masking_does_not_copy_full_link_tables(self, nrn):
         keep = nrn.skeleton.vertex_index[:5]
-        masked = nrn.skeleton.apply_mask(keep)
+        masked = nrn.skeleton.apply_mask(keep, return_cell=True)
         for key, df in masked._morphsync.links.items():
             full = nrn._morphsync.links[key]
             assert len(df) <= len(full)

@@ -129,7 +129,7 @@ vertices_um = cell.skeleton.vertices / 1000  # Wrong!
 
 ```python
 # Efficient: analyze subsets
-with cell.skeleton.mask_context(quality_mask) as high_quality:
+with cell.skeleton.mask_context(quality_mask, return_cell=False) as high_quality:
     results = expensive_analysis(high_quality)
 
 # Inefficient: analyze everything then filter
@@ -371,8 +371,7 @@ for path in cell.skeleton.cover_paths:
     path_mask = np.isin(cell.skeleton.vertex_index, path)
 
     # mask_context on a linked layer yields a Cell, so reach through it.
-    with cell.skeleton.mask_context(path_mask) as path_cell:
-        path_skeleton = path_cell.skeleton
+    with cell.skeleton.mask_context(path_mask, return_cell=False) as path_skeleton:
         path_length = path_skeleton.cable_length()
         path_synapses = count_synapses_on_path(path_skeleton)
         
@@ -388,7 +387,7 @@ Masking removes vertices, and edges are automatically filtered to maintain valid
 ```python
 # Check edge preservation
 print(f"Original: {skeleton.n_vertices} vertices, {len(skeleton.edges)} edges")
-filtered = skeleton.apply_mask(mask, as_positional=True).skeleton
+filtered = skeleton.apply_mask(mask, as_positional=True, return_cell=False)
 print(f"Filtered: {filtered.n_vertices} vertices, {len(filtered.edges)} edges")
 
 # Edges are remapped to new vertex indices

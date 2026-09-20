@@ -273,7 +273,9 @@ print(f"Annotations: {cell.annotations.names}")
 # It's not automatically applied - you can apply it manually if needed
 if cell.graph and len(node_mask) == cell.graph.n_vertices:
     # Apply mask to keep only skeleton-corresponding vertices
-    masked_graph = cell.graph.apply_mask(node_mask, as_positional=True)
+    masked_graph = cell.graph.apply_mask(
+        node_mask, as_positional=True, return_cell=False
+    )
     print(f"Masked graph: {masked_graph.n_vertices} vertices")
 ```
 

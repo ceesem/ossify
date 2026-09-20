@@ -274,16 +274,17 @@ types = synapses.get_feature('synapse_type')
 ```python
 # Filter by feature values
 high_confidence = synapses.get_feature('confidence') > 0.9
-high_conf_annotations = synapses.apply_mask(high_confidence, as_positional=True)
-
-print(
-    "High confidence annotations: "
-    f"{high_conf_annotations.annotations.synapses_detailed.n_vertices}"
+high_conf_annotations = synapses.apply_mask(
+    high_confidence, as_positional=True, return_cell=False
 )
+
+print(f"High confidence annotations: {high_conf_annotations.n_vertices}")
 
 # Filter by type
 excitatory_mask = synapses.get_feature('synapse_type') == 'excitatory'
-excitatory_synapses = synapses.apply_mask(excitatory_mask, as_positional=True)
+excitatory_synapses = synapses.apply_mask(
+    excitatory_mask, as_positional=True, return_cell=False
+)
 
 # Spatial filtering using KDTree
 query_point = [1.0, 0.0, 0.0]
@@ -292,7 +293,9 @@ distances, indices = synapses.kdtree.query(query_point, k=2, distance_upper_boun
 # Get nearby annotations (excluding infinite distances)
 nearby_mask = distances < np.inf
 nearby_indices = indices[nearby_mask]
-nearby_annotations = synapses.apply_mask(nearby_indices, as_positional=True)
+nearby_annotations = synapses.apply_mask(
+    nearby_indices, as_positional=True, return_cell=False
+)
 ```
 
 ### Annotation Statistics
@@ -505,7 +508,7 @@ if "pre_syn" in cell.annotations.names and "post_syn" in cell.annotations.names:
 ### Data Access and Analysis
 - `annotation.get_feature(key)` - Get feature values
 - `annotation.add_feature(feature, name=None)` - Add new features
-- `annotation.apply_mask(mask, as_positional=False)` - Filter annotations
+- `annotation.apply_mask(mask, as_positional=False, return_cell=False)` - Filter annotations
 - `annotation.kdtree` - Spatial queries
 
 ### Cross-layer Integration

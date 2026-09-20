@@ -302,7 +302,9 @@ for center in center_vertices:
 
 # Create masked subgraph
 # Masking a layer that belongs to a Cell returns a Cell, so reach through it.
-subgraph = graph.apply_mask(subgraph_mask, as_positional=False).graph
+subgraph = graph.apply_mask(
+    subgraph_mask, as_positional=False, return_cell=False
+)
 print(f"Subgraph has {subgraph.n_vertices} vertices")
 ```
 

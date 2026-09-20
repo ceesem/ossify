@@ -16,7 +16,9 @@ volume = cell.graph.map_features_to_layer("size_nm3", layer='skeleton', agg='sum
 cell.skeleton.add_feature(volume)
 
 # Filter to dendrite only — linked annotations update automatically
-with cell.skeleton.mask_context(cell.skeleton.features['compartment'] == 3) as masked_cell:
+with cell.skeleton.mask_context(
+    cell.skeleton.features['compartment'] == 3, return_cell=True
+) as masked_cell:
     print("Dendrite cable length:", masked_cell.skeleton.cable_length(), "nm")
     print("Dendrite presynaptic sites:", len(masked_cell.annotations.pre_syn))
 ```

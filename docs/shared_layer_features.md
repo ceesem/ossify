@@ -147,22 +147,26 @@ All layers support masking to create filtered subsets:
 mask = layer.get_feature("quality") > 0.7
 
 # Apply mask (creates new layer)
-filtered_layer = layer.apply_mask(mask, as_positional=False)
+filtered_layer = layer.apply_mask(mask, as_positional=False, return_cell=False)
 
 # Use as context manager for temporary filtering
 # Masking a layer that belongs to a Cell yields a Cell, so reach through it.
-with layer.mask_context(mask) as filtered_cell:
+with layer.mask_context(mask, return_cell=False) as filtered_layer:
     # Work with filtered data
-    result = filtered_cell.skeleton.n_vertices
+    result = filtered_layer.n_vertices
 # Original layer unchanged
 
 # Mask using vertex indices instead of boolean
 vertex_indices = layer.vertex_index[:10]  # First 10 vertices
-subset_layer = layer.apply_mask(vertex_indices, as_positional=False)
+subset_layer = layer.apply_mask(
+    vertex_indices, as_positional=False, return_cell=False
+)
 
 # Mask using positional indices
 positional_mask = np.array([0, 1, 3])  # Specific positions
-subset_layer = layer.apply_mask(positional_mask, as_positional=True)
+subset_layer = layer.apply_mask(
+    positional_mask, as_positional=True, return_cell=False
+)
 ```
 
 ## Cross-Layer Mapping
@@ -232,7 +236,9 @@ target_mask = layer.map_mask_to_layer("mesh", source_mask)
 
 # Apply the mapped mask to target layer
 target_layer = cell.layers["mesh"]
-filtered_target = target_layer.apply_mask(target_mask, as_positional=True)
+filtered_target = target_layer.apply_mask(
+    target_mask, as_positional=True, return_cell=False
+)
 ```
 
 ## Vertex Index vs Positional Index
@@ -277,10 +283,10 @@ unmapped_to_multiple = layer.get_unmapped_vertices(
 )
 
 # Remove unmapped vertices
-clean_layer = layer.mask_out_unmapped(target_layers="mesh")
+clean_layer = layer.mask_out_unmapped(target_layers="mesh", return_cell=False)
 
 # Remove vertices unmapped to any other layer
-fully_clean = layer.mask_out_unmapped()  # Checks all other layers
+fully_clean = layer.mask_out_unmapped(return_cell=False)  # all other layers
 ```
 
 ## Key Shared Methods Reference

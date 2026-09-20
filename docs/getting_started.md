@@ -89,7 +89,7 @@ Masks let you filter a cell to a subset of vertices. When layers are linked, the
 # Filter to dendrite only (compartment == 3 in SWC convention)
 dendrite_mask = cell.skeleton.features['compartment'] == 3
 
-with cell.skeleton.mask_context(dendrite_mask) as masked_cell:
+with cell.skeleton.mask_context(dendrite_mask, return_cell=True) as masked_cell:
     print("Dendrite cable length:", masked_cell.skeleton.cable_length(), "nm")
     print("Dendrite pre-synaptic sites:", len(masked_cell.annotations.pre_syn))
     print("Dendrite post-synaptic sites:", len(masked_cell.annotations.post_syn))

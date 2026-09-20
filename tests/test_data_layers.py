@@ -2016,7 +2016,7 @@ class TestMaskContextTeardown:
     def test_layer_level_mask_context_closes(self, spatial_columns):
         cell = self._cell(spatial_columns)
         mask = np.array([True, True, True, False, False])
-        with cell.skeleton.mask_context(mask) as masked:
+        with cell.skeleton.mask_context(mask, return_cell=True) as masked:
             assert masked.skeleton.n_vertices == 3
             saved = masked
         assert saved._morphsync is None
