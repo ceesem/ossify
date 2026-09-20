@@ -408,11 +408,19 @@ class Cell:
         vertices : Union[np.ndarray, pd.DataFrame, MeshLayer]
             The vertices of the mesh, or a MeshLayer object.
         faces : Union[np.ndarray, pd.DataFrame]
-            The faces of the mesh. If faces are provided as a dataframe, faces should be in dataframe indices.
+            The triangular faces of the mesh. **If ``vertex_index`` is given
+            these are positional indices into ``vertices``** and are remapped
+            onto the vertex index for you; otherwise they are vertex indices
+            already -- the index of ``vertices`` when it is a DataFrame, or
+            positional when it is a plain array. Mesh formats such as OBJ and
+            PLY give positional faces, so ``vertex_index`` is usually what you
+            want when labelling mesh vertices with ids.
         features : Optional[Union[dict, pd.DataFrame]]
             Additional features for the mesh. If passed as dictionary, the key is the feature name and the values are an array of feature values.
         vertex_index : Optional[Union[str, np.ndarray]]
-            The column to use as a vertex index for the mesh, if vertices are a dataframe.
+            Vertex indices to label the mesh's vertices by: either the name of
+            a column in ``vertices``, or an array with one value per vertex.
+            Supplying this changes how ``faces`` are read -- see above.
         linkage : Optional[Link]
             The linkage information for the mesh.
         spatial_columns: Optional[list] = None
@@ -465,13 +473,22 @@ class Cell:
         vertices : Union[np.ndarray, pd.DataFrame, SkeletonLayer]
             The vertices of the skeleton, or a SkeletonLayer object.
         edges : Union[np.ndarray, pd.DataFrame]
-            The edges of the skeleton.
+            The edges of the skeleton, as pairs of vertices. **If ``vertex_index``
+            is given these are positional indices into ``vertices``** and are
+            remapped onto the vertex index for you; otherwise they are vertex
+            indices already -- the index of ``vertices`` when it is a DataFrame,
+            or positional when it is a plain array.
         features : Optional[Union[dict, pd.DataFrame]]
             The features for the skeleton.
         root : Optional[int]
-            The root vertex for the skeleton, required of the edges are not already consistent with a single root.
+            The root of the skeleton, as a **vertex index** -- note this is the
+            opposite convention to ``edges``, which are positional when
+            ``vertex_index`` is given. Required if the edges are not already
+            consistent with a single root.
         vertex_index : Optional[Union[str, np.ndarray]]
-            The vertex index for the skeleton.
+            Vertex indices to label the skeleton's vertices by: either the name of
+            a column in ``vertices``, or an array with one value per vertex.
+            Supplying this changes how ``edges`` are read -- see above.
         linkage : Optional[Link]
             The linkage information for the skeleton. Typically, you will define the source vertices for the skeleton if using a graph-to-skeleton mapping.
         spatial_columns: Optional[list] = None
@@ -526,11 +543,17 @@ class Cell:
         vertices : Union[np.ndarray, pd.DataFrame, SkeletonLayer]
             The vertices of the graph.
         edges : Union[np.ndarray, pd.DataFrame]
-            The edges of the graph.
+            The edges of the graph, as pairs of vertices. **If ``vertex_index``
+            is given these are positional indices into ``vertices``** and are
+            remapped onto the vertex index for you; otherwise they are vertex
+            indices already -- the index of ``vertices`` when it is a DataFrame,
+            or positional when it is a plain array.
         features : Optional[Union[dict, pd.DataFrame]]
             The features for the graph.
         vertex_index : Optional[Union[str, np.ndarray]]
-            The vertex index for the graph.
+            Vertex indices to label the graph's vertices by: either the name of
+            a column in ``vertices``, or an array with one value per vertex.
+            Supplying this changes how ``edges`` are read -- see above.
         spatial_columns: Optional[list] = None
             The spatial columns for the graph, if vertices are a dataframe.
 

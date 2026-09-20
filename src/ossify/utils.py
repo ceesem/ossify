@@ -79,7 +79,10 @@ def process_vertices(
             )
         spatial_columns = vertices.columns
     else:
-        if vertex_index:
+        # Only a string names a column to hold out of the implicit features; an
+        # array-like vertex_index supplies the ids directly. Plain truthiness
+        # raises on an array of more than one element.
+        if isinstance(vertex_index, str):
             implicit_feature_columns = list(
                 vertices.columns[
                     ~vertices.columns.isin(spatial_columns + [vertex_index])
