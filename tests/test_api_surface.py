@@ -621,3 +621,66 @@ class TestMappingCompleteness:
         assert cell.skeleton.is_fully_mapped_to("graph")
         assert cell.graph.is_fully_mapped_to("skeleton")
         assert "mapped)" not in cell._describe_text()
+
+
+class TestFacetRemapFastPath:
+    """``facets_positional`` converts facets from vertex-index space to
+    positional space on every access.
+
+    When the node index is already 0..n-1 the two spaces coincide and the
+    conversion is the identity, but the general path still built a Python dict
+    and a Python list with one entry per node -- which on a mesh with millions
+    of vertices dominated everything else. The fast path must return exactly
+    what the general one does, including still dropping facets that point
+    outside the index.
+    """
+
+    @staticmethod
+    def _reference(arr, mask):
+        from ossify._sync.base import _mask_and_remap
+
+        return _mask_and_remap(np.array(arr, dtype=int), np.asarray(mask))
+
+    @pytest.mark.parametrize("seed", range(8))
+    def test_matches_the_general_path(self, seed):
+        from ossify._sync.base import mask_and_remap
+
+        rng = np.random.default_rng(seed)
+        n = int(rng.integers(2, 40))
+        arr = rng.integers(0, n, size=(int(rng.integers(0, 15)), 3))
+        for mask in (
+            np.arange(n),  # fast path
+            np.arange(n) + 100,  # shifted, not positional
+            np.sort(rng.choice(n, size=max(1, n // 2), replace=False)),  # masked
+        ):
+            got = mask_and_remap(arr, mask)
+            want = self._reference(arr, mask)
+            assert got.shape == want.shape
+            np.testing.assert_array_equal(got, want)
+
+    def test_out_of_range_rows_are_still_dropped(self):
+        from ossify._sync.base import mask_and_remap
+
+        # Index is 0..3, but a facet references vertex 9.
+        arr = np.array([[0, 1, 2], [1, 2, 9]])
+        got = mask_and_remap(arr, np.arange(4))
+        np.testing.assert_array_equal(got, [[0, 1, 2]])
+        np.testing.assert_array_equal(got, self._reference(arr, np.arange(4)))
+
+    def test_result_is_not_a_view_on_the_stored_facets(self, full_cell):
+        """The general path always returned a fresh array; the fast path must
+        too, or mutating the result would corrupt the layer."""
+        first = full_cell.mesh.faces_positional
+        first[0, 0] = 12345
+        assert full_cell.mesh.faces_positional[0, 0] != 12345
+
+    def test_masked_layer_takes_the_general_path(self, full_cell):
+        masked = full_cell.skeleton.apply_mask(
+            full_cell.skeleton.vertex_index[:4], return_cell=True
+        )
+        skel = masked.skeleton
+        # Masking leaves a non-positional index, so the identity shortcut must
+        # not apply -- and the edges must still be valid positions.
+        assert not np.array_equal(skel.vertex_index, np.arange(skel.n_vertices))
+        if len(skel.edges_positional):
+            assert skel.edges_positional.max() < skel.n_vertices

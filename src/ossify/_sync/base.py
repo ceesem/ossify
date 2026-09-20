@@ -272,7 +272,19 @@ def mask_and_remap(
     """
     if np.array(mask).dtype == bool:
         mask = np.where(mask)[0]
-    return _mask_and_remap(np.array(arr, dtype=int), mask)
+    arr = np.array(arr, dtype=int)
+    mask = np.asarray(mask)
+    n = len(mask)
+    # Fast path: when the node index is already 0..n-1, index space and
+    # positional space coincide, so the remap is the identity and the only
+    # thing it can do is drop rows pointing outside the range -- and there are
+    # none. Worth special-casing because the general path below builds a Python
+    # dict and a Python list with one entry per node, which dominates
+    # everything else on a mesh with millions of vertices.
+    if n and (arr.size == 0 or (arr.min() >= 0 and arr.max() < n)):
+        if mask[0] == 0 and mask[-1] == n - 1 and np.array_equal(mask, np.arange(n)):
+            return arr
+    return _mask_and_remap(arr, mask)
 
 
 def _mask_and_remap(
