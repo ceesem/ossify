@@ -50,6 +50,7 @@ EXECUTABLE_PAGES = [
     "linking_and_mapping.md",
     "masking_and_filtering.md",
     "shared_layer_features.md",
+    "working_with_annotations.md",
     "working_with_graphs.md",
     "working_with_meshes.md",
     "working_with_skeletons.md",

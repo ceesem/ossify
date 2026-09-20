@@ -9,6 +9,7 @@ Ossify supports both **2D** plotting (via matplotlib) and **3D** interactive ren
 ### Simple 2D Projections
 
 ```python
+import numpy as np
 import ossify
 import matplotlib.pyplot as plt
 
@@ -17,7 +18,7 @@ cell = ossify.load_cell('https://github.com/ceesem/ossify/raw/refs/heads/main/86
 
 # Basic 2D plot
 fig, ax = plt.subplots(figsize=(8, 6))
-ossify.plot_morphology_2d(cell, projection="xy", ax=ax)
+ossify.plot.plot_morphology_2d(cell, projection="xy", ax=ax)
 ax.set_title("Basic Skeleton Plot")
 plt.show()
 ```
@@ -34,7 +35,7 @@ projections = ["xy", "xz", "yz"]
 fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
 for i, proj in enumerate(projections):
-    ossify.plot_morphology_2d(
+    ossify.plot.plot_morphology_2d(
         cell, 
         projection=proj, 
         ax=axes[i]
@@ -58,7 +59,7 @@ cell.skeleton.add_feature(strahler_vals, 'strahler_number')
 
 # Color by Strahler order (branching complexity)
 fig, ax = plt.subplots(figsize=(10, 8))
-ossify.plot_morphology_2d(
+ossify.plot.plot_morphology_2d(
     cell,
     projection="xy",
     color="strahler_number",      # Color by Strahler order
@@ -76,7 +77,7 @@ plt.show()
 ```python
 # Color by continuous variable (radius)
 fig, ax = plt.subplots(figsize=(10, 8))
-ossify.plot_morphology_2d(
+ossify.plot.plot_morphology_2d(
     cell,
     projection="xy", 
     color="radius",               # Color by radius
@@ -99,7 +100,7 @@ plt.show()
 ```python
 # Variable line width based on radius
 fig, ax = plt.subplots(figsize=(10, 8))
-ossify.plot_morphology_2d(
+ossify.plot.plot_morphology_2d(
     cell,
     projection="xy",
     linewidth="radius",           # Width proportional to radius
@@ -113,7 +114,7 @@ plt.show()
 
 # Transparency effects
 fig, ax = plt.subplots(figsize=(10, 8))
-ossify.plot_morphology_2d(
+ossify.plot.plot_morphology_2d(
     cell,
     projection="xy",
     alpha=0.7,                   # Semi-transparent
@@ -130,7 +131,7 @@ plt.show()
 ```python
 # Highlight the root vertex
 fig, ax = plt.subplots(figsize=(10, 8))
-ossify.plot_morphology_2d(
+ossify.plot.plot_morphology_2d(
     cell,
     projection="xy",
     color="compartment",
@@ -150,7 +151,7 @@ plt.show()
 
 ```python
 # Automatic multi-view figure
-axes = ossify.plot_cell_multiview(
+axes = ossify.plot.plot_cell_multiview(
     cell,
     layout="three_panel",        # xy, xz, zy views
     color="compartment",
@@ -178,7 +179,7 @@ plt.show()
 
 ```python
 # Side-by-side layout (xy | zy)
-fig, axes = ossify.plot_cell_multiview(
+fig, axes = ossify.plot.plot_cell_multiview(
     cell,
     layout="side_by_side",
     color="radius",
@@ -187,7 +188,7 @@ fig, axes = ossify.plot_cell_multiview(
 )
 
 # Stacked layout (xz over xy)
-fig, axes = ossify.plot_cell_multiview(
+fig, axes = ossify.plot.plot_cell_multiview(
     cell,
     layout="stacked", 
     color="compartment",
@@ -208,7 +209,7 @@ compartment_colors = {
 }
 
 fig, ax = plt.subplots(figsize=(10, 8))
-ossify.plot_morphology_2d(
+ossify.plot.plot_morphology_2d(
     cell,
     color="compartment",
     palette=compartment_colors,
@@ -219,7 +220,7 @@ ossify.plot_morphology_2d(
 
 # Continuous colormap with normalization
 fig, ax = plt.subplots(figsize=(10, 8))
-ossify.plot_morphology_2d(
+ossify.plot.plot_morphology_2d(
     cell,
     color="radius",
     palette="coolwarm",
@@ -240,7 +241,7 @@ the data's native space:
 ```python
 # Log color scale for radius (handles thin axon → thick soma sweep)
 fig, ax = plt.subplots(figsize=(10, 8))
-ossify.plot_morphology_2d(
+ossify.plot.plot_morphology_2d(
     cell,
     color="radius",
     palette="viridis",
@@ -251,12 +252,12 @@ ossify.plot_morphology_2d(
 
 # Log size scale for synapse counts
 fig, ax = plt.subplots(figsize=(10, 8))
-ossify.plot_annotations_2d(
+ossify.plot.plot_annotations_2d(
     cell.annotations["pre_syn"],
-    color="count",
+    color="size",                 # a feature this annotation actually carries
     color_scale="log",            # color also log-transformed
     color_norm=(1, 1000),
-    size="count",
+    size="size",
     size_scale="log",
     sizes=(5, 80),                # output marker size range
     ax=ax,
@@ -264,7 +265,7 @@ ossify.plot_annotations_2d(
 
 # Sqrt size scale for area-like features (radius ∝ √area)
 fig, ax = plt.subplots(figsize=(10, 8))
-ossify.plot_annotations_2d(
+ossify.plot.plot_annotations_2d(
     cell.annotations["synapses"],
     size="cross_section_area",
     size_scale="sqrt",
@@ -274,7 +275,7 @@ ossify.plot_annotations_2d(
 
 # In plot_cell_2d, the synapse transforms have separate keywords so the
 # skeleton and synapses can be transformed independently.
-ossify.plot_cell_2d(
+ossify.plot.plot_cell_2d(
     cell,
     color="radius",
     color_scale="log",            # skeleton color transform
@@ -313,7 +314,7 @@ either rendering backend.
 ```python
 # Y-axis inversion for image-like coordinates
 fig, ax = plt.subplots(figsize=(10, 8))
-ossify.plot_morphology_2d(
+ossify.plot.plot_morphology_2d(
     cell,
     projection="xy",
     invert_y=True,               # Invert y-axis
@@ -335,7 +336,7 @@ def custom_projection(vertices):
     return rotated * 2  # Scale by 2
 
 fig, ax = plt.subplots(figsize=(10, 8))
-ossify.plot_morphology_2d(
+ossify.plot.plot_morphology_2d(
     cell,
     projection=custom_projection,
     color="radius",
@@ -385,7 +386,7 @@ offsets = [(0, 0), (30, 0), (60, 0)]  # Horizontal spacing
 colors = ["blue", "red", "green"]
 
 for i, (cell_to_plot, offset, color) in enumerate(zip(cells * 3, offsets, colors)):
-    ossify.plot_morphology_2d(
+    ossify.plot.plot_morphology_2d(
         cell_to_plot,
         projection="xy",
         offset_h=offset[0],          # Horizontal offset
@@ -406,11 +407,11 @@ plt.show()
 
 ```python
 # Convert to micrometers for better scale
+# `Cell.name` is read-only; set it when the cell is created if you need one.
 display_cell = cell.transform(lambda x: x / 1000)
-display_cell.name = f"{cell.name}_display"
 
 # Create figure with exact physical dimensions
-fig, ax = ossify.single_panel_figure(
+fig, ax = ossify.plot.single_panel_figure(
     data_bounds_min=display_cell.skeleton.bbox[0],    # Data bounds
     data_bounds_max=display_cell.skeleton.bbox[1],
     units_per_inch=50,           # 50 μm per inch
@@ -418,7 +419,7 @@ fig, ax = ossify.single_panel_figure(
     dpi=300                      # High resolution
 )
 
-ossify.plot_morphology_2d(
+ossify.plot.plot_morphology_2d(
     display_cell,
     projection="xy",
     color="compartment", 
@@ -432,7 +433,7 @@ ossify.plot_morphology_2d(
 )
 
 # Add scale bar
-ossify.add_scale_bar(
+ossify.plot.add_scale_bar(
     ax=ax,
     length=50,                   # 50 μm scale bar
     position=(0.05, 0.05),       # Position as fraction of axes
@@ -454,10 +455,12 @@ plt.show()
 
 ```python
 # Create publication-ready multi-panel figure
-fig, axes = ossify.multi_panel_figure(
+fig, axes = ossify.plot.multi_panel_figure(
     data_bounds_min=cell.skeleton.bbox[0],
-    data_bounds_max=cell.skeleton.bbox[1], 
-    units_per_inch=100,
+    data_bounds_max=cell.skeleton.bbox[1],
+    # This cell is measured in nanometres, so units_per_inch must be scaled to
+    # match: 100 here would ask for a figure thousands of inches across.
+    units_per_inch=100_000,
     layout="three_panel",
     gap_inches=0.3,              # Gap between panels
     despine=True,
@@ -466,7 +469,7 @@ fig, axes = ossify.multi_panel_figure(
 
 # Plot same cell in all views with consistent styling
 for proj, ax in axes.items():
-    ossify.plot_morphology_2d(
+    ossify.plot.plot_morphology_2d(
         cell,
         projection=proj,
         color="compartment",
@@ -481,10 +484,10 @@ for proj, ax in axes.items():
     
     # Add scale bar to xy view only
     if proj == "xy":
-        ossify.add_scale_bar(
+        ossify.plot.add_scale_bar(
             ax=ax,
-            length=5,
-            position=(0.8, 0.05), 
+            length=5000,          # data units -- nanometres for this cell
+            position=(0.8, 0.05),
             feature="5 μm",
             fontsize=10
         )
@@ -584,7 +587,7 @@ if hasattr(cell, 'skeleton') and cell.skeleton is not None:
     display_cell.name = f"{cell.name}_display"
     
     # Plot with appropriate scaling
-    fig, ax = ossify.single_panel_figure(
+    fig, ax = ossify.plot.single_panel_figure(
         data_bounds_min=display_cell.skeleton.bbox[0],
         data_bounds_max=display_cell.skeleton.bbox[1],
         units_per_inch=50,  # 50 μm per inch
@@ -594,7 +597,7 @@ if hasattr(cell, 'skeleton') and cell.skeleton is not None:
     # Color by compartment if available
     color_by = "compartment" if "compartment" in display_cell.skeleton.feature_names else None
     
-    ossify.plot_morphology_2d(
+    ossify.plot.plot_morphology_2d(
         display_cell,
         color=color_by,
         palette={"0": "blue", "1": "red"} if color_by else "black",
@@ -603,7 +606,7 @@ if hasattr(cell, 'skeleton') and cell.skeleton is not None:
     )
     
     # Add scale bar in micrometers
-    ossify.add_scale_bar(
+    ossify.plot.add_scale_bar(
         ax=ax,
         length=50,  # 50 μm
         position=(0.1, 0.1),
@@ -626,7 +629,7 @@ cell.skeleton.add_feature(strahler, name="strahler")
 fig, axes = plt.subplots(1, 2, figsize=(16, 8))
 
 # Original morphology
-ossify.plot_morphology_2d(
+ossify.plot.plot_morphology_2d(
     cell,
     projection="xy",
     color="compartment",
@@ -638,7 +641,7 @@ ossify.plot_morphology_2d(
 axes[0].set_title("Compartment Classification")
 
 # Strahler analysis
-ossify.plot_morphology_2d(
+ossify.plot.plot_morphology_2d(
     cell,
     projection="xy", 
     color="strahler",
@@ -661,7 +664,7 @@ plt.show()
 fig, axes = plt.subplots(1, 2, figsize=(16, 8))
 
 # Original morphology
-ossify.plot_morphology_2d(
+ossify.plot.plot_morphology_2d(
     cell,
     projection="xy",
     color='compartment',
@@ -673,7 +676,7 @@ axes[0].set_title("Complete Morphology")
 
 # Dendrite only (compartment == 3)
 with cell.mask_context('skeleton', cell.skeleton.features['compartment'] == 3) as masked_cell:
-    ossify.plot_morphology_2d(
+    ossify.plot.plot_morphology_2d(
         masked_cell,
         projection="xy",
         color='black',
@@ -707,7 +710,7 @@ def plot_masked_comparison(cell, mask, mask_name="Mask"):
     
     # Original with mask highlighted
     colors = ["lightgray" if not m else "red" for m in mask]
-    ossify.plot_morphology_2d(
+    ossify.plot.plot_morphology_2d(
         cell,
         projection="xy",
         color=colors,
@@ -717,7 +720,7 @@ def plot_masked_comparison(cell, mask, mask_name="Mask"):
     axes[0].set_title(f"Original (highlighted: {mask_name})")
     
     # Masked result
-    ossify.plot_morphology_2d(
+    ossify.plot.plot_morphology_2d(
         masked_cell,
         projection="xy",
         color="blue",
@@ -737,15 +740,15 @@ def plot_masked_comparison(cell, mask, mask_name="Mask"):
 ## Key Plotting Functions
 
 ### Core Plotting Functions
-- `ossify.plot_morphology_2d(cell, projection="xy", color=None, palette="coolwarm", ...)` - Main 2D plotting function
-- `ossify.plot_cell_multiview(cell, layout="three_panel", ...)` - Multi-view layouts
+- `ossify.plot.plot_morphology_2d(cell, projection="xy", color=None, palette="coolwarm", ...)` - Main 2D plotting function
+- `ossify.plot.plot_cell_multiview(cell, layout="three_panel", ...)` - Multi-view layouts
 
 ### Figure Creation
-- `ossify.single_panel_figure(data_bounds_min, data_bounds_max, units_per_inch, ...)` - Precise single panel
-- `ossify.multi_panel_figure(data_bounds_min, data_bounds_max, units_per_inch, layout, ...)` - Multi-panel layouts
+- `ossify.plot.single_panel_figure(data_bounds_min, data_bounds_max, units_per_inch, ...)` - Precise single panel
+- `ossify.plot.multi_panel_figure(data_bounds_min, data_bounds_max, units_per_inch, layout, ...)` - Multi-panel layouts
 
 ### Enhancements
-- `ossify.add_scale_bar(ax, length, position=(0.05, 0.05), feature=None, ...)` - Add scale bars
+- `ossify.plot.add_scale_bar(ax, length, position=(0.05, 0.05), feature=None, ...)` - Add scale bars
 
 ### Projection Options
 - Standard projections: `"xy"`, `"xz"`, `"yz"`, `"yx"`, `"zx"`, `"zy"`

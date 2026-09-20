@@ -538,7 +538,7 @@ compartment_palette = {
 }
 
 # Works directly with the 2D and 3D plot APIs
-ossify.plot_cell_2d(cell, color="compartment", palette=compartment_palette)
+ossify.plot.plot_cell_2d(cell, color="compartment", palette=compartment_palette)
 
 # The IntEnum members are ints, so they can also drive export_swc's
 # compartment_mapping argument without casting:
