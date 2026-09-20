@@ -169,3 +169,96 @@ def test_every_public_member_is_reachable(full_cell):
             except Exception as exc:  # noqa: BLE001 - collected and reported
                 failures.append(f"{cls.__name__}.{name}: {type(exc).__name__}: {exc}")
     assert not failures, "public members raised:\n  " + "\n  ".join(failures)
+
+
+# ---------------------------------------------------------------------------
+# Members the sweep above cannot reach, because they take required arguments
+# ---------------------------------------------------------------------------
+class TestMembersRequiringArguments:
+    """One real call each, asserting the contract the name implies.
+
+    These are the remainder of the never-tested surface. The sweep calls only
+    zero-argument members, so without these they stay unexercised.
+    """
+
+    def test_cell_add_layer_rejects_a_foreign_layer(self, full_cell):
+        from ossify import PointCloudLayer
+
+        # A layer constructed on its own carries its own MorphSync, which the
+        # cell cannot adopt; add_point_layer is the supported route.
+        foreign = PointCloudLayer(
+            "extra",
+            np.array([[0.0, 0, 0], [1, 0, 0]]),
+            spatial_columns=["x", "y", "z"],
+        )
+        with pytest.raises(ValueError, match="Incompatible MorphSync"):
+            full_cell.add_layer(foreign)
+
+        full_cell.add_point_layer(
+            name="extra",
+            vertices=np.array([[0.0, 0, 0], [1, 0, 0]]),
+            spatial_columns=["x", "y", "z"],
+        )
+        assert "extra" in full_cell.layers.names
+
+    def test_cell_get_features_maps_across_layers(self, full_cell):
+        out = full_cell.get_features(
+            "radius", target_layer="graph", source_layers="skeleton", agg="mean"
+        )
+        assert len(out) == full_cell.graph.n_vertices
+
+    def test_pointcloud_filter(self, full_cell):
+        syn = full_cell.annotations.syn
+        skel = full_cell.skeleton
+        # The mask belongs to the layer named in the second argument.
+        mask = np.isin(skel.vertex_index, skel.end_points)
+        out = syn.filter(mask, "skeleton")
+        # Only the annotations linked to those skeleton vertices survive.
+        assert len(out) <= syn.n_vertices
+
+    def test_graph_proximity_mapping(self, full_cell):
+        out = full_cell.graph.proximity_mapping(distance_threshold=1.5)
+        assert out is not None
+
+    def test_skeleton_cut_graph_splits_components(self, full_cell):
+        from scipy.sparse.csgraph import connected_components
+
+        skel = full_cell.skeleton
+        whole, _ = connected_components(skel.csgraph_binary, directed=False)
+        cut, _ = connected_components(
+            skel.cut_graph(skel.branch_points), directed=False
+        )
+        assert cut > whole
+
+    def test_skeleton_downstream_vertices(self, full_cell):
+        skel = full_cell.skeleton
+        branch = skel.branch_points[0]
+        exclusive = skel.downstream_vertices(branch)
+        inclusive = skel.downstream_vertices(branch, inclusive=True)
+        assert branch in inclusive
+        assert branch not in exclusive
+        assert set(exclusive) < set(inclusive)
+        assert np.all(np.isin(inclusive, skel.vertex_index))
+
+    def test_skeleton_expand_to_segment(self, full_cell):
+        skel = full_cell.skeleton
+        tips = skel.end_points[:2]
+        segments = skel.expand_to_segment(tips)
+        assert len(segments) == len(tips)
+        for tip, segment in zip(tips, segments):
+            assert tip in segment
+
+    def test_skeleton_segments_capped_respects_the_cap(self, full_cell):
+        skel = full_cell.skeleton
+        capped, seg_map = skel.segments_capped(1.0, positional=True)
+        # positional=True must give positions into this layer.
+        covered = np.concatenate(capped)
+        assert covered.max() < skel.n_vertices
+        # Every vertex still appears exactly once across the capped segments.
+        assert len(covered) == skel.n_vertices
+        # Capping can only split, never merge.
+        assert len(capped) >= len(skel.segments_positional)
+        # And the index form is the same segments, mapped through vertex_index.
+        by_index, _ = skel.segments_capped(1.0, positional=False)
+        for positions, ids in zip(capped, by_index):
+            np.testing.assert_array_equal(skel.vertex_index[positions], ids)

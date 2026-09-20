@@ -2603,8 +2603,11 @@ class SkeletonLayer(GraphLayer):
         ds_inds = gf.get_subtree_nodes(
             subtree_root=vertex[0], edges=self.edges_positional
         )
-        if inclusive:
-            ds_inds = np.concatenate(([vertex[0]], ds_inds))
+        # get_subtree_nodes already returns the subtree root, so `inclusive`
+        # had it backwards: False still contained the vertex, and True listed
+        # it twice.
+        if not inclusive:
+            ds_inds = ds_inds[ds_inds != vertex[0]]
         if as_positional:
             return ds_inds
         else:
@@ -2820,7 +2823,10 @@ class SkeletonLayer(GraphLayer):
         capped_segs, capped_seg_map = gf.build_capped_segments(
             segments, self.vertices, max_length
         )
-        if positional:
+        # ``build_capped_segments`` works in positional space, so it is the
+        # *index* form that needs mapping. This test was inverted, returning
+        # vertex indices for positional=True and positions for positional=False.
+        if not positional:
             capped_segs = [self.vertex_index[seg] for seg in capped_segs]
         return capped_segs, capped_seg_map
 
