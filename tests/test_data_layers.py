@@ -1856,6 +1856,53 @@ class TestScalarVertexArguments:
         assert np.asarray(d).item() == pytest.approx(4.0)
 
 
+class TestMajorityAggregation:
+    """ "majority" is ossify's own reducer, not a pandas one. It was translated
+    only when it was the entire ``agg`` argument, so the per-feature dict form
+    -- the documented way to mix aggregations -- reached pandas untouched and
+    raised AttributeError."""
+
+    def _cell(self, spatial_columns):
+        sv = np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]])
+        se = np.array([[1, 0], [2, 1], [3, 2]])
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=sv, edges=se, spatial_columns=spatial_columns, root=0
+        )
+        mv = np.repeat(sv, 2, axis=0)
+        mv[:, 1] += 0.1
+        cell.add_mesh(
+            vertices=mv,
+            faces=np.array([[0, 1, 2], [2, 3, 4], [4, 5, 6]]),
+            spatial_columns=spatial_columns,
+            linkage=Link(mapping=np.repeat(np.arange(4), 2), target="skeleton"),
+        )
+        cell.skeleton.add_feature(np.array([0.9, 0.8, 0.7, 0.6]), name="quality")
+        cell.skeleton.add_feature(np.array([0, 0, 1, 1]), name="region")
+        return cell
+
+    def test_majority_inside_a_per_feature_dict(self, spatial_columns):
+        cell = self._cell(spatial_columns)
+        out = cell.skeleton.map_features_to_layer(
+            features=["quality", "region"],
+            layer="mesh",
+            agg={"quality": "mean", "region": "majority"},
+        )
+        assert list(out.columns) == ["quality", "region"]
+        assert len(out) == cell.mesh.n_vertices
+        # Two mesh vertices per skeleton vertex, so values simply broadcast.
+        np.testing.assert_array_equal(
+            out["region"].to_numpy(), [0, 0, 0, 0, 1, 1, 1, 1]
+        )
+
+    def test_majority_as_the_whole_agg_still_works(self, spatial_columns):
+        cell = self._cell(spatial_columns)
+        out = cell.skeleton.map_features_to_layer(
+            features="region", layer="mesh", agg="majority"
+        )
+        np.testing.assert_array_equal(np.asarray(out).ravel(), [0, 0, 0, 0, 1, 1, 1, 1])
+
+
 class TestCoverPathsSpecific:
     """``cover_paths_specific`` called a graph_functions name that does not
     exist, so every call raised AttributeError. It had no test coverage."""

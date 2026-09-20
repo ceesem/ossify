@@ -2,6 +2,45 @@
 
 Every layer in ossify — mesh, graph, skeleton, or annotation — carries vertex-level features: arrays of data attached to each vertex. Features are how you store and access properties like radius, compartment labels, volume, quality scores, and anything else you compute or import. This page covers the operations that work the same way across all layer types.
 
+## Setup
+
+The snippets below use a small cell with a skeleton, a mesh and a graph, all
+linked together so the cross-layer examples have somewhere to map to:
+
+```python
+import numpy as np
+import ossify
+
+skeleton_vertices = np.array([[0.0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]])
+skeleton_edges = np.array([[1, 0], [2, 1], [3, 2]])
+
+cell = ossify.Cell(name="layer_features_example")
+cell.add_skeleton(
+    vertices=skeleton_vertices,
+    edges=skeleton_edges,
+    spatial_columns=["x", "y", "z"],
+    root=0,
+)
+
+# Two mesh vertices per skeleton vertex.
+mesh_vertices = np.repeat(skeleton_vertices, 2, axis=0)
+mesh_vertices[:, 1] += 0.1
+cell.add_mesh(
+    vertices=mesh_vertices,
+    faces=np.array([[0, 1, 2], [2, 3, 4], [4, 5, 6]]),
+    spatial_columns=["x", "y", "z"],
+    linkage=ossify.Link(mapping=np.repeat(np.arange(4), 2), target="skeleton"),
+)
+
+# A graph layer, also linked to the skeleton.
+cell.add_graph(
+    vertices=skeleton_vertices,
+    edges=skeleton_edges,
+    spatial_columns=["x", "y", "z"],
+    linkage=ossify.Link(mapping=np.arange(4), target="skeleton"),
+)
+```
+
 ## Common Properties
 
 Every layer has these basic properties:
@@ -94,10 +133,9 @@ transformed_layer = layer.transform(scale_and_translate, inplace=False)
 # Transform in place
 layer.transform(scale_and_translate, inplace=True)
 
-# Transform using a matrix
-transform_matrix = np.eye(4)
-transform_matrix[:3, 3] = [5, 0, 0]  # Translation
-layer.transform(transform_matrix, inplace=True)
+# An array argument is replacement coordinates, of the same shape as the
+# layer's vertices -- not an affine matrix. Express an affine as a callable.
+layer.transform(lambda vertices: vertices + np.array([5.0, 0.0, 0.0]), inplace=True)
 ```
 
 ## Masking and Filtering
@@ -112,9 +150,10 @@ mask = layer.get_feature("quality") > 0.7
 filtered_layer = layer.apply_mask(mask, as_positional=False)
 
 # Use as context manager for temporary filtering
-with layer.mask_context(mask) as filtered_layer:
+# Masking a layer that belongs to a Cell yields a Cell, so reach through it.
+with layer.mask_context(mask) as filtered_cell:
     # Work with filtered data
-    result = some_analysis_function(filtered_layer)
+    result = filtered_cell.skeleton.n_vertices
 # Original layer unchanged
 
 # Mask using vertex indices instead of boolean
@@ -122,7 +161,7 @@ vertex_indices = layer.vertex_index[:10]  # First 10 vertices
 subset_layer = layer.apply_mask(vertex_indices, as_positional=False)
 
 # Mask using positional indices
-positional_mask = np.array([0, 1, 2, 5, 8])  # Specific positions
+positional_mask = np.array([0, 1, 3])  # Specific positions
 subset_layer = layer.apply_mask(positional_mask, as_positional=True)
 ```
 
@@ -178,8 +217,10 @@ mapped_features = layer.map_features_to_layer(
 )
 
 # Use the mapping
-target_layer = cell.layers["skeleton"]
-target_layer.add_feature(mapped_features)
+# The mapped columns keep their source names, so rename them if the target
+# layer already carries features by those names.
+target_layer = cell.layers["mesh"]
+target_layer.add_feature(mapped_features.add_suffix("_from_skeleton"))
 ```
 
 ### Mask Mapping
@@ -210,12 +251,12 @@ vertex_index_map = layer.vertex_index_map  # Dict: {100: 0, 205: 1, 350: 2, 401:
 
 # Most functions have as_positional parameter
 distances = layer.distance_to_root(
-    vertices=[100, 205],        # Vertex indices
+    vertices=layer.vertex_index[:2],   # Vertex indices
     as_positional=False         # Specify we're using vertex indices
 )
 
 distances = layer.distance_to_root(
-    vertices=[0, 1],            # Positional indices  
+    vertices=[0, 1],            # Positional indices
     as_positional=True          # Specify we're using positions
 )
 ```
@@ -230,8 +271,9 @@ unmapped = layer.get_unmapped_vertices()
 
 # Find vertices with no mapping to specific layers
 unmapped_to_mesh = layer.get_unmapped_vertices(target_layers="mesh")
+# A layer cannot be its own mapping target, so name the others.
 unmapped_to_multiple = layer.get_unmapped_vertices(
-    target_layers=["mesh", "skeleton"]
+    target_layers=["mesh", "graph"]
 )
 
 # Remove unmapped vertices

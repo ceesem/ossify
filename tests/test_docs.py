@@ -44,8 +44,12 @@ EXAMPLE_LOCAL = REPO / "864691135336055529.osy"
 
 # Pages whose examples are known to run end to end.
 EXECUTABLE_PAGES = [
+    "algorithms_and_analysis.md",
+    "cell_object.md",
     "getting_started.md",
+    "linking_and_mapping.md",
     "masking_and_filtering.md",
+    "shared_layer_features.md",
     "working_with_graphs.md",
     "working_with_meshes.md",
     "working_with_skeletons.md",

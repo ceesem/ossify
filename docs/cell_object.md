@@ -83,7 +83,13 @@ Surface mesh data with faces:
 mesh_vertices = np.array([[0,0,0], [1,0,0], [0,1,0]])
 faces = np.array([[0,1,2]])  # Triangle
 
-cell.add_mesh(vertices=mesh_vertices, faces=faces)
+# `linkage` records which skeleton vertex each mesh vertex belongs to. Without
+# it the mesh cannot take part in cross-layer mapping or mask propagation.
+cell.add_mesh(
+    vertices=mesh_vertices,
+    faces=faces,
+    linkage=ossify.Link(mapping=np.array([0, 1, 2]), target="skeleton"),
+)
 
 # Access mesh properties
 print(f"Surface area: {cell.mesh.surface_area()}")
@@ -94,10 +100,17 @@ print(f"Number of faces: {len(cell.mesh.faces)}")
 General graph structure without tree constraints:
 
 ```python
-graph_vertices = np.random.randn(5, 3)
+graph_vertices = np.array([
+    [0.0, 0, 0], [0.5, 0, 0], [1.0, 0, 0], [1.5, 0, 0], [2.0, 0, 0],
+])
 graph_edges = np.array([[0,1], [1,2], [2,3], [3,4], [4,0]])  # Cycle
 
-cell.add_graph(vertices=graph_vertices, edges=graph_edges)
+# Linked to the skeleton, so masks and feature mapping reach this layer too.
+cell.add_graph(
+    vertices=graph_vertices,
+    edges=graph_edges,
+    linkage=ossify.Link(mapping=np.array([0, 0, 1, 1, 2]), target="skeleton"),
+)
 
 print(f"Graph vertices: {cell.graph.n_vertices}")
 ```
@@ -156,9 +169,10 @@ Both layers and annotations can have associated feature data:
 # Add features to skeleton
 import pandas as pd
 
-# Using arrays
-radius_values = np.array([0.5, 0.3, 0.2])
-cell.skeleton.add_feature(radius_values, name="radius")
+# Using arrays. The skeleton above was created with a "radius" feature, and a
+# name may only be used once, so this adds a new one.
+confidence_values = np.array([0.9, 0.8, 0.95])
+cell.skeleton.add_feature(confidence_values, name="confidence")
 
 # Using dictionaries
 features_dict = {"compartment": [0, 1, 1]}  # 0=dendrite, 1=axon
@@ -244,7 +258,14 @@ cell.annotations.describe()
 #     ├── features: [spine_type]
 #     └── Links: skeleton → spines
 
-# 4. Individual layers (with cell context)
+# 4. Individual layers (with cell context). Re-add an annotation, since
+# `remove_annotation` above took the earlier one away.
+cell.add_point_annotations(
+    name="synapses",
+    vertices=np.array([[0.5, 0, 0], [1.5, 0, 0]]),
+    spatial_columns=["x", "y", "z"],
+    linkage=ossify.Link(mapping=np.array([0, 1]), target="skeleton"),
+)
 cell.skeleton.describe()
 # Output:
 # Cell: my_neuron
@@ -300,12 +321,13 @@ print(len(cell_copy.skeleton.vertices))  # Same data
 ### Spatial Transformations
 
 ```python
-# Apply a transformation to all spatial layers
-# Using a transformation matrix
-transform_matrix = np.eye(4)  # Identity matrix
-transform_matrix[:3, 3] = [10, 0, 0]  # Translation
+# Apply a transformation to all spatial layers. An array argument must be
+# replacement coordinates of the same shape as that layer's vertices, so a
+# whole-cell transform is expressed as a callable taking and returning (N, 3).
+def translate_x(vertices):
+    return vertices + np.array([10.0, 0.0, 0.0])
 
-cell.transform(transform_matrix, inplace=True)
+cell.transform(translate_x, inplace=True)
 
 # Using a function
 def scale_by_two(vertices):
@@ -334,8 +356,9 @@ layers = cell.l    # layers
 mask = cell.skeleton.vertex_index < 10
 
 with cell.mask_context("skeleton", mask) as masked_cell:
-    # Work with filtered data
-    result = some_analysis_function(masked_cell)
+    # Work with filtered data. Extract what you need inside the block: the
+    # masked cell is torn down when it exits.
+    result = masked_cell.skeleton.n_vertices
 # Original cell unchanged
 ```
 

@@ -619,7 +619,7 @@ if hasattr(cell, 'skeleton') and cell.skeleton is not None:
 import ossify
 
 # Compute Strahler numbers
-strahler = ossify.strahler_number(cell)
+strahler = ossify.algorithms.strahler_number(cell)
 cell.skeleton.add_feature(strahler, name="strahler")
 
 # Create figure showing Strahler analysis

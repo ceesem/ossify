@@ -798,8 +798,17 @@ class PointMixin(ABC):
             right_index=True,
             how="left",
         )
+        # "majority" is ossify's own reducer, not something pandas understands,
+        # so it has to be swapped for the callable wherever it appears -- including
+        # inside a per-feature dict, which is the documented way to give different
+        # features different aggregations.
         if agg == "majority":
             agg = utils.majority_agg()
+        elif isinstance(agg, dict):
+            agg = {
+                key: utils.majority_agg() if value == "majority" else value
+                for key, value in agg.items()
+            }
         # Group by target layer and aggregate, then reindex to ensure all target vertices are included
         grouped_result = mapping_merged.groupby(layer).agg(agg)
         target_layer_index = self._morphsync.layers[layer].nodes.index
