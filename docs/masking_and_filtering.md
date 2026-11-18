@@ -101,6 +101,27 @@ print(f"Filtered edges: {filtered_edges}")
 # Edge indices are remapped to new vertex positions
 ```
 
+### Connected Components of a Mask
+
+A mask that cuts through the skeleton leaves pieces that no longer reach the
+root. `root_component` and `largest_connected_component` return a boolean mask
+of one component, found within the subgraph a mask induces, so you can keep
+only the piece you want before masking.
+
+```python
+# Drop vertex 2: vertices 3 and 4 survive the mask but are cut off from the root
+cut = np.array([True, True, False, True, True])
+
+attached = skeleton.root_component(mask=cut)
+print(f"Attached to root: {attached}")  # [ True  True False False False]
+
+largest = skeleton.largest_connected_component(mask=cut)
+print(f"Largest piece: {largest}")  # ties go to the earliest piece
+
+connected = cell.apply_mask("skeleton", attached)
+print(f"Connected vertices: {connected.skeleton.n_vertices}")
+```
+
 ### Mask Effects on Different Layer Types
 
 ```python

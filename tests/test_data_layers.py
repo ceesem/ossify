@@ -1946,6 +1946,125 @@ class TestCoverPathsSpecific:
             np.testing.assert_array_equal(before, after)
 
 
+class TestConnectedComponentMasks:
+    """``root_component`` and ``largest_connected_component`` work on the
+    subgraph a mask induces and answer in full-length boolean masks.
+
+    The skeleton, with a non-positional vertex index so a positional mix-up
+    shows::
+
+        100 -- 101 -- 102 -- 103 -- 104
+                |
+               105 -- 106 -- 107
+    """
+
+    def _cell(self, spatial_columns, root=100):
+        verts = np.array(
+            [
+                [0.0, 0, 0],
+                [1, 0, 0],
+                [2, 0, 0],
+                [3, 0, 0],
+                [4, 0, 0],
+                [1, 1, 0],
+                [1, 2, 0],
+                [1, 3, 0],
+            ]
+        )
+        idx = np.array([100, 101, 102, 103, 104, 105, 106, 107])
+        df = pd.DataFrame(verts, columns=spatial_columns, index=idx)
+        edges = np.array(
+            [
+                [101, 100],
+                [102, 101],
+                [103, 102],
+                [104, 103],
+                [105, 101],
+                [106, 105],
+                [107, 106],
+            ]
+        )
+        cell = Cell()
+        cell.add_skeleton(
+            vertices=df, edges=edges, spatial_columns=spatial_columns, root=root
+        )
+        return cell
+
+    def test_unmasked_connected_skeleton_is_one_component(self, spatial_columns):
+        skel = self._cell(spatial_columns).skeleton
+        assert skel.root_component().all()
+        assert skel.largest_connected_component().all()
+        everything = np.ones(skel.n_vertices, dtype=bool)
+        assert skel.root_component(mask=everything).all()
+
+    def test_mask_that_splits_keeps_only_the_root_piece(self, spatial_columns):
+        skel = self._cell(spatial_columns).skeleton
+        # Cutting 102 strands 103-104; cutting 106 strands 107.
+        mask = np.array([True, True, False, True, True, True, False, True])
+        root_comp = skel.root_component(mask=mask)
+        np.testing.assert_array_equal(skel.vertex_index[root_comp], [100, 101, 105])
+        assert root_comp.shape == (skel.n_vertices,)
+        assert not (root_comp & ~mask).any()
+
+    def test_largest_need_not_hold_the_root(self, spatial_columns):
+        skel = self._cell(spatial_columns).skeleton
+        # Cutting 101 leaves {100}, {102, 103, 104} and {105, 106, 107}.
+        mask = np.array([True, False, True, True, True, True, True, True])
+        largest = skel.largest_connected_component(mask=mask)
+        # Two pieces of three tie; the one holding the earliest vertex wins.
+        np.testing.assert_array_equal(skel.vertex_index[largest], [102, 103, 104])
+        np.testing.assert_array_equal(
+            skel.vertex_index[skel.root_component(mask=mask)], [100]
+        )
+
+    def test_root_outside_mask_gives_an_empty_component(self, spatial_columns):
+        skel = self._cell(spatial_columns).skeleton
+        mask = np.ones(skel.n_vertices, dtype=bool)
+        mask[0] = False
+        assert not skel.root_component(mask=mask).any()
+
+    def test_empty_mask_gives_an_empty_component(self, spatial_columns):
+        skel = self._cell(spatial_columns).skeleton
+        empty = np.zeros(skel.n_vertices, dtype=bool)
+        assert not skel.largest_connected_component(mask=empty).any()
+        assert not skel.root_component(mask=empty).any()
+
+    def test_follows_a_non_default_root(self, spatial_columns):
+        skel = self._cell(spatial_columns, root=107).skeleton
+        mask = np.array([True, True, False, True, True, True, False, True])
+        np.testing.assert_array_equal(
+            skel.vertex_index[skel.root_component(mask=mask)], [107]
+        )
+
+    def test_rejects_a_mask_that_is_not_per_vertex_boolean(self, spatial_columns):
+        skel = self._cell(spatial_columns).skeleton
+        with pytest.raises(ValueError, match="boolean array"):
+            skel.root_component(mask=np.array([0, 1, 2]))
+        with pytest.raises(ValueError, match="boolean array"):
+            skel.largest_connected_component(mask=np.ones(3, dtype=bool))
+
+    def test_graph_layer_has_largest_connected_component(self):
+        cell = Cell()
+        cell.add_graph(
+            vertices=np.array(
+                [[0.0, 0, 0], [1, 0, 0], [5, 0, 0], [6, 0, 0], [7, 0, 0]]
+            ),
+            edges=np.array([[0, 1], [2, 3], [3, 4]]),
+        )
+        np.testing.assert_array_equal(
+            cell.graph.largest_connected_component(),
+            [False, False, True, True, True],
+        )
+
+    def test_selects_the_same_vertices_after_masking(self, spatial_columns):
+        cell = self._cell(spatial_columns)
+        mask = np.array([True, True, False, True, True, True, False, True])
+        root_comp = cell.skeleton.root_component(mask=mask)
+        masked = cell.apply_mask("skeleton", root_comp)
+        assert masked.skeleton.root == 100
+        assert masked.skeleton.root_component().all()
+
+
 class TestMaskContextTeardown:
     """``mask_context`` yields a scoped temporary that must be torn down when
     the block exits, so the masked copy is reclaimed promptly rather than

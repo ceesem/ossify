@@ -1766,6 +1766,60 @@ class GraphLayer(PointMixin, EdgeMixin):
         """
         return np.array(self.csgraph_undirected.sum(axis=0)).flatten() / 2
 
+    def _masked_component_labels(self, mask: Optional[np.ndarray]) -> np.ndarray:
+        """Connected-component label per vertex within the subgraph ``mask`` induces.
+
+        Vertices outside ``mask`` get -1. Edges count only when both ends are
+        inside it, so a mask that cuts through the graph splits it.
+        """
+        if mask is None:
+            keep = np.ones(self.n_vertices, dtype=bool)
+        else:
+            keep = np.asarray(mask)
+            if keep.dtype != bool or keep.shape != (self.n_vertices,):
+                raise ValueError(
+                    "mask must be a boolean array with one entry per vertex "
+                    f"({self.n_vertices}), got dtype {keep.dtype} and shape {keep.shape}"
+                )
+        labels = np.full(self.n_vertices, -1, dtype=int)
+        inside = np.flatnonzero(keep)
+        if inside.size == 0:
+            return labels
+        subgraph = self.csgraph_binary_undirected[inside][:, inside]
+        _, labels[inside] = sparse.csgraph.connected_components(
+            subgraph, directed=False
+        )
+        return labels
+
+    def largest_connected_component(
+        self, mask: Optional[np.ndarray] = None
+    ) -> np.ndarray:
+        """Boolean mask of the largest connected component, by vertex count.
+
+        Parameters
+        ----------
+        mask : np.ndarray, optional
+            Boolean array with one entry per vertex. When given, components are
+            found within the subgraph it induces: vertices outside it are never
+            selected, and edges count only when both ends are inside it.
+            Default None considers the whole layer.
+
+        Returns
+        -------
+        np.ndarray
+            Boolean array with one entry per vertex, True on the largest
+            component. Ties go to the component holding the lowest-positioned
+            vertex. All False when ``mask`` selects nothing.
+        """
+        labels = self._masked_component_labels(mask)
+        inside = labels >= 0
+        if not inside.any():
+            return inside
+        # connected_components numbers components in order of first vertex, and
+        # argmax takes the first maximum, so ties go to the earliest component.
+        largest = int(np.argmax(np.bincount(labels[inside])))
+        return labels == largest
+
     def proximity_mapping(
         self,
         distance_threshold: float,
@@ -2201,6 +2255,36 @@ class SkeletonLayer(GraphLayer):
         if self.root is None:
             return None
         return self.vertex_df.loc[self.root, self.spatial_columns].to_numpy(dtype=float)
+
+    def root_component(self, mask: Optional[np.ndarray] = None) -> np.ndarray:
+        """Boolean mask of the connected component that contains the root.
+
+        Parameters
+        ----------
+        mask : np.ndarray, optional
+            Boolean array with one entry per vertex. When given, the component is
+            found within the subgraph it induces, so vertices reachable from the
+            root only through vertices outside the mask are excluded. Default
+            None considers the whole skeleton.
+
+        Returns
+        -------
+        np.ndarray
+            Boolean array with one entry per vertex, True on the root's
+            component. All False when the root lies outside ``mask``.
+
+        Raises
+        ------
+        ValueError
+            If the skeleton has no root.
+        """
+        root = self.root_positional
+        if root is None:
+            raise ValueError("Skeleton has no root, so it has no root component")
+        labels = self._masked_component_labels(mask)
+        if labels[root] < 0:
+            return np.zeros(self.n_vertices, dtype=bool)
+        return labels == labels[root]
 
     @property
     def parent_node_array(self) -> np.ndarray:
