@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.1
+
+### New
+
+- **`SkeletonLayer.root_component(mask=None)`** returns a boolean mask of the
+  connected component containing the root. With a `mask`, the component is
+  found in the subgraph the mask induces, so vertices reachable from the root
+  only through masked-out vertices are excluded: for example, dendrite that
+  reaches the soma only through axon. Raises if the skeleton has no root.
+- **`GraphLayer.largest_connected_component(mask=None)`** returns the largest
+  component by vertex count, under the same masking rule. Ties go to the
+  component holding the lowest-positioned vertex.
+
+### Performance
+
+- **`facets_positional` skips the index remap** when the mesh's vertex index
+  already equals its positional index (the default `0..n-1`), instead of
+  remapping on every access.
+
 ## 0.3.0
 
 Most of this release comes from executing the API rather than reading it:
