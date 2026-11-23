@@ -508,6 +508,11 @@ def fetch_frames_batch(
         not fetched (e.g. synapses off) are ``None``.
     """
     root_ids = [int(r) for r in root_ids]
+    if not root_ids:
+        # Nothing to fetch. Never issue a pooled query with an empty root-id filter: the
+        # materialization server rejects it with a misleading 500 ("ALL root id filters
+        # passed ([]) were invalid").
+        return {}
     if reference_suffixes is None:
         reference_suffixes = {}
     results: dict[int, dict] = {
@@ -660,6 +665,8 @@ def load_cell_batch_from_client(
             f"{len(invalid_ids)} root id(s) not valid at {ts}: {invalid_ids[:5]}"
             + (" ..." if len(invalid_ids) > 5 else "")
         )
+    if not valid_ids:
+        return {}
 
     # 2. Skeletons: one cached bulk download (chunked at the cached-bulk cap) to obtain lvl2_ids,
     #    then injected into assembly. Assumes a prior generate_bulk_skeletons_async pre-pass.
@@ -677,6 +684,9 @@ def load_cell_batch_from_client(
             f"{no_skeleton[:5]}" + (" ..." if len(no_skeleton) > 5 else "")
         )
     valid_ids = [r for r in valid_ids if r in sk_by_root]
+    if not valid_ids:
+        # Every valid root lacked a cached skeleton (only reachable with skip_invalid=True).
+        return {}
     lvl2_ids_by_root = {r: sk_by_root[r]["lvl2_ids"] for r in valid_ids}
 
     # 3. Pooled synapse + L2 fetch.
