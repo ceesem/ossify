@@ -1,1 +1,51 @@
-{"downstream_hops": 15, "upstream_hops": 0, "bidirectional_hops": 0, "feature_columns": ["area_um2", "vol_um3", "max_dt_um", "vol_to_area", "syn_in", "syn_out", "down_area_um2", "down_vol_um3", "down_max_dt_um", "down_vol_to_area", "down_syn_in", "down_syn_out"], "spread_alpha": 0.5, "model_file": "xgb/v1dd_ds15_us0_bd0.ubj"}
+{
+  "dataset": "v1dd",
+  "description": "Earlier axon/dendrite model: features summed over 15 hops downstream. Kept for comparison.",
+  "downstream_hops": 15,
+  "upstream_hops": 0,
+  "bidirectional_hops": 0,
+  "feature_columns": [
+    "area_um2",
+    "vol_um3",
+    "max_dt_um",
+    "vol_to_area",
+    "syn_in",
+    "syn_out",
+    "down_area_um2",
+    "down_vol_um3",
+    "down_max_dt_um",
+    "down_vol_to_area",
+    "down_syn_in",
+    "down_syn_out"
+  ],
+  "spread_alpha": 0.5,
+  "model_file": "xgb/v1dd_ds15_us0_bd0.ubj",
+  "decode": {
+    "schema": {
+      "type": "TransitionSchema",
+      "version": 1,
+      "ossify_version": "0.3.2",
+      "classes": [
+        "dendrite",
+        "axon"
+      ],
+      "transitions": [
+        [
+          "axon",
+          "dendrite",
+          50
+        ],
+        [
+          "dendrite",
+          "axon",
+          2
+        ]
+      ],
+      "root_classes": [
+        "dendrite"
+      ],
+      "default_cost": 0.0
+    },
+    "absorb_min_size": 10
+  }
+}

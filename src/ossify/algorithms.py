@@ -13,6 +13,7 @@ __all__ = [
     "label_axon_from_spectral_split",
     "synapse_betweenness",
     "segregation_index",
+    "synapse_compartment_qc",
     "segment_aggregate",
     "subtree_aggregate",
     "path_to_root_aggregate",
@@ -388,6 +389,118 @@ def segregation_index(
     )
 
     return 1 - observed_ent / (unsplit_ent + 1e-10)
+
+
+def synapse_compartment_qc(
+    cell: Union[Cell, SkeletonLayer],
+    is_axon: np.ndarray,
+    pre_syn: Union[str, np.ndarray] = "pre_syn",
+    post_syn: Union[str, np.ndarray] = "post_syn",
+    max_pre_off_fraction: float = 0.05,
+    max_post_off_fraction: float = 0.05,
+    min_synapses: int = 100,
+) -> dict:
+    """Measure how cleanly an axon/dendrite labelling separates the synapses.
+
+    A neuron's outputs should be on its axon and its inputs on its dendrite
+    and soma. Synapses on the wrong side are evidence that the labelling, or
+    the reconstruction behind it, is not good enough to learn from.
+
+    Parameters
+    ----------
+    cell : Union[Cell, SkeletonLayer]
+        The neuron. A bare skeleton is enough when the synapses are given as
+        arrays.
+    is_axon : np.ndarray
+        ``(n_vertices,)`` boolean mask over skeleton vertices, positional.
+        Everything that is not axon, the soma included, counts as dendrite.
+    pre_syn : Union[str, np.ndarray]
+        Name of the annotation holding the cell's output synapses, or the
+        positional skeleton vertex of each one. Default ``"pre_syn"``.
+    post_syn : Union[str, np.ndarray]
+        The same for the cell's input synapses. Default ``"post_syn"``.
+    max_pre_off_fraction : float
+        Largest share of outputs allowed on the dendrite. Default 0.05.
+    max_post_off_fraction : float
+        Largest share of inputs allowed on the axon. Default 0.05.
+    min_synapses : int
+        Fewest outputs, and fewest inputs, the cell must have. With few
+        synapses the split is not trustworthy and the fractions are noisy.
+        Default 100.
+
+    Returns
+    -------
+    dict
+        ``n_pre`` and ``n_post``; the four counts ``pre_on_axon``,
+        ``pre_on_dendrite``, ``post_on_axon`` and ``post_on_dendrite``;
+        ``pre_off_fraction`` (outputs on the dendrite) and
+        ``post_off_fraction`` (inputs on the axon), NaN when the cell has none
+        of that kind; ``segregation_index``; and ``passes``, True when both
+        fractions are within their limits and both counts reach
+        ``min_synapses``.
+
+    Notes
+    -----
+    The default limits are placeholders, not tuned values.
+
+    Examples
+    --------
+    >>> is_axon = ossify.algorithms.label_axon_from_synapse_flow(
+    ...     cell, extend_feature_to_segment=True
+    ... )
+    >>> qc = ossify.algorithms.synapse_compartment_qc(cell, is_axon)
+    >>> if qc["passes"]:
+    ...     training_cells.append(cell)
+    """
+    skel = _as_skeleton(cell)
+    is_axon = np.asarray(is_axon, dtype=bool)
+    if is_axon.shape != (skel.n_vertices,):
+        raise ValueError(
+            f"is_axon must have one value per skeleton vertex ({skel.n_vertices},); "
+            f"got shape {is_axon.shape}."
+        )
+
+    def vertices(synapses: Union[str, np.ndarray]) -> np.ndarray:
+        if isinstance(synapses, str):
+            if isinstance(cell, SkeletonLayer):
+                raise ValueError(
+                    "Pass a Cell to look synapses up by annotation name, or give "
+                    "their skeleton vertices as arrays."
+                )
+            synapses = cell.annotations[synapses].map_index_to_layer(
+                "skeleton", as_positional=True
+            )
+        return np.asarray(synapses, dtype=int)
+
+    pre, post = vertices(pre_syn), vertices(post_syn)
+    pre_on_axon = int(is_axon[pre].sum())
+    post_on_axon = int(is_axon[post].sum())
+    pre_on_dendrite = len(pre) - pre_on_axon
+    post_on_dendrite = len(post) - post_on_axon
+    pre_off = pre_on_dendrite / len(pre) if len(pre) else float("nan")
+    post_off = post_on_axon / len(post) if len(post) else float("nan")
+    passes = bool(
+        len(pre) >= min_synapses
+        and len(post) >= min_synapses
+        and pre_off <= max_pre_off_fraction
+        and post_off <= max_post_off_fraction
+    )
+    return {
+        "n_pre": len(pre),
+        "n_post": len(post),
+        "pre_on_axon": pre_on_axon,
+        "pre_on_dendrite": pre_on_dendrite,
+        "post_on_axon": post_on_axon,
+        "post_on_dendrite": post_on_dendrite,
+        "pre_off_fraction": pre_off,
+        "post_off_fraction": post_off,
+        "segregation_index": float(
+            segregation_index(
+                pre_on_axon, post_on_axon, pre_on_dendrite, post_on_dendrite
+            )
+        ),
+        "passes": passes,
+    }
 
 
 def label_axon_from_synapse_flow(

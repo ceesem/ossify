@@ -347,6 +347,71 @@ class TestfeatureAxonFromSpectralSplit:
         assert is_axon_low_smooth.dtype == bool
 
 
+class TestSynapseCompartmentQC:
+    """How cleanly a labelling separates outputs from inputs."""
+
+    def test_counts_and_fractions_from_arrays(self, nrn):
+        skel = nrn.skeleton
+        is_axon = np.zeros(skel.n_vertices, dtype=bool)
+        is_axon[:10] = True
+        pre = np.array([0, 1, 2, 3, 20])  # one output on the dendrite
+        post = np.array([30, 31, 32, 5])  # one input on the axon
+        qc = algorithms.synapse_compartment_qc(
+            skel, is_axon, pre_syn=pre, post_syn=post, min_synapses=1
+        )
+        assert (qc["n_pre"], qc["n_post"]) == (5, 4)
+        assert (qc["pre_on_axon"], qc["pre_on_dendrite"]) == (4, 1)
+        assert (qc["post_on_axon"], qc["post_on_dendrite"]) == (1, 3)
+        assert qc["pre_off_fraction"] == pytest.approx(0.2)
+        assert qc["post_off_fraction"] == pytest.approx(0.25)
+        assert 0 < qc["segregation_index"] < 1
+        assert qc["passes"] is False
+
+    def test_limits_decide_passing(self, nrn):
+        skel = nrn.skeleton
+        is_axon = np.zeros(skel.n_vertices, dtype=bool)
+        is_axon[:10] = True
+        pre, post = np.array([0, 1, 2, 3, 20]), np.array([30, 31, 32, 5])
+        loose = dict(max_pre_off_fraction=0.3, max_post_off_fraction=0.3)
+        assert algorithms.synapse_compartment_qc(
+            skel, is_axon, pre, post, min_synapses=1, **loose
+        )["passes"]
+        # Enough clean synapses, but too few of them to trust.
+        assert not algorithms.synapse_compartment_qc(
+            skel, is_axon, pre, post, min_synapses=10, **loose
+        )["passes"]
+
+    def test_synapse_flow_labels_on_a_real_cell(self, nrn):
+        is_axon = algorithms.label_axon_from_synapse_flow(
+            nrn, extend_feature_to_segment=True
+        )
+        qc = algorithms.synapse_compartment_qc(nrn, is_axon)
+        assert qc["n_pre"] == len(nrn.annotations["pre_syn"])
+        assert qc["n_post"] == len(nrn.annotations["post_syn"])
+        assert qc["pre_on_axon"] + qc["pre_on_dendrite"] == qc["n_pre"]
+        assert qc["segregation_index"] > 0.5
+        assert isinstance(qc["passes"], bool)
+
+    def test_no_synapses_does_not_pass(self, nrn):
+        skel = nrn.skeleton
+        empty = np.array([], dtype=int)
+        qc = algorithms.synapse_compartment_qc(
+            skel, np.zeros(skel.n_vertices, dtype=bool), empty, empty
+        )
+        assert np.isnan(qc["pre_off_fraction"]) and np.isnan(qc["post_off_fraction"])
+        assert qc["segregation_index"] == 0
+        assert qc["passes"] is False
+
+    def test_wrong_mask_length_raises(self, nrn):
+        with pytest.raises(ValueError, match="one value per skeleton vertex"):
+            algorithms.synapse_compartment_qc(nrn, np.zeros(3, dtype=bool))
+
+    def test_annotation_names_need_a_cell(self, nrn):
+        skel = nrn.skeleton
+        with pytest.raises(ValueError, match="Pass a Cell"):
+            algorithms.synapse_compartment_qc(skel, np.zeros(skel.n_vertices, bool))
+
+
 class TestHelperFunctions:
     """Tests for internal helper functions."""
 

@@ -60,6 +60,9 @@ print(f"Fine process vertices: {len(fine_process_vertices)}")
 
 ## Compartment Classification
 
+!!! tip "Trained classifiers"
+    The methods below label a cell from its own synapses. For cells with few synapses, or objects with other cells merged on, see [Compartment Models](compartment_models.md): `ossify.compartments.load_labeler("v1dd_distance").predict(cell)`.
+
 ### Axon/Dendrite Classification by Synapse Flow
 
 Classify neuron compartments as axon or dendrite based on synapse distributions:

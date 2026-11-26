@@ -1,0 +1,90 @@
+{
+  "dataset": "minnie65",
+  "description": "Axon/dendrite on objects that may hold merges. Downstream windows of 10 and 30 um only; trained with axon pieces grafted onto dendrites.",
+  "downstream_hops": 0,
+  "upstream_hops": 0,
+  "bidirectional_hops": 0,
+  "feature_set": "local",
+  "feature_columns": [
+    "area_um2",
+    "vol_um3",
+    "max_dt_um",
+    "cable_um",
+    "vol_to_area",
+    "syn_in",
+    "syn_out",
+    "syn_in_per_area",
+    "syn_out_per_area",
+    "syn_in_per_um",
+    "syn_out_per_um",
+    "down10um_area_um2",
+    "down10um_vol_um3",
+    "down10um_max_dt_um",
+    "down10um_cable_um",
+    "down10um_vol_to_area",
+    "down10um_syn_in",
+    "down10um_syn_out",
+    "down10um_syn_in_per_area",
+    "down10um_syn_out_per_area",
+    "down10um_syn_in_per_um",
+    "down10um_syn_out_per_um",
+    "down30um_area_um2",
+    "down30um_vol_um3",
+    "down30um_max_dt_um",
+    "down30um_cable_um",
+    "down30um_vol_to_area",
+    "down30um_syn_in",
+    "down30um_syn_out",
+    "down30um_syn_in_per_area",
+    "down30um_syn_out_per_area",
+    "down30um_syn_in_per_um",
+    "down30um_syn_out_per_um"
+  ],
+  "model_file": "xgb/minnie65_local.ubj",
+  "decode": {
+    "schema": {
+      "type": "TransitionSchema",
+      "version": 1,
+      "ossify_version": "0.3.2",
+      "classes": [
+        "dendrite",
+        "axon"
+      ],
+      "transitions": [
+        [
+          "axon",
+          "dendrite",
+          50
+        ],
+        [
+          "dendrite",
+          "axon",
+          2
+        ]
+      ],
+      "root_classes": [
+        "dendrite"
+      ],
+      "default_cost": 0.0
+    },
+    "absorb_min_size": 10
+  },
+  "training": {
+    "datastack": "minnie65_public",
+    "version": 1822,
+    "cells": "gs://csm-skel/osy/minnie65/skel",
+    "qc": {
+      "max_pre_off_fraction": 0.1,
+      "max_post_off_fraction": 0.1,
+      "min_synapses": 100
+    },
+    "n_train_cells": 1575,
+    "grafts": {
+      "per_cell": 10,
+      "cable_um": [
+        20,
+        300
+      ]
+    }
+  }
+}

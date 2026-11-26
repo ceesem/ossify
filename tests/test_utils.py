@@ -153,3 +153,111 @@ class TestGetColumnMappings:
         """Test l2id column name generation."""
         result = utils.get_l2id_column("synapse_root_id")
         assert result == "synapse_l2_id"
+
+
+class TestSuppressOutputThreads:
+    """suppress_output swaps process-wide streams, so overlapping uses must nest."""
+
+    def test_overlapping_threads_restore_streams(self):
+        import sys
+        import threading
+        import time
+
+        from ossify.utils import suppress_output
+
+        before_out, before_err = sys.stdout, sys.stderr
+        errors = []
+        start = threading.Barrier(8)
+
+        def work(delay: float) -> None:
+            try:
+                start.wait()
+                for _ in range(20):
+                    with suppress_output():
+                        time.sleep(delay)
+                        print("hidden")
+            except Exception as error:  # noqa: BLE001
+                errors.append(error)
+
+        threads = [
+            threading.Thread(target=work, args=(0.0005 * (i + 1),)) for i in range(8)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == []
+        assert sys.stdout is before_out
+        assert sys.stderr is before_err
+
+    def test_first_in_first_out_restores_streams(self):
+        import sys
+        import threading
+
+        from ossify.utils import suppress_output
+
+        before_out, before_err = sys.stdout, sys.stderr
+        a_inside, b_inside, a_done = (threading.Event() for _ in range(3))
+        release_b = threading.Event()
+
+        def first() -> None:
+            with suppress_output():
+                a_inside.set()
+                b_inside.wait()
+            a_done.set()
+
+        def second() -> None:
+            a_inside.wait()
+            with suppress_output():
+                b_inside.set()
+                a_done.wait()
+                release_b.wait()
+                print("still hidden")  # must not hit a closed file
+
+        threads = [
+            threading.Thread(target=first, daemon=True),
+            threading.Thread(target=second, daemon=True),
+        ]
+        for t in threads:
+            t.start()
+        try:
+            assert a_done.wait(5)
+            # One thread is still inside: output must still be suppressed.
+            still_suppressed = sys.stdout is not before_out
+        finally:
+            release_b.set()
+            for t in threads:
+                t.join(5)
+            after_out, after_err = sys.stdout, sys.stderr
+            sys.stdout, sys.stderr = before_out, before_err
+        assert still_suppressed
+        assert after_out is before_out
+        assert after_err is before_err
+
+    def test_logger_level_restored_after_overlap(self):
+        import logging
+        import threading
+
+        from ossify.utils import suppress_output
+
+        logger = logging.getLogger()
+        level = logger.level
+        inside = threading.Event()
+        release = threading.Event()
+
+        def hold() -> None:
+            with suppress_output():
+                inside.set()
+                release.wait()
+
+        t = threading.Thread(target=hold)
+        t.start()
+        inside.wait()
+        with suppress_output():
+            pass
+        # The other thread is still inside, so output stays suppressed.
+        assert logger.level == logging.CRITICAL
+        release.set()
+        t.join()
+        assert logger.level == level

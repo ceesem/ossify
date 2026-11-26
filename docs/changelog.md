@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **Local skeletonization.** `ossify.skeletonize` builds a skeleton on a
+  cell's graph layer without the skeleton service, with soma detection
+  (`detect_soma`, `find_soma_point`) and radius (`add_skeleton_radius`).
+  `load_cell_from_l2graph(root_id, client)` fetches a cell's level-2 graph from
+  CAVE and skeletonizes it locally, so it works for cells the service has not
+  skeletonized.
+- **Compartment models.** `ossify.compartments.load_labeler(name)` returns a
+  ready-to-use axon/dendrite labeler: a bundled classifier plus the tree decode
+  stored in its config. `describe_models()` lists what is bundled. Four new
+  models ship: `minnie65_distance` and `v1dd_distance` for proofread cells, and
+  `minnie65_local` and `v1dd_local` for objects that may hold merges. See
+  [Compartment Models](compartment_models.md).
+- **Distance-based feature windows.** `make_skel_prop_df(..., windows=[...])`
+  aggregates features over `Window`s measured in path distance, and
+  `FEATURE_SETS` names the two sets the new models use (`"distance"`, `"local"`).
+  `ProbaVertexModel(..., feature_set=name)` makes a model on a named set
+  savable, and `from_config` now accepts the path of a config file of your own.
+- **Model configs carry their purpose and their decode.** Each bundled config
+  has `dataset`, `description` and a `decode` block (transition costs and
+  `absorb_min_size`).
+- **`algorithms.synapse_compartment_qc`** reports how cleanly a labelling
+  separates a cell's outputs from its inputs, for screening training cells.
+- **`load_cell_from_l2graph(..., compartment_labeler=...)`** labels a cell with
+  a model as it is built.
+
 ## 0.3.1
 
 ### New

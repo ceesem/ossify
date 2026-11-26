@@ -783,3 +783,51 @@ def test_cell_all_objects_property():
     assert all_objects["skeleton"] is cell.skeleton
     assert all_objects["skeleton"].n_vertices == 3
     assert all_objects["synapses"].n_vertices == 4
+
+
+class TestCopySharesSyncObject:
+    """A copied or masked cell and its layers must look at the same data."""
+
+    def test_copy_layers_share_the_cells_sync_object(self, nrn):
+        new = nrn.copy()
+        assert new.skeleton._morphsync is new._morphsync
+        assert new.graph._morphsync is new._morphsync
+        for anno in new.annotations:
+            assert anno._morphsync is new._morphsync
+        # Still a separate copy from the original.
+        assert new._morphsync is not nrn._morphsync
+
+    def test_masked_cell_layers_share_its_sync_object(self, nrn):
+        skel = nrn.skeleton
+        mask = np.ones(skel.n_vertices, dtype=bool)
+        mask[-5:] = False
+        new = nrn.apply_mask("skeleton", mask, as_positional=True)
+        assert new.skeleton._morphsync is new._morphsync
+
+    def test_annotation_replaced_on_a_copy_is_seen_by_its_layers(self, nrn):
+        from ossify.base import Link
+
+        name = "pre_syn"
+        original = nrn.annotations[name]
+        n_before = len(original)
+        keep = original.nodes.iloc[: n_before // 3].copy()
+        link_column = [c for c in keep.columns if c.endswith("l2_id")]
+        new = nrn.copy()
+        new.remove_annotation(name)
+        if link_column:
+            linkage = Link(mapping=link_column[0], target="graph")
+        else:
+            linkage = None
+        new.add_point_annotations(
+            name,
+            vertices=keep,
+            spatial_columns=original.spatial_columns,
+            linkage=linkage,
+        )
+        assert len(new.annotations[name]) == len(keep)
+        # The skeleton counts the replaced annotation, not the one it replaced.
+        counts = new.skeleton.map_annotations_to_feature(
+            name, distance_threshold=0, agg="count"
+        )
+        assert float(np.asarray(counts).sum()) == len(keep)
+        assert len(nrn.annotations[name]) == n_before

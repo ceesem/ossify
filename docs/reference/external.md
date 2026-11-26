@@ -116,6 +116,54 @@ fig, ax = ossify.plot_cell_2d(
 )
 ```
 
+### load_cell_from_l2graph
+
+::: ossify.load_cell_from_l2graph
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+**Builds the skeleton locally from the level-2 graph instead of asking the skeleton service for one.** Use it for cells the service has not skeletonized or refuses, or when you want ossify's own soma handling.
+
+```python
+from caveclient import CAVEclient
+import ossify as osy
+
+client = CAVEclient("minnie65_public")
+
+# Graph and L2 properties from CAVE, skeleton built locally around the nucleus
+cell = osy.load_cell_from_l2graph(864691135336055529, client, synapses=True)
+
+# Look the nucleus up in specific tables, or give the soma location yourself
+cell = osy.load_cell_from_l2graph(
+    864691135336055529,
+    client,
+    soma_table=["nucleus_detection_v0", "nucleus_alternative_points"],
+)
+
+# Every step after the graph is optional. Fetch only the graph and synapses,
+# then skeletonize however you like:
+cell = osy.load_cell_from_l2graph(
+    864691135336055529, client, synapses=True, build_skeleton=False
+)
+osy.skeletonize(cell, soma_point=[766848, 547712, 899480], soma_radius=10000)
+osy.add_skeleton_radius(cell)
+```
+
+| Step | Option | Default |
+|------|--------|---------|
+| Build a skeleton at all | `build_skeleton` | on |
+| Look the nucleus up in an annotation table | `lookup_soma`, `soma_table` | on |
+| Otherwise locate the soma from the graph | `guess_soma` | on |
+| Collapse the detected soma into the root | `detect_soma` | on |
+| Add `radius` and `radius_local` to the skeleton | `skeleton_radius` | on |
+| Add `compartment` labels (needs `synapses=True`) | `compartments` | on |
+| Anything else `skeletonize` accepts | `skeleton_kwargs` | none |
+
 ### load_cell_batch_from_client
 
 ::: ossify.load_cell_batch_from_client

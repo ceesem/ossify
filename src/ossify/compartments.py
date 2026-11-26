@@ -23,7 +23,7 @@ import pathlib
 import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Callable, List, Literal, Optional, Union
+from typing import Callable, Dict, List, Literal, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import orjson
@@ -35,6 +35,7 @@ from .algorithms import (
     segment_aggregate,
     segregation_index,
     smooth_features,
+    subtree_aggregate,
 )
 from .base import Cell
 from .structured_prediction import (
@@ -57,7 +58,19 @@ __all__ = [
     "CountFeature",
     "DerivedFeature",
     "ComputedFeature",
+    "Window",
+    "WindowContrast",
+    "LOCAL_FEATURE_SPEC",
+    "LOCAL_WINDOWS",
+    "FEATURE_SETS",
+    "describe_models",
+    "load_labeler",
+    "cable_length_feature",
+    "reference_radius_feature",
+    "subtree_count_feature",
     "DEFAULT_FEATURE_SPEC",
+    "DISTANCE_FEATURE_SPEC",
+    "DISTANCE_WINDOWS",
     "DEFAULT_UNARY_CLIP",
 ]
 
@@ -224,11 +237,91 @@ class ComputedFeature:
         Maps a cell to a per-vertex (positional) array.
     neighborhood_agg : {"mean", "sum"}
         See :class:`MappedFeature`.
+    windowed : bool
+        Whether the feature is also aggregated over each neighborhood. Set
+        False for a feature that already summarizes a region, such as a
+        subtree total. Default True.
     """
 
     name: str
     func: Callable[["Cell"], np.ndarray]
     neighborhood_agg: Literal["mean", "sum"] = "mean"
+    windowed: bool = True
+
+
+@dataclass
+class Window:
+    """A neighborhood of each skeleton vertex to aggregate features over.
+
+    Unlike the ``downstream_hops`` family of arguments, a window can be
+    measured in path distance, and its ``"sum"`` features are plain sums over
+    the window (no relative-hops rescaling), so dividing one by another gives
+    a density.
+
+    Parameters
+    ----------
+    prefix : str
+        Prefix of the columns this window adds, as ``{prefix}_{feature}``.
+    radius : float
+        Size of the window: path distance in the skeleton's coordinate units
+        (nanometres for cells loaded from CAVE) when ``metric`` is
+        ``"distance"``, or a number of hops when it is ``"hops"``.
+    metric : {"distance", "hops"}
+        How ``radius`` is measured. Default ``"distance"``.
+    direction : {"downstream", "upstream", "undirected"}
+        Which way from the vertex the window extends. Default
+        ``"downstream"`` (toward the tips), so a branch is judged by what it
+        leads to and not by what it came from.
+
+    Examples
+    --------
+    >>> windows = [Window("down10um", 10_000), Window("down30um", 30_000)]
+    >>> df = make_skel_prop_df(cell, downstream_hops=0, windows=windows)
+    """
+
+    prefix: str
+    radius: float
+    metric: Literal["distance", "hops"] = "distance"
+    direction: Literal["downstream", "upstream", "undirected"] = "downstream"
+
+
+@dataclass
+class WindowContrast:
+    """The difference between two windows' features: ``window`` minus ``reference``.
+
+    Listed after the two :class:`Window` entries it compares. With a downstream
+    window against an upstream one, the difference is large where a process
+    changes character, as at a merge, and near zero along a uniform stretch.
+
+    Parameters
+    ----------
+    prefix : str
+        Prefix of the columns this adds, as ``{prefix}_{feature}``.
+    window : str
+        Prefix of the window to subtract from.
+    reference : str
+        Prefix of the window subtracted.
+    features : sequence of str, optional
+        Feature names to compare. Defaults to every windowed feature that is
+        not a sum, since sums scale with how much cable a window holds and a
+        downstream window fans out where an upstream one does not.
+
+    Examples
+    --------
+    >>> windows = [
+    ...     Window("down30um", 30_000),
+    ...     Window("up30um", 30_000, direction="upstream"),
+    ...     WindowContrast("diff30um", "down30um", "up30um"),
+    ... ]
+    """
+
+    prefix: str
+    window: str
+    reference: str
+    features: Optional[Sequence[str]] = None
+
+
+WindowDef = Union[Window, WindowContrast]
 
 
 # Feature definitions are matched structurally; "primitive" features are those
@@ -256,6 +349,231 @@ DEFAULT_FEATURE_SPEC: List[FeatureDef] = [
     CountFeature("syn_in", "post_syn", neighborhood_agg="sum"),
     CountFeature("syn_out", "pre_syn", neighborhood_agg="sum"),
 ]
+
+
+def _safe_ratio(numerator, denominator) -> np.ndarray:
+    """Elementwise ratio that is NaN, not infinite, where the denominator is 0."""
+    numerator = np.asarray(numerator, dtype=float)
+    denominator = np.asarray(denominator, dtype=float)
+    out = np.full(numerator.shape, np.nan)
+    np.divide(numerator, denominator, out=out, where=denominator > 0)
+    return out
+
+
+def cable_length_feature(
+    name: str = "cable_um", scale: float = 1e-3
+) -> ComputedFeature:
+    """Cable length belonging to each vertex, summed over a window.
+
+    Gives each window its own length, so counts in it can be turned into
+    densities and a window cut short at a tip is not mistaken for an empty one.
+
+    Parameters
+    ----------
+    name : str
+        Output feature name. Default ``"cable_um"``.
+    scale : float
+        Unit conversion from the skeleton's coordinates. Default 1e-3
+        (nanometres to micrometres).
+    """
+    return ComputedFeature(
+        name,
+        lambda cell: np.asarray(cell.skeleton.half_edge_length, dtype=float) * scale,
+        neighborhood_agg="sum",
+    )
+
+
+def subtree_count_feature(name: str, annotation: str) -> ComputedFeature:
+    """Number of annotations at or downstream of each vertex, to the tips.
+
+    Looks past any window: a bare stretch of axon still leads to outputs, and
+    a sparse dendrite still leads to inputs. Not aggregated over windows.
+
+    Parameters
+    ----------
+    name : str
+        Output feature name (for example ``"subtree_syn_out"``).
+    annotation : str
+        Annotation layer to count (for example ``"pre_syn"``).
+    """
+
+    def func(cell: Cell) -> np.ndarray:
+        skel = cell.skeleton
+        where = cell.annotations[annotation].map_index_to_layer(
+            "skeleton", as_positional=True
+        )
+        counts = np.bincount(np.asarray(where, dtype=int), minlength=skel.n_vertices)
+        return subtree_aggregate(skel, counts.astype(float), agg="sum")
+
+    return ComputedFeature(name, func, neighborhood_agg="sum", windowed=False)
+
+
+def reference_radius_feature(
+    name: str,
+    annotation: str,
+    *,
+    window: float = 5000.0,
+    min_synapses: int = 20,
+    min_root_distance: float = 0.0,
+    radius_column: str = "max_dt_nm",
+    source_layer: str = "graph",
+) -> ComputedFeature:
+    """Log of each vertex's radius over the cell's typical radius at a synapse type.
+
+    Normalizes thickness within the cell, without needing labels. Measured
+    against the radius where the cell receives its inputs, a thin dendrite on
+    a thin-dendrite cell reads as ordinary; measured against the radius where
+    it makes its outputs, an axon does.
+
+    The reference is the median, over the synapses, of the mean radius within
+    ``window`` of path distance either side of each synapse. Averaging over a
+    stretch keeps a single bouton or spine base from setting the value.
+
+    Parameters
+    ----------
+    name : str
+        Output feature name (for example ``"radius_vs_inputs"``).
+    annotation : str
+        Annotation layer whose synapses define the reference (``"post_syn"``
+        for inputs, ``"pre_syn"`` for outputs).
+    window : float
+        Path distance either side of a synapse to average the radius over, in
+        the skeleton's coordinate units. Default 5000 (5 um for CAVE cells).
+    min_synapses : int
+        Fewest synapses needed for a reference. With fewer the feature is NaN
+        for the whole cell, which gradient-boosted trees treat as missing.
+        Default 20.
+    min_root_distance : float
+        Leave out synapses closer than this to the root along the skeleton, so
+        that inputs on the soma do not inflate the reference. Default 0.
+    radius_column : str
+        Radius column on ``source_layer``. Default ``"max_dt_nm"``.
+    source_layer : str
+        Layer holding the radius. Default ``"graph"``.
+
+    Examples
+    --------
+    >>> spec = DEFAULT_FEATURE_SPEC + [
+    ...     reference_radius_feature(
+    ...         "radius_vs_inputs", "post_syn", min_root_distance=15_000
+    ...     ),
+    ...     reference_radius_feature("radius_vs_outputs", "pre_syn"),
+    ... ]
+    """
+
+    def func(cell: Cell) -> np.ndarray:
+        skel = cell.skeleton
+        mapped = cell.layers[source_layer].map_features_to_layer(
+            [radius_column], "skeleton", agg={radius_column: "max"}
+        )
+        radius = mapped[radius_column].reindex(skel.vertex_index).to_numpy(dtype=float)
+        missing = np.full(skel.n_vertices, np.nan)
+
+        where = np.asarray(
+            cell.annotations[annotation].map_index_to_layer(
+                "skeleton", as_positional=True
+            ),
+            dtype=int,
+        )
+        if min_root_distance > 0 and len(where):
+            from_root = np.asarray(skel.distance_to_root(as_positional=True))
+            where = where[from_root[where] >= min_root_distance]
+        if len(where) < min_synapses:
+            return missing
+
+        local = skel.aggregate_features(
+            np.nan_to_num(radius),
+            radius=window,
+            metric="distance",
+            direction="undirected",
+            agg="mean",
+        ).to_numpy()[:, 0]
+        reference = float(np.median(local[where]))
+        if not np.isfinite(reference) or reference <= 0:
+            return missing
+        ratio = _safe_ratio(radius, np.full(skel.n_vertices, reference))
+        return np.log(ratio, out=missing, where=ratio > 0)
+
+    return ComputedFeature(name, func, neighborhood_agg="mean")
+
+
+#: A feature set built on windows measured in path distance, for use with
+#: :data:`DISTANCE_WINDOWS`. Counts become densities per surface area and per
+#: length, and radius is normalized within the cell. Every synapse feature is
+#: local to a window; none sums a whole subtree, so a vertex is judged by what
+#: is near it even on an object with merges. No model is bundled for it.
+DISTANCE_FEATURE_SPEC: List[FeatureDef] = [
+    MappedFeature(
+        "area_um2", "area_nm2", map_agg="sum", scale=1e-6, neighborhood_agg="sum"
+    ),
+    MappedFeature(
+        "vol_um3", "size_nm3", map_agg="sum", scale=1e-9, neighborhood_agg="sum"
+    ),
+    MappedFeature(
+        "max_dt_um", "max_dt_nm", map_agg="max", scale=1e-3, neighborhood_agg="mean"
+    ),
+    cable_length_feature("cable_um"),
+    DerivedFeature(
+        "vol_to_area",
+        lambda df: _safe_ratio(df["vol_um3"], df["area_um2"]),
+        inputs=["vol_um3", "area_um2"],
+    ),
+    CountFeature("syn_in", "post_syn", neighborhood_agg="sum"),
+    CountFeature("syn_out", "pre_syn", neighborhood_agg="sum"),
+    DerivedFeature(
+        "syn_in_per_area",
+        lambda df: _safe_ratio(df["syn_in"], df["area_um2"]),
+        inputs=["syn_in", "area_um2"],
+    ),
+    DerivedFeature(
+        "syn_out_per_area",
+        lambda df: _safe_ratio(df["syn_out"], df["area_um2"]),
+        inputs=["syn_out", "area_um2"],
+    ),
+    DerivedFeature(
+        "syn_in_per_um",
+        lambda df: _safe_ratio(df["syn_in"], df["cable_um"]),
+        inputs=["syn_in", "cable_um"],
+    ),
+    DerivedFeature(
+        "syn_out_per_um",
+        lambda df: _safe_ratio(df["syn_out"], df["cable_um"]),
+        inputs=["syn_out", "cable_um"],
+    ),
+    reference_radius_feature("radius_vs_inputs", "post_syn", min_root_distance=15_000),
+    reference_radius_feature("radius_vs_outputs", "pre_syn"),
+]
+
+#: Downstream windows of 10, 30 and 100 um for cells in nanometre coordinates.
+DISTANCE_WINDOWS: List[Window] = [
+    Window("down10um", 10_000),
+    Window("down30um", 30_000),
+    Window("down100um", 100_000),
+]
+
+#: :data:`DISTANCE_FEATURE_SPEC` without the radius references, which are
+#: measured against the whole object. For objects that may hold merges.
+LOCAL_FEATURE_SPEC: List[FeatureDef] = [
+    f
+    for f in DISTANCE_FEATURE_SPEC
+    if f.name not in ("radius_vs_inputs", "radius_vs_outputs")
+]
+
+#: Downstream windows of 10 and 30 um. 30 um is about the reach of 15 hops on
+#: an L2 skeleton, short enough that a merge is seen only close to where it is.
+LOCAL_WINDOWS: List[Window] = [
+    Window("down10um", 10_000),
+    Window("down30um", 30_000),
+]
+
+#: Feature sets a model config can name with its ``feature_set`` key: each is a
+#: feature spec and the windows it is aggregated over. Naming one is what lets
+#: a model that does not use the default spec be saved and reloaded, since a
+#: spec holds functions and cannot be written to a file.
+FEATURE_SETS: Dict[str, Tuple[List[FeatureDef], List[WindowDef]]] = {
+    "distance": (DISTANCE_FEATURE_SPEC, DISTANCE_WINDOWS),
+    "local": (LOCAL_FEATURE_SPEC, LOCAL_WINDOWS),
+}
 
 
 # --- Feature extraction ----------------------------------------------------
@@ -330,6 +648,7 @@ def _add_neighborhood_features(
     Columns are emitted in spec order as ``{prefix}_{name}``.
     """
     skel = cell.skeleton
+    feature_spec = _windowed_features(feature_spec)
     primitive_names = [f.name for f in feature_spec if isinstance(f, _PrimitiveFeature)]
     means = skel.aggregate_features(
         df[primitive_names],
@@ -353,6 +672,86 @@ def _add_neighborhood_features(
     return df
 
 
+def _windowed_features(feature_spec: List[FeatureDef]) -> List[FeatureDef]:
+    """The features that take part in neighborhood aggregation, in spec order.
+
+    Drops computed features marked ``windowed=False`` and any derived feature
+    that depends on one.
+    """
+    kept: List[FeatureDef] = []
+    names = set()
+    for f in feature_spec:
+        if isinstance(f, ComputedFeature) and not f.windowed:
+            continue
+        if isinstance(f, DerivedFeature) and not set(f.inputs) <= names:
+            continue
+        kept.append(f)
+        names.add(f.name)
+    return kept
+
+
+def _add_window_features(
+    cell: Cell,
+    df: pd.DataFrame,
+    feature_spec: List[FeatureDef],
+    window: Window,
+) -> pd.DataFrame:
+    """Aggregate spec features over one :class:`Window`, in place.
+
+    Columns are emitted in spec order as ``{window.prefix}_{name}``. Features
+    with ``neighborhood_agg="sum"`` are summed over the window and the rest
+    are averaged.
+    """
+    skel = cell.skeleton
+    feature_spec = _windowed_features(feature_spec)
+    primitives = [f for f in feature_spec if isinstance(f, _PrimitiveFeature)]
+    aggregated = {}
+    for how in ("sum", "mean"):
+        names = [f.name for f in primitives if f.neighborhood_agg == how]
+        if names:
+            aggregated[how] = skel.aggregate_features(
+                df[names],
+                radius=window.radius,
+                metric=window.metric,
+                direction=window.direction,
+                agg=how,
+            )
+    for f in feature_spec:
+        out = f"{window.prefix}_{f.name}"
+        if isinstance(f, _PrimitiveFeature):
+            df[out] = aggregated[f.neighborhood_agg][f.name].to_numpy()
+        elif isinstance(f, DerivedFeature):
+            sub = df[[f"{window.prefix}_{c}" for c in f.inputs]].copy()
+            sub.columns = f.inputs
+            df[out] = np.asarray(f.func(sub))
+    return df
+
+
+def _add_window_contrast(
+    df: pd.DataFrame, feature_spec: List[FeatureDef], contrast: WindowContrast
+) -> pd.DataFrame:
+    """Add ``{window}_{f} - {reference}_{f}`` for one :class:`WindowContrast`, in place."""
+    names = contrast.features
+    if names is None:
+        names = [
+            f.name
+            for f in _windowed_features(feature_spec)
+            if getattr(f, "neighborhood_agg", "mean") != "sum"
+        ]
+    for name in names:
+        columns = [f"{contrast.window}_{name}", f"{contrast.reference}_{name}"]
+        missing = [c for c in columns if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"WindowContrast {contrast.prefix!r} needs {missing}; list both "
+                "windows before the contrast."
+            )
+        df[f"{contrast.prefix}_{name}"] = df[columns[0]].to_numpy(dtype=float) - df[
+            columns[1]
+        ].to_numpy(dtype=float)
+    return df
+
+
 def make_skel_prop_df(
     cell: Cell,
     downstream_hops: int = 5,
@@ -361,6 +760,7 @@ def make_skel_prop_df(
     label: Optional[str] = None,
     *,
     feature_spec: Optional[List[FeatureDef]] = None,
+    windows: Optional[Sequence[WindowDef]] = None,
 ) -> pd.DataFrame:
     """Generate the per-skeleton-vertex feature dataframe with neighborhood aggregation.
 
@@ -380,6 +780,11 @@ def make_skel_prop_df(
         "is_axon" column (used for training).
     feature_spec : list of feature definitions, optional
         See :func:`make_skel_prop_df_base`. Defaults to :data:`DEFAULT_FEATURE_SPEC`.
+    windows : sequence of Window or WindowContrast, optional
+        Further neighborhoods to aggregate over, each adding its own prefixed
+        columns. A :class:`WindowContrast` adds the difference between two
+        windows listed before it. Use these for windows measured in path distance; set the hop
+        arguments to 0 to use them alone.
 
     Returns
     -------
@@ -415,6 +820,11 @@ def make_skel_prop_df(
             2 * bidirectional_hops,
             "undirected",
         )
+    for window in windows or ():
+        if isinstance(window, WindowContrast):
+            _add_window_contrast(df, feature_spec, window)
+        else:
+            _add_window_features(cell, df, feature_spec, window)
     if label is not None:
         df["is_axon"] = cell.skeleton.get_feature(label)
     return df
@@ -457,17 +867,20 @@ class SkeletonVertexModel(ABC):
         upstream_hops: int = 0,
         bidirectional_hops: int = 0,
         feature_spec: Optional[List[FeatureDef]] = None,
+        windows: Optional[Sequence[WindowDef]] = None,
     ):
         self._downstream_hops = downstream_hops
         self._upstream_hops = upstream_hops
         self._bidirectional_hops = bidirectional_hops
         self._feature_spec = feature_spec
+        self._windows = None if windows is None else list(windows)
 
     def extract_features(
         self, cell: Cell, label: Optional[str] = None, **kwargs
     ) -> pd.DataFrame:
         """Build the per-vertex feature dataframe for the cell's skeleton."""
         kwargs.setdefault("feature_spec", self._feature_spec)
+        kwargs.setdefault("windows", self._windows)
         return make_skel_prop_df(
             cell,
             downstream_hops=self._downstream_hops,
@@ -645,7 +1058,7 @@ class AxonLabel(SkeletonVertexModel):
 
     def score(self, features: pd.DataFrame) -> np.ndarray:
         """Per-vertex XGBoost class probabilities (n_vertices x 2)."""
-        return self._model.predict_proba(features[self._feature_columns].values)
+        return self._model.predict_proba(features[self._feature_columns].to_numpy())
 
     def smooth(self, cell: Cell, scores: np.ndarray) -> np.ndarray:
         """Laplacian smoothing of the class probabilities along the skeleton."""
@@ -954,6 +1367,21 @@ class ProbaVertexModel(SkeletonVertexModel):
         to flooring probabilities at ``exp(-unary_clip)``); that regime is opt-in.
     feature_spec : list of feature definitions, optional
         See :func:`make_skel_prop_df`. Defaults to :data:`DEFAULT_FEATURE_SPEC`.
+    windows : sequence of Window, optional
+        Distance- or hop-based neighborhoods to aggregate over, in addition to
+        the hop arguments (see :func:`make_skel_prop_df`). Like a custom
+        ``feature_spec``, these are not serialized.
+    feature_set : str, optional
+        Name of an entry in :data:`FEATURE_SETS` (``"distance"`` or
+        ``"local"``), which supplies both ``feature_spec`` and ``windows``.
+        Unlike passing those two directly, a named set is serialized, so the
+        model can be saved with :meth:`to_dict` and loaded from a config that
+        has a ``feature_set`` key.
+
+    Examples
+    --------
+    >>> encoder = ProbaVertexModel(fitted, columns, feature_set="local")
+    >>> encoder = ProbaVertexModel.from_config("my_models/unproofread.json")
     """
 
     #: Bumped when :meth:`to_dict`'s shape changes incompatibly. Independent of
@@ -971,11 +1399,25 @@ class ProbaVertexModel(SkeletonVertexModel):
         smooth_alpha: Optional[float] = None,
         unary_clip: float = DEFAULT_UNARY_CLIP,
         feature_spec: Optional[List[FeatureDef]] = None,
+        windows: Optional[Sequence[WindowDef]] = None,
+        feature_set: Optional[str] = None,
     ):
         if unary_clip is None or unary_clip <= 0.0:
             raise ValueError(
                 f"unary_clip must be a positive number; got {unary_clip!r}."
             )
+        if feature_set is not None:
+            if feature_spec is not None or windows is not None:
+                raise ValueError(
+                    "Pass either feature_set or feature_spec/windows, not both."
+                )
+            if feature_set not in FEATURE_SETS:
+                raise ValueError(
+                    f"Unknown feature_set {feature_set!r}; choose from "
+                    f"{sorted(FEATURE_SETS)}."
+                )
+            feature_spec, windows = FEATURE_SETS[feature_set]
+        self._feature_set = feature_set
         self._estimator = estimator
         self._feature_columns = list(feature_columns)
         self._smooth_alpha = smooth_alpha
@@ -990,13 +1432,19 @@ class ProbaVertexModel(SkeletonVertexModel):
             upstream_hops=upstream_hops,
             bidirectional_hops=bidirectional_hops,
             feature_spec=feature_spec,
+            windows=windows,
         )
 
     @staticmethod
     def _resolve_config(config: Optional[Union[dict, str]]) -> dict:
-        if not isinstance(config, dict):
-            config = load_model_config(config, dir=None)
-        return config
+        if isinstance(config, dict):
+            return config
+        if config is not None:
+            path = pathlib.Path(config)
+            if path.parent != pathlib.Path("."):
+                # A config file of your own: its model_file is read relative to it.
+                return load_model_config(path.name, dir=str(path.parent))
+        return load_model_config(config, dir=None)
 
     @classmethod
     def from_config(
@@ -1007,10 +1455,13 @@ class ProbaVertexModel(SkeletonVertexModel):
         unary_clip: Optional[float] = None,
         feature_spec: Optional[List[FeatureDef]] = None,
     ) -> "ProbaVertexModel":
-        """Build from a bundled XGBoost model config.
+        """Build from an XGBoost model config.
 
-        Loads the estimator, feature columns, and hop settings from a shipped
-        model config (see :func:`load_model_config`). ``smooth_alpha`` defaults to
+        ``config`` is the name of a bundled model, the path of a config file
+        of your own (its ``model_file`` is read relative to the config), or a
+        config dict. Loads the estimator, feature columns, hop settings and,
+        if the config has a ``feature_set`` key, that named feature set (see
+        :data:`FEATURE_SETS`). ``smooth_alpha`` defaults to
         the config's ``spread_alpha``; ``unary_clip`` to the config's ``unary_clip``
         key, falling back to :data:`DEFAULT_UNARY_CLIP`.
         """
@@ -1029,6 +1480,7 @@ class ProbaVertexModel(SkeletonVertexModel):
             smooth_alpha=smooth_alpha,
             unary_clip=unary_clip,
             feature_spec=feature_spec,
+            feature_set=resolved.get("feature_set"),
         )
         obj._config_ref = config_ref
         return obj
@@ -1050,16 +1502,19 @@ class ProbaVertexModel(SkeletonVertexModel):
         Raises
         ------
         ValueError
-            If ``feature_spec`` is non-default (it may contain callables that
-            cannot be serialized) or the estimator's source can't be
+            If ``feature_spec`` or ``windows`` were passed directly (they may
+            contain callables that cannot be serialized; name them with
+            ``feature_set`` instead) or the estimator's source can't be
             determined.
         """
-        if self._feature_spec is not None:
+        if self._feature_set is None and (
+            self._feature_spec is not None or self._windows is not None
+        ):
             raise ValueError(
-                "This ProbaVertexModel has a custom feature_spec, which may "
-                "contain callables and cannot be serialized. Reattach it "
-                "explicitly when reloading: "
-                "ProbaVertexModel.from_dict(d, feature_spec=...)."
+                "This ProbaVertexModel has a custom feature_spec or windows, "
+                "which may contain callables and cannot be serialized. Build it "
+                "with feature_set=<a name in FEATURE_SETS> to make it savable, "
+                "or rebuild the encoder with them when reloading."
             )
         config_ref = self._config_ref
         if config_ref is None:
@@ -1086,6 +1541,8 @@ class ProbaVertexModel(SkeletonVertexModel):
                 "upstream_hops": self._upstream_hops,
                 "bidirectional_hops": self._bidirectional_hops,
             }
+            if self._feature_set is not None:
+                config_ref["feature_set"] = self._feature_set
         elif isinstance(config_ref, dict):
             config_ref = {
                 k: (str(v) if isinstance(v, pathlib.Path) else v)
@@ -1130,6 +1587,7 @@ class ProbaVertexModel(SkeletonVertexModel):
             smooth_alpha=d.get("smooth_alpha"),
             unary_clip=d.get("unary_clip", DEFAULT_UNARY_CLIP),
             feature_spec=feature_spec,
+            feature_set=resolved.get("feature_set"),
         )
         obj._config_ref = d["config"]
         return obj
@@ -1152,7 +1610,7 @@ class ProbaVertexModel(SkeletonVertexModel):
 
     def score(self, features: pd.DataFrame) -> np.ndarray:
         """Per-vertex class probabilities ``(n_vertices, K)`` from the estimator."""
-        return self._estimator.predict_proba(features[self._feature_columns].values)
+        return self._estimator.predict_proba(features[self._feature_columns].to_numpy())
 
     def smooth(self, cell: Cell, scores: np.ndarray) -> np.ndarray:
         """Optional Laplacian smoothing of probabilities; identity if no alpha."""
@@ -1420,3 +1878,91 @@ class StructuredLabeler:
         with open(filename, "rb") as f:
             d = orjson.loads(f.read())
         return cls.from_dict(d, feature_spec=feature_spec)
+
+
+# --- One-stop loader --------------------------------------------------------
+
+
+def describe_models(dir: Optional[str] = None) -> pd.DataFrame:
+    """The bundled models, one row each: what they were trained on and what they are for.
+
+    Returns
+    -------
+    pd.DataFrame
+        Indexed by model name (the name :func:`load_labeler` and
+        :meth:`ProbaVertexModel.from_config` take), with ``dataset``,
+        ``feature_set``, ``has_decode`` and ``description`` columns.
+
+    Examples
+    --------
+    >>> describe_models()[["dataset", "description"]]
+    """
+    rows = []
+    for filename in sorted(get_models(dir)):
+        config = load_model_config(filename, dir=dir)
+        rows.append(
+            {
+                "model": pathlib.Path(filename).stem,
+                "dataset": config.get("dataset"),
+                "feature_set": config.get("feature_set", "hops"),
+                "has_decode": "decode" in config,
+                "description": config.get("description", ""),
+            }
+        )
+    return pd.DataFrame(rows).set_index("model")
+
+
+def load_labeler(
+    model: str,
+    *,
+    schema: Optional[TransitionSchema] = None,
+    absorb_min_size: Union[int, None, Literal["config"]] = "config",
+) -> "StructuredLabeler":
+    """Load a ready-to-use compartment labeler from a model's config.
+
+    Loads the model and wraps it in a :class:`StructuredLabeler` with the
+    decode settings stored in the model's config, so the result labels a cell
+    in one call. The config's ``decode`` block holds the transition costs (a
+    :meth:`TransitionSchema.to_dict`) and ``absorb_min_size``: the values the
+    model was evaluated with.
+
+    Parameters
+    ----------
+    model : str
+        Name of a bundled model, such as ``"v1dd_distance"`` or
+        ``"minnie65_local"`` (see :func:`describe_models`), or the path of a
+        config file of your own.
+    schema : TransitionSchema, optional
+        Transition costs for the decode, in place of the config's.
+    absorb_min_size : int or None, optional
+        Decoded compartments of this many vertices or fewer are absorbed into
+        their parent; None skips the step. Defaults to the config's value.
+
+    Returns
+    -------
+    StructuredLabeler
+        Call ``.predict(cell)`` for per-vertex labels.
+
+    Raises
+    ------
+    ValueError
+        If the config has no ``decode`` block and no ``schema`` was given.
+
+    Examples
+    --------
+    >>> labeler = load_labeler("v1dd_distance")        # proofread v1dd cells
+    >>> labels = labeler.predict(cell)
+    >>> merged = load_labeler("minnie65_local")        # objects that may hold merges
+    """
+    decode = ProbaVertexModel._resolve_config(model).get("decode", {})
+    if schema is None:
+        if "schema" not in decode:
+            raise ValueError(
+                f"The config of {model!r} has no decode schema; pass schema=."
+            )
+        schema = TransitionSchema.from_dict(decode["schema"])
+    if absorb_min_size == "config":
+        absorb_min_size = decode.get("absorb_min_size")
+    return StructuredLabeler(
+        ProbaVertexModel.from_config(model), schema, absorb_min_size=absorb_min_size
+    )

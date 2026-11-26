@@ -3,6 +3,7 @@ import importlib as _importlib
 from . import algorithms, plot, structured_prediction
 from .base import *
 from .file_io import *
+from .skeletonization import *
 from .translate import *
 
 __version__ = "0.3.2"
