@@ -1,0 +1,18 @@
+
+/* VertexExplorer: rides on CellExplorer's tokens and toolbar styles. */
+.vx-root { --vx-syn: #d62728; }
+body[data-jp-theme-light="false"] .vx-root { --vx-syn: #ff5a4f; }
+@media (prefers-color-scheme: dark) { body:not([data-jp-theme-light]) .vx-root { --vx-syn: #ff5a4f; } }
+.vx-morph-wrap { width: 100%; }
+.vx-morph { display: block; border: 1px solid var(--cx-line); border-radius: 4px; cursor: grab; touch-action: none; }
+.vx-morph:active { cursor: grabbing; }
+.vx-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 6px; }
+.vx-ramp { display: inline-block; width: 140px; height: 10px; border-radius: 2px; }
+.vx-root { --vx-primary: #c2185b; --vx-terminal: #0e9aa7; }
+body[data-jp-theme-light="false"] .vx-root { --vx-primary: #f06292; --vx-terminal: #26c6da; }
+@media (prefers-color-scheme: dark) { body:not([data-jp-theme-light]) .vx-root { --vx-primary: #f06292; --vx-terminal: #26c6da; } }
+.vx-actions { margin-bottom: 0; }
+.vx-nav { display: inline-flex; align-items: center; gap: 6px; padding-right: 8px; margin-right: 4px; border-right: 1px solid var(--cx-line); }
+.vx-nav-label { font-variant-numeric: tabular-nums; }
+.vx-label-btn { display: inline-flex; align-items: center; gap: 5px; }
+.vx-label-btn i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }

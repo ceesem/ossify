@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import threading
 from contextlib import contextmanager
 from typing import Callable, Optional, Union
 
@@ -239,9 +240,19 @@ def get_l2id_column(pt_column: str) -> str:
     return pt_column.replace("_root_id", "_l2_id")
 
 
+# suppress_output swaps process-wide streams, so overlapping uses (from several
+# threads, or nested) share one redirection: the first to enter installs it and
+# the last to leave removes it.
+_suppress_lock = threading.Lock()
+_suppress_state: dict = {"depth": 0}
+
+
 @contextmanager
 def suppress_output(package: Optional[str] = None):
     """Context manager to suppress stdout and stderr output.
+
+    Safe to use from several threads at once: output stays suppressed until
+    the last of them leaves, and the original streams are then restored.
 
     Parameters
     ----------
@@ -249,21 +260,28 @@ def suppress_output(package: Optional[str] = None):
         Logger name to suppress. If None, suppress root logger output which handles
         all loggers without their own handler.
     """
-    # Save original stdout and stderr
-    original_stdout = sys.stdout
-    original_stderr = sys.stderr
     logger = logging.getLogger(package)
-    old_level = logger.level
-    logger.setLevel(logging.CRITICAL)
+    with _suppress_lock:
+        if _suppress_state["depth"] == 0:
+            _suppress_state["stdout"] = sys.stdout
+            _suppress_state["stderr"] = sys.stderr
+            _suppress_state["devnull"] = open(os.devnull, "w")
+            _suppress_state["levels"] = {}
+            sys.stdout = _suppress_state["devnull"]
+            sys.stderr = _suppress_state["devnull"]
+        _suppress_state["depth"] += 1
+        # Remember each logger's level from before the first suppression of it.
+        _suppress_state["levels"].setdefault(logger, logger.level)
+        logger.setLevel(logging.CRITICAL)
 
     try:
-        # Redirect to devnull or StringIO
-        with open(os.devnull, "w") as devnull:
-            sys.stdout = devnull
-            sys.stderr = devnull
-            yield
+        yield
     finally:
-        # Restore original stdout and stderr
-        logger.setLevel(old_level)
-        sys.stdout = original_stdout
-        sys.stderr = original_stderr
+        with _suppress_lock:
+            _suppress_state["depth"] -= 1
+            if _suppress_state["depth"] == 0:
+                for held, level in _suppress_state.pop("levels").items():
+                    held.setLevel(level)
+                sys.stdout = _suppress_state.pop("stdout")
+                sys.stderr = _suppress_state.pop("stderr")
+                _suppress_state.pop("devnull").close()

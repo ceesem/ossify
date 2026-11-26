@@ -800,6 +800,10 @@ class Cell:
             morphsync=new_morphsync,
             meta=old_obj.meta,
         )
+        # The constructor copies what it is given, which would leave the cell and
+        # the layers built below holding different sync objects, so that adding
+        # or removing an annotation on the cell was invisible to its layers.
+        new_obj._morphsync = new_morphsync
         for old_layer in old_obj.layers:
             new_layer = old_layer.__class__._from_existing(new_morphsync, old_layer)
             new_layer._register_cell(new_obj)

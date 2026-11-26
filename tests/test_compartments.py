@@ -6,6 +6,7 @@ the bundled ``v1dd_ds15_us0_bd0`` model. These tests assert the ossify port
 reproduces that output.
 """
 
+import json
 import pathlib
 
 import numpy as np
@@ -18,15 +19,30 @@ pytest.importorskip("h5py")
 
 import ossify
 from ossify.compartments import (
+    DEFAULT_FEATURE_SPEC,
+    DISTANCE_FEATURE_SPEC,
+    DISTANCE_WINDOWS,
+    FEATURE_SETS,
+    LOCAL_FEATURE_SPEC,
+    LOCAL_WINDOWS,
     AxonLabel,
     CountFeature,
     DerivedFeature,
     MappedFeature,
+    ProbaVertexModel,
     SkeletonVertexModel,
+    Window,
+    WindowContrast,
+    cable_length_feature,
+    describe_models,
     get_models,
+    load_labeler,
     load_model_config,
     make_skel_prop_df,
+    reference_radius_feature,
+    subtree_count_feature,
 )
+from ossify.structured_prediction import TransitionSchema
 
 DATA = pathlib.Path(__file__).parent / "data"
 REF = DATA / "l2label_reference"
@@ -237,3 +253,406 @@ def test_computed_feature_gets_neighborhood_aggregation(cell):
     ]
     df = cp.make_skel_prop_df(cell, downstream_hops=3, feature_spec=spec)
     assert "dtr" in df.columns and "down_dtr" in df.columns
+
+
+# --- Distance windows and within-cell features -------------------------------
+
+
+def _downstream_within(skel, vertex: int, radius: float) -> np.ndarray:
+    """Positional vertices at or below ``vertex`` within ``radius`` of path distance."""
+    below = np.asarray(
+        skel.downstream_vertices(vertex, inclusive=True, as_positional=True)
+    )
+    from_root = np.asarray(skel.distance_to_root(as_positional=True))
+    return below[from_root[below] - from_root[vertex] <= radius]
+
+
+def test_distance_window_sums_and_means(cell):
+    skel = cell.skeleton
+    window = Window("d10", 10_000)
+    df = make_skel_prop_df(cell, downstream_hops=0, windows=[window])
+    assert "down_syn_in" not in df.columns
+    rng = np.random.default_rng(0)
+    for v in rng.choice(skel.n_vertices, 25, replace=False):
+        near = _downstream_within(skel, int(v), 10_000)
+        # "sum" features are plain sums over the window, "mean" features means.
+        assert df["d10_syn_in"].iloc[v] == pytest.approx(df["syn_in"].iloc[near].sum())
+        assert df["d10_area_um2"].iloc[v] == pytest.approx(
+            df["area_um2"].iloc[near].sum()
+        )
+        assert df["d10_max_dt_um"].iloc[v] == pytest.approx(
+            df["max_dt_um"].iloc[near].mean()
+        )
+        assert df["d10_vol_to_area"].iloc[v] == pytest.approx(
+            df["d10_vol_um3"].iloc[v] / df["d10_area_um2"].iloc[v]
+        )
+
+
+def test_windows_leave_hop_features_unchanged(cell):
+    plain = make_skel_prop_df(cell, downstream_hops=15)
+    both = make_skel_prop_df(cell, downstream_hops=15, windows=[Window("d30", 30_000)])
+    pd.testing.assert_frame_equal(both[plain.columns], plain)
+    assert "d30_syn_out" in both.columns
+
+
+def test_hop_window_counts_hops(cell):
+    skel = cell.skeleton
+    df = make_skel_prop_df(
+        cell, downstream_hops=0, windows=[Window("h3", 3, metric="hops")]
+    )
+    hops = np.asarray(skel.hops_to_root(as_positional=True))
+    v = int(np.argmax(df["syn_in"].to_numpy()))
+    below = np.asarray(skel.downstream_vertices(v, inclusive=True, as_positional=True))
+    near = below[hops[below] - hops[v] <= 3]
+    assert df["h3_syn_in"].iloc[v] == pytest.approx(df["syn_in"].iloc[near].sum())
+
+
+def test_cable_length_feature_sums_to_window_length(cell):
+    skel = cell.skeleton
+    spec = DEFAULT_FEATURE_SPEC + [cable_length_feature("cable_um")]
+    df = make_skel_prop_df(
+        cell, downstream_hops=0, feature_spec=spec, windows=[Window("all", 1e12)]
+    )
+    total_um = float(np.sum(skel.half_edge_length)) / 1000
+    root = skel.root_positional
+    assert df["all_cable_um"].iloc[root] == pytest.approx(total_um)
+    # A tip's window holds only its own stub of cable.
+    tip = int(np.asarray(skel.end_points_positional)[0])
+    assert df["all_cable_um"].iloc[tip] == pytest.approx(df["cable_um"].iloc[tip])
+
+
+def test_subtree_count_feature(cell):
+    skel = cell.skeleton
+    spec = DEFAULT_FEATURE_SPEC + [subtree_count_feature("subtree_syn_out", "pre_syn")]
+    df = make_skel_prop_df(
+        cell, downstream_hops=5, feature_spec=spec, windows=[Window("d10", 10_000)]
+    )
+    assert df["subtree_syn_out"].iloc[skel.root_positional] == len(
+        cell.annotations["pre_syn"]
+    )
+    # Monotone toward the root, and never aggregated over a window.
+    parent = np.asarray(skel.parent_node_array)
+    child = np.flatnonzero(parent >= 0)
+    values = df["subtree_syn_out"].to_numpy()
+    assert (values[parent[child]] >= values[child]).all()
+    assert "d10_subtree_syn_out" not in df.columns
+    assert "down_subtree_syn_out" not in df.columns
+
+
+def test_reference_radius_feature(cell):
+    skel = cell.skeleton
+    spec = DEFAULT_FEATURE_SPEC + [
+        reference_radius_feature("radius_vs_inputs", "post_syn"),
+        reference_radius_feature("radius_vs_outputs", "pre_syn"),
+    ]
+    df = make_skel_prop_df(cell, downstream_hops=0, feature_spec=spec)
+    radius = df["max_dt_um"].to_numpy()
+    for name in ("radius_vs_inputs", "radius_vs_outputs"):
+        values = df[name].to_numpy()
+        ok = np.isfinite(values)
+        assert ok.mean() > 0.99
+        # One reference per cell: radius / exp(feature) is the same everywhere.
+        reference = radius[ok] / np.exp(values[ok])
+        assert np.allclose(reference, reference[0])
+    ref_in = radius[0] / np.exp(df["radius_vs_inputs"].iloc[0])
+    ref_out = radius[0] / np.exp(df["radius_vs_outputs"].iloc[0])
+    # Inputs sit on dendrite and soma, which are thicker than where outputs are.
+    assert ref_in > ref_out > 0
+
+    post = cell.annotations["post_syn"].map_index_to_layer(
+        "skeleton", as_positional=True
+    )
+    local = skel.aggregate_features(
+        radius, radius=5000, metric="distance", direction="undirected", agg="mean"
+    ).to_numpy()[:, 0]
+    assert ref_in == pytest.approx(np.median(local[np.asarray(post)]))
+
+
+def test_reference_radius_qc_values(cell):
+    few = reference_radius_feature("r", "post_syn", min_synapses=10**9)
+    assert np.isnan(few.func(cell)).all()
+
+    near = reference_radius_feature("r", "post_syn").func(cell)
+    far = reference_radius_feature("r", "post_syn", min_root_distance=30_000).func(cell)
+    # Leaving out the inputs around the soma lowers the reference radius, so
+    # every vertex reads as relatively thicker.
+    assert np.nanmedian(far) > np.nanmedian(near)
+
+
+def test_distance_feature_spec(cell):
+    df = make_skel_prop_df(
+        cell,
+        downstream_hops=0,
+        feature_spec=DISTANCE_FEATURE_SPEC,
+        windows=DISTANCE_WINDOWS,
+    )
+    assert len(df) == cell.skeleton.n_vertices
+    for prefix in ("down10um", "down30um", "down100um"):
+        for name in (
+            "syn_in_per_area",
+            "syn_out_per_um",
+            "radius_vs_inputs",
+            "cable_um",
+        ):
+            assert f"{prefix}_{name}" in df.columns
+    # Nothing in this spec sums a whole subtree: the features stay local.
+    assert not [c for c in df.columns if "subtree" in c]
+    assert not np.isinf(df.to_numpy(dtype=float)).any()
+    # A wider window never holds less cable or fewer synapses.
+    assert (df["down30um_cable_um"] >= df["down10um_cable_um"] - 1e-9).all()
+    assert (df["down100um_syn_in"] >= df["down30um_syn_in"]).all()
+
+
+def test_proba_vertex_model_with_windows(cell):
+    class Constant:
+        classes_ = [0, 1]
+
+        def predict_proba(self, X):
+            return np.tile([0.5, 0.5], (len(X), 1))
+
+    columns = ["down30um_syn_in_per_area", "radius_vs_inputs", "syn_out"]
+    model = ProbaVertexModel(
+        Constant(),
+        columns,
+        feature_spec=DISTANCE_FEATURE_SPEC,
+        windows=DISTANCE_WINDOWS,
+    )
+    features = model.extract_features(cell)
+    assert set(columns) <= set(features.columns)
+    assert model.predict_unaries(cell).shape == (cell.skeleton.n_vertices, 2)
+    with pytest.raises(ValueError, match="windows"):
+        model.to_dict()
+
+
+def test_window_contrast(cell):
+    spec = DEFAULT_FEATURE_SPEC + [cable_length_feature("cable_um")]
+    windows = [
+        Window("down", 30_000),
+        Window("up", 30_000, direction="upstream"),
+        WindowContrast("diff", "down", "up"),
+    ]
+    df = make_skel_prop_df(cell, downstream_hops=0, feature_spec=spec, windows=windows)
+    diffs = [c for c in df.columns if c.startswith("diff_")]
+    assert diffs
+    for column in diffs:
+        name = column[len("diff_") :]
+        np.testing.assert_allclose(
+            df[column], df[f"down_{name}"] - df[f"up_{name}"], equal_nan=True
+        )
+    # Sums scale with the cable a window holds, so they are not compared by default.
+    assert "diff_cable_um" not in df.columns
+    assert "diff_syn_in" not in df.columns
+
+    chosen = make_skel_prop_df(
+        cell,
+        downstream_hops=0,
+        feature_spec=spec,
+        windows=windows[:2]
+        + [WindowContrast("diff", "down", "up", features=["syn_in"])],
+    )
+    assert [c for c in chosen.columns if c.startswith("diff_")] == ["diff_syn_in"]
+
+
+def test_window_contrast_needs_its_windows_first(cell):
+    with pytest.raises(ValueError, match="list both windows"):
+        make_skel_prop_df(
+            cell,
+            downstream_hops=0,
+            windows=[WindowContrast("diff", "down", "up"), Window("down", 30_000)],
+        )
+
+
+def test_local_feature_spec(cell):
+    df = make_skel_prop_df(
+        cell, downstream_hops=0, feature_spec=LOCAL_FEATURE_SPEC, windows=LOCAL_WINDOWS
+    )
+    assert "down30um_syn_in_per_um" in df.columns
+    assert "down10um_syn_out_per_area" in df.columns
+    # Nothing reaches past 30 um or leans on a whole-object quantity.
+    assert not [c for c in df.columns if "100um" in c or "subtree" in c]
+    assert not [c for c in df.columns if "radius_vs" in c]
+    assert max(w.radius for w in LOCAL_WINDOWS) <= 30_000
+    assert all(w.direction == "downstream" for w in LOCAL_WINDOWS)
+    assert not np.isinf(df.to_numpy(dtype=float)).any()
+
+
+def _fit_tiny(cell, feature_set):
+    """A small fitted classifier on one cell's features, with its columns."""
+    import xgboost
+
+    spec, windows = FEATURE_SETS[feature_set]
+    df = make_skel_prop_df(cell, downstream_hops=0, feature_spec=spec, windows=windows)
+    columns = list(df.columns)
+    labels = df["syn_out"].to_numpy() > 0  # any label that takes both values
+    fitted = xgboost.XGBClassifier(n_estimators=5, max_depth=2).fit(
+        df[columns].to_numpy(), labels
+    )
+    return fitted, columns
+
+
+@pytest.mark.parametrize("feature_set", sorted(FEATURE_SETS))
+def test_feature_set_matches_its_spec(cell, feature_set):
+    spec, windows = FEATURE_SETS[feature_set]
+    fitted, columns = _fit_tiny(cell, feature_set)
+    named = ProbaVertexModel(fitted, columns, feature_set=feature_set)
+    explicit = ProbaVertexModel(fitted, columns, feature_spec=spec, windows=windows)
+    np.testing.assert_array_equal(
+        named.predict_unaries(cell), explicit.predict_unaries(cell)
+    )
+
+
+def test_feature_set_argument_errors(cell):
+    fitted, columns = _fit_tiny(cell, "local")
+    with pytest.raises(ValueError, match="Unknown feature_set"):
+        ProbaVertexModel(fitted, columns, feature_set="nope")
+    with pytest.raises(ValueError, match="not both"):
+        ProbaVertexModel(
+            fitted, columns, feature_set="local", feature_spec=LOCAL_FEATURE_SPEC
+        )
+
+
+@pytest.mark.parametrize("feature_set", sorted(FEATURE_SETS))
+def test_feature_set_to_dict_round_trip(cell, tmp_path, feature_set):
+    fitted, columns = _fit_tiny(cell, feature_set)
+    model = ProbaVertexModel(fitted, columns, feature_set=feature_set)
+    d = model.to_dict(model_file=tmp_path / "model.ubj")
+    assert d["config"]["feature_set"] == feature_set
+    json.dumps(d)  # plain data
+
+    again = ProbaVertexModel.from_dict(d)
+    assert again.feature_columns == columns
+    np.testing.assert_allclose(
+        again.predict_unaries(cell), model.predict_unaries(cell), rtol=1e-6
+    )
+    # A reloaded model can be saved again without naming the set a second time.
+    assert again.to_dict()["config"]["feature_set"] == feature_set
+
+
+def test_from_config_reads_own_file_with_feature_set(cell, tmp_path):
+    fitted, columns = _fit_tiny(cell, "local")
+    fitted.save_model(tmp_path / "unproofread.ubj")
+    config = tmp_path / "unproofread.json"
+    config.write_text(
+        json.dumps(
+            {
+                "model_file": "unproofread.ubj",  # relative to the config
+                "feature_columns": columns,
+                "feature_set": "local",
+            }
+        )
+    )
+    loaded = ProbaVertexModel.from_config(str(config))
+    direct = ProbaVertexModel(fitted, columns, feature_set="local")
+    np.testing.assert_allclose(
+        loaded.predict_unaries(cell), direct.predict_unaries(cell), rtol=1e-6
+    )
+
+
+def test_bundled_models_still_load_by_name():
+    model = ProbaVertexModel.from_config("minnie65_ds15_us0_bd0.json")
+    assert model.to_dict()["config"] == "minnie65_ds15_us0_bd0.json"
+
+
+@pytest.mark.parametrize("name", sorted(get_models()))
+def test_every_bundled_model_loads_and_scores(cell, name):
+    model = ProbaVertexModel.from_config(name)
+    unaries = model.predict_unaries(cell)
+    assert unaries.shape == (cell.skeleton.n_vertices, 2)
+    assert np.isfinite(unaries).all()
+    assert model.to_dict()["config"] == name
+
+
+def test_load_labeler(cell):
+    labeler = load_labeler("v1dd_distance")
+    assert labeler.encoder.to_dict()["config"] == "v1dd_distance"
+    # The decode comes from the model's config.
+    decode = load_model_config("v1dd_distance")["decode"]
+    assert (
+        labeler.schema.to_dict()
+        == TransitionSchema.from_dict(decode["schema"]).to_dict()
+    )
+    assert labeler.schema.cost_matrix.tolist() == [[0.0, 2.0], [50.0, 0.0]]
+    assert labeler._absorb_min_size == decode["absorb_min_size"] == 10
+    labels = labeler.predict(cell)
+    assert labels.shape == (cell.skeleton.n_vertices,)
+    assert set(labels) <= {"axon", "dendrite"}
+    assert labels[cell.skeleton.root_positional] == "dendrite"
+
+
+def test_load_labeler_options(cell):
+    flat = TransitionSchema(classes=["dendrite", "axon"])
+    labeler = load_labeler("v1dd_local", schema=flat, absorb_min_size=None)
+    assert labeler.schema is flat
+    # With no costs and no absorb the decode is the per-vertex argmax.
+    np.testing.assert_array_equal(
+        labeler.predict(cell, return_labels_as="index"),
+        labeler.encoder.predict_unaries(cell).argmax(axis=1),
+    )
+
+
+def test_load_labeler_missing_model():
+    with pytest.raises(FileNotFoundError):
+        load_labeler("nowhere_local")
+
+
+def test_load_labeler_takes_any_bundled_model(cell):
+    # Nothing about the name is special: the older hop-based model loads the same way.
+    labeler = load_labeler("v1dd_ds15_us0_bd0")
+    assert labeler.encoder.to_dict()["config"] == "v1dd_ds15_us0_bd0"
+    assert set(labeler.predict(cell)) <= {"axon", "dendrite"}
+
+
+def test_load_labeler_from_own_config(cell, tmp_path):
+    fitted, columns = _fit_tiny(cell, "local")
+    fitted.save_model(tmp_path / "mine.ubj")
+    schema = TransitionSchema(classes=["dendrite", "axon"], default_cost=3.0)
+    config = tmp_path / "mine.json"
+    config.write_text(
+        json.dumps(
+            {
+                "model_file": "mine.ubj",
+                "feature_columns": columns,
+                "feature_set": "local",
+                "decode": {"schema": schema.to_dict(), "absorb_min_size": 4},
+            }
+        )
+    )
+    labeler = load_labeler(str(config))
+    assert labeler.schema.default_cost == 3.0
+    assert labeler._absorb_min_size == 4
+    assert labeler.predict(cell).shape == (cell.skeleton.n_vertices,)
+
+
+def test_describe_models():
+    table = describe_models()
+    assert set(table.index) == {pathlib.Path(m).stem for m in get_models()}
+    assert table.loc["v1dd_local", "dataset"] == "v1dd"
+    assert table.loc["v1dd_local", "feature_set"] == "local"
+    assert table.loc["v1dd_ds15_us0_bd0", "feature_set"] == "hops"
+    assert table.has_decode.all()
+    assert (table.description.str.len() > 0).all()
+
+
+def test_load_labeler_needs_a_decode_block(tmp_path, monkeypatch):
+    import ossify.compartments as compartments
+
+    (tmp_path / "xgb").mkdir()
+    bundled = compartments.MODEL_DIR
+    config = json.loads((bundled / "v1dd_distance.json").read_text())
+    config.pop("decode")
+    config["model_file"] = str(bundled / config["model_file"])
+    (tmp_path / "bare_distance.json").write_text(json.dumps(config))
+    monkeypatch.setattr(compartments, "MODEL_DIR", tmp_path)
+    with pytest.raises(ValueError, match="no decode schema"):
+        load_labeler("bare_distance")
+    flat = TransitionSchema(classes=["dendrite", "axon"])
+    assert load_labeler("bare_distance", schema=flat).schema is flat
+
+
+@pytest.mark.parametrize("name", sorted(get_models()))
+def test_every_bundled_model_carries_its_decode(name):
+    decode = load_model_config(name)["decode"]
+    schema = TransitionSchema.from_dict(decode["schema"])
+    assert schema.classes == ["dendrite", "axon"]
+    assert schema.root_classes == ["dendrite"]
+    assert isinstance(decode["absorb_min_size"], int)

@@ -71,6 +71,8 @@ dev = [
     "bump-my-version",
     "cloud-volume",
     "h5py>=3.14.0",
+    "xgboost",
+    "scikit-learn"
 ]
 docs = [
     "mkdocs",

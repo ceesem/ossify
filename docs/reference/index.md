@@ -42,6 +42,7 @@ Specialized classes for different geometric representations:
 Computational methods for morphological analysis:
 
 - **[Morphological Analysis](algorithms.md#morphological-analysis)**: Strahler number, compartment classification
+- **[Compartment Models](compartments.md)**: Trained axon/dendrite classifiers, tree decode, per-vertex features
 
 ### **Visualization & Plotting** {: .text-secondary }
 Plotting and visualization utilities:

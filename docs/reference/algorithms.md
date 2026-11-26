@@ -9,6 +9,7 @@ Ossify provides computational methods for analyzing neuromorphological structure
 | **[Morphological Analysis](#morphological-analysis)** | `strahler_number` | Tree structure characterization |
 | **[Synapse Analysis](#synapse-analysis)** | `synapse_betweenness`, `label_axon_from_*`, `segregation_index` | Connectivity and compartmentalization |
 | **[Smoothing & Filtering](#smoothing-filtering)** | `smooth_features` | Signal processing on graphs |
+| **[Skeletonization](#skeletonization)** | `skeletonize`, `skeletonize_graph`, `detect_soma`, `find_soma_point`, `add_skeleton_radius`, `contract_vertices` | Tree skeletons from spatial graphs |
 
 ---
 
@@ -280,6 +281,100 @@ post_density_smooth = smoothed_density[:, 1]
 - **Output**: Same shape as input with smoothed values
 
 ---
+
+## Skeletonization {: .doc-heading}
+
+Build a rooted tree skeleton from a cell's spatial graph (typically a level-2 chunk graph), linked back to the graph it came from.
+
+### skeletonize
+
+::: ossify.skeletonization.skeletonize
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+#### Usage Example
+
+```python
+import ossify as osy
+
+# A cell with a connected graph layer and no skeleton yet
+cell = osy.load_cell("neuron_graph.osy")
+
+# Find the soma from the graph and collapse it into a root at the nucleus point.
+# Needs the level-2 features max_dt_nm and size_nm3 on the graph.
+osy.skeletonize(
+    cell,
+    invalidation=7500,
+    soma_point=[766848, 547712, 899480],
+    detect_soma=True,
+)
+
+# The skeleton vertex each graph vertex belongs to
+graph_to_skeleton = cell.graph.map_index_to_layer("skeleton")
+```
+
+### skeletonize_graph
+
+::: ossify.skeletonization.skeletonize_graph
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+### detect_soma
+
+::: ossify.skeletonization.detect_soma
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+### find_soma_point
+
+::: ossify.skeletonization.find_soma_point
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+### add_skeleton_radius
+
+::: ossify.skeletonization.add_skeleton_radius
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+### contract_vertices
+
+::: ossify.skeletonization.contract_vertices
+    options:
+        heading_level: 4
+        show_root_heading: true
+        show_root_full_path: false
+        show_signature_annotations: true
+        separate_signature: true
+        show_source: false
+
+---
+
 
 ## Workflow Examples
 
